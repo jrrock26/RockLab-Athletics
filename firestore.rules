@@ -24,13 +24,9 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if signedIn() && (request.auth.uid == userId || role() == 'ad');
       allow create: if signedIn() && request.auth.uid == userId;
-      // A user can edit their own profile but cannot self-promote role or change school.
-      allow update: if signedIn() && (
-        (request.auth.uid == userId
-          && request.resource.data.role == userData().role
-          && request.resource.data.schoolId == userData().schoolId)
-        || role() == 'ad'
-      );
+      // MVP: users can update their own profile (including role/schoolId during
+      // onboarding). TODO: move role assignment to Cloud Functions custom claims.
+      allow update: if signedIn() && (request.auth.uid == userId || role() == 'ad');
       allow delete: if false;
     }
 

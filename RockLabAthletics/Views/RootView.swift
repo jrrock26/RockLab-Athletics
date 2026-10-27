@@ -10,7 +10,7 @@ struct RootView: View {
                 ProgressView("Loading…")
             } else if !auth.isSignedIn {
                 AuthFlowView()
-            } else if let user = auth.user, user.role == .ad, user.schoolId == nil {
+            } else if let user = auth.user, user.schoolId == nil {
                 OnboardingFlowView()
             } else {
                 ContentView()
