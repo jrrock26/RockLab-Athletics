@@ -72,6 +72,8 @@
 			);
 			name = RockLabAthletics;
 			packageProductDependencies = (
+				E2F3A4B5C6D7E2F3A4B5C6D7 /* FirebaseAuth */,
+				F3A4B5C6D7E8F3A4B5C6D7E8 /* FirebaseFirestore */,
 			);
 			productName = RockLabAthletics;
 			productReference = 1A1A1A1A1A1A1A1A1A1A1A1A /* RockLabAthletics.app */;
@@ -108,6 +110,9 @@
 			projectRoot = "";
 			targets = (
 				6F6F6F6F6F6F6F6F6F6F6F6F /* RockLabAthletics */,
+			);
+			packageReferences = (
+				D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 			);
 		};
 /* End PBXProject section */
@@ -266,6 +271,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 11.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		E2F3A4B5C6D7E2F3A4B5C6D7 /* FirebaseAuth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAuth;
+		};
+		F3A4B5C6D7E8F3A4B5C6D7E8 /* FirebaseFirestore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseFirestore;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 101010101010101010101010 /* Project object */;
 }
