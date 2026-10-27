@@ -11,7 +11,7 @@ struct AuthFlowView: View {
                 .resizable()
                 .scaledToFill()
                 .ignoresSafeArea()
-                .overlay(Color.white.opacity(0.7))
+                .overlay(Color.white.opacity(0.45))
 
             VStack(spacing: 20) {
                 Image("Logo")

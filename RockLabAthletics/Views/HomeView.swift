@@ -9,7 +9,7 @@ struct HomeView: View {
                     .resizable()
                     .scaledToFill()
                     .ignoresSafeArea()
-                    .overlay(Color.white.opacity(0.65))
+                    .overlay(Color.white.opacity(0.35))
 
                 ScrollView {
                     VStack(spacing: 24) {
