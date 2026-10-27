@@ -25,7 +25,7 @@ struct RosterView: View {
         List {
             ForEach(vm.roster) { entry in
                 NavigationLink {
-                    FormsView(teamId: teamId, entryId: entry.id)
+                    PlayerDetailView(teamId: teamId, entry: entry)
                 } label: {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {

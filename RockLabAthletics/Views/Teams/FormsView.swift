@@ -4,7 +4,6 @@ struct FormsView: View {
     let teamId: String
     let entryId: String
     @State private var vm = RosterViewModel()
-    @State private var playerName = "Player"
 
     var body: some View {
         Form {
@@ -24,8 +23,6 @@ struct FormsView: View {
                 }
             }
         }
-        .navigationTitle(playerName)
-        .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
     }
 
@@ -68,8 +65,5 @@ struct FormsView: View {
 
     private func load() async {
         await vm.loadRoster(teamId: teamId)
-        if let entry = vm.roster.first(where: { $0.id == entryId }) {
-            playerName = entry.playerName
-        }
     }
 }

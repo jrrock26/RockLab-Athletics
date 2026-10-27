@@ -117,5 +117,18 @@ service cloud.firestore {
         allow update, delete: if false;
       }
     }
+
+    // Player recruiting showcases + highlights.
+    match /showcases/{showcaseId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && role() in ['ad', 'coach', 'staff'];
+      allow delete: if false;
+
+      match /highlights/{highlightId} {
+        allow read: if signedIn();
+        allow create, update: if signedIn() && role() in ['ad', 'coach', 'staff', 'player'];
+        allow delete: if signedIn() && role() in ['ad', 'coach', 'staff'];
+      }
+    }
   }
 }

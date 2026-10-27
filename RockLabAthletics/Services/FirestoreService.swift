@@ -450,4 +450,77 @@ struct FirestoreService {
             .compactMap { Donation(id: $0.documentID, data: $0.data()) }
             .sorted { $0.date > $1.date }
     }
+
+    // MARK: - Showcases & highlights
+
+    func fetchShowcase(rosterEntryId: String) async throws -> Showcase? {
+        let snapshot = try await db.collection("showcases").document(rosterEntryId).getDocument()
+        guard let data = snapshot.data() else { return nil }
+        return Showcase(id: snapshot.documentID, data: data)
+    }
+
+    func createShowcase(rosterEntryId: String, teamId: String, playerName: String, position: String) async throws {
+        try await db.collection("showcases").document(rosterEntryId).setData([
+            "rosterEntryId": rosterEntryId,
+            "teamId": teamId,
+            "playerName": playerName,
+            "position": position,
+            "height": "",
+            "weight": "",
+            "graduationYear": "",
+            "gpa": "",
+            "bio": "",
+            "createdAt": FieldValue.serverTimestamp()
+        ])
+    }
+
+    func saveShowcase(_ showcase: Showcase) async throws {
+        try await db.collection("showcases").document(showcase.id).setData([
+            "rosterEntryId": showcase.rosterEntryId,
+            "teamId": showcase.teamId,
+            "playerName": showcase.playerName,
+            "position": showcase.position,
+            "height": showcase.height,
+            "weight": showcase.weight,
+            "graduationYear": showcase.graduationYear,
+            "gpa": showcase.gpa,
+            "bio": showcase.bio
+        ], merge: true)
+    }
+
+    func addHighlight(showcaseId: String, title: String, url: String, description: String) async throws -> String {
+        let ref = db.collection("showcases").document(showcaseId).collection("highlights").document()
+        try await ref.setData([
+            "title": title,
+            "url": url,
+            "description": description,
+            "createdAt": Date().timeIntervalSince1970
+        ])
+        return ref.documentID
+    }
+
+    func fetchHighlights(showcaseId: String) async throws -> [Highlight] {
+        let snapshot = try await db.collection("showcases").document(showcaseId).collection("highlights").getDocuments()
+        return snapshot.documents
+            .compactMap { Highlight(id: $0.documentID, data: $0.data()) }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func removeHighlight(showcaseId: String, highlightId: String) async throws {
+        try await db.collection("showcases").document(showcaseId).collection("highlights").document(highlightId).delete()
+    }
+
+    /// Aggregates a player's stats across all games for a team (stat-to-profile sync).
+    func fetchCareerStats(teamId: String, rosterEntryId: String) async throws -> [String: Int] {
+        let games = try await fetchGames(teamId: teamId)
+        var totals: [String: Int] = [:]
+        for game in games {
+            let doc = try await db.collection("games").document(game.id).collection("stats").document(rosterEntryId).getDocument()
+            guard let data = doc.data() else { continue }
+            for stat in BasketballStat.allCases {
+                totals[stat.rawValue] = (totals[stat.rawValue] ?? 0) + ((data[stat.rawValue] as? Int) ?? 0)
+            }
+        }
+        return totals
+    }
 }
