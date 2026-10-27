@@ -100,5 +100,22 @@ service cloud.firestore {
         allow write: if signedIn() && role() in ['ad', 'coach', 'staff'];
       }
     }
+
+    // Trips + fundraisers.
+    match /trips/{tripId} {
+      allow read: if signedIn();
+      allow create, update, delete: if signedIn() && role() in ['ad', 'coach', 'staff'];
+    }
+
+    match /fundraisers/{fundraiserId} {
+      allow read: if signedIn();
+      allow create, update, delete: if signedIn() && role() in ['ad', 'coach', 'staff'];
+
+      match /donations/{donationId} {
+        allow read: if signedIn();
+        allow create: if signedIn();
+        allow update, delete: if false;
+      }
+    }
   }
 }

@@ -2,25 +2,24 @@ import SwiftUI
 
 struct TeamDetailView: View {
     let team: Team
-    @State private var selection = 0
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("Section", selection: $selection) {
-                Text("Roster").tag(0)
-                Text("Games").tag(1)
+        List {
+            NavigationLink { RosterView(teamId: team.id) } label: {
+                Label("Roster", systemImage: "person.3")
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-
-            if selection == 0 {
-                RosterView(teamId: team.id)
-            } else {
-                GamesView(teamId: team.id)
+            NavigationLink { GamesView(teamId: team.id) } label: {
+                Label("Games", systemImage: "sportscourt")
+            }
+            NavigationLink { TripsView(teamId: team.id) } label: {
+                Label("Trips", systemImage: "bus")
+            }
+            NavigationLink { FundraisingView(teamId: team.id) } label: {
+                Label("Fundraising", systemImage: "dollarsign.circle")
             }
         }
         .navigationTitle("\(team.sportName) \(team.level)")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
+

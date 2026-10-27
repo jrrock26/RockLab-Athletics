@@ -24,6 +24,8 @@ struct GamesView: View {
                 }
             }
         }
+        .navigationTitle("Games")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showingAdd = true } label: { Image(systemName: "plus") }

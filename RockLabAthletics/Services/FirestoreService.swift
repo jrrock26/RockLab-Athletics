@@ -370,4 +370,84 @@ struct FirestoreService {
         }
         return result
     }
+
+    // MARK: - Trips
+
+    func createTrip(teamId: String, title: String, destination: String, departureDate: Date, returnDate: Date, busNumber: String, hotelInfo: String, mealPlan: String) async throws -> String {
+        let ref = db.collection("trips").document()
+        let data: [String: Any] = [
+            "teamId": teamId,
+            "title": title,
+            "destination": destination,
+            "departureDate": departureDate.timeIntervalSince1970,
+            "returnDate": returnDate.timeIntervalSince1970,
+            "busNumber": busNumber,
+            "hotelInfo": hotelInfo,
+            "mealPlan": mealPlan,
+            "rosterIds": [],
+            "createdAt": FieldValue.serverTimestamp()
+        ]
+        try await ref.setData(data)
+        return ref.documentID
+    }
+
+    func fetchTrips(teamId: String) async throws -> [Trip] {
+        let snapshot = try await db.collection("trips")
+            .whereField("teamId", isEqualTo: teamId)
+            .getDocuments()
+        return snapshot.documents
+            .compactMap { Trip(id: $0.documentID, data: $0.data()) }
+            .sorted { $0.departureDate < $1.departureDate }
+    }
+
+    func toggleTripRoster(tripId: String, rosterEntryId: String, isOn: Bool) async throws {
+        let value = isOn ? FieldValue.arrayUnion([rosterEntryId]) : FieldValue.arrayRemove([rosterEntryId])
+        try await db.collection("trips").document(tripId).setData(["rosterIds": value], merge: true)
+    }
+
+    func deleteTrip(tripId: String) async throws {
+        try await db.collection("trips").document(tripId).delete()
+    }
+
+    // MARK: - Fundraisers
+
+    func createFundraiser(teamId: String, title: String, type: FundraiserType, goal: Double) async throws -> String {
+        let ref = db.collection("fundraisers").document()
+        let data: [String: Any] = [
+            "teamId": teamId,
+            "title": title,
+            "type": type.rawValue,
+            "goal": goal,
+            "raised": 0.0,
+            "createdAt": FieldValue.serverTimestamp()
+        ]
+        try await ref.setData(data)
+        return ref.documentID
+    }
+
+    func fetchFundraisers(teamId: String) async throws -> [Fundraiser] {
+        let snapshot = try await db.collection("fundraisers")
+            .whereField("teamId", isEqualTo: teamId)
+            .getDocuments()
+        return snapshot.documents.compactMap { Fundraiser(id: $0.documentID, data: $0.data()) }
+    }
+
+    func addDonation(fundraiserId: String, donorName: String, amount: Double) async throws -> String {
+        let ref = db.collection("fundraisers").document(fundraiserId).collection("donations").document()
+        try await ref.setData([
+            "fundraiserId": fundraiserId,
+            "donorName": donorName,
+            "amount": amount,
+            "date": Date().timeIntervalSince1970
+        ])
+        try await db.collection("fundraisers").document(fundraiserId).setData(["raised": FieldValue.increment(amount)], merge: true)
+        return ref.documentID
+    }
+
+    func fetchDonations(fundraiserId: String) async throws -> [Donation] {
+        let snapshot = try await db.collection("fundraisers").document(fundraiserId).collection("donations").getDocuments()
+        return snapshot.documents
+            .compactMap { Donation(id: $0.documentID, data: $0.data()) }
+            .sorted { $0.date > $1.date }
+    }
 }

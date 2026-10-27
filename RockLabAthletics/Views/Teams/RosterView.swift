@@ -55,6 +55,8 @@ struct RosterView: View {
                 )
             }
         }
+        .navigationTitle("Roster")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button { showingCSV = true } label: { Image(systemName: "square.and.arrow.down") }
