@@ -307,4 +307,67 @@ struct FirestoreService {
                 onChange(messages)
             }
     }
+
+    // MARK: - Games & stats
+
+    func createGame(teamId: String, opponent: String, isHome: Bool, date: Date) async throws -> String {
+        let ref = db.collection("games").document()
+        let data: [String: Any] = [
+            "teamId": teamId,
+            "opponent": opponent,
+            "isHome": isHome,
+            "date": date.timeIntervalSince1970,
+            "status": GameStatus.upcoming.rawValue,
+            "teamScore": 0,
+            "opponentScore": 0,
+            "createdAt": FieldValue.serverTimestamp()
+        ]
+        try await ref.setData(data)
+        return ref.documentID
+    }
+
+    func fetchGames(teamId: String) async throws -> [Game] {
+        let snapshot = try await db.collection("games")
+            .whereField("teamId", isEqualTo: teamId)
+            .getDocuments()
+        return snapshot.documents
+            .compactMap { Game(id: $0.documentID, data: $0.data()) }
+            .sorted { $0.date < $1.date }
+    }
+
+    func updateGameScore(gameId: String, teamScore: Int, opponentScore: Int, status: GameStatus) async throws {
+        try await db.collection("games").document(gameId).setData([
+            "teamScore": teamScore,
+            "opponentScore": opponentScore,
+            "status": status.rawValue
+        ], merge: true)
+    }
+
+    func setGameStatus(gameId: String, status: GameStatus) async throws {
+        try await db.collection("games").document(gameId).setData(["status": status.rawValue], merge: true)
+    }
+
+    func incrementStat(gameId: String, rosterEntryId: String, playerName: String, stat: BasketballStat, delta: Int) async throws {
+        let ref = db.collection("games").document(gameId).collection("stats").document(rosterEntryId)
+        try await ref.setData([
+            "gameId": gameId,
+            "rosterEntryId": rosterEntryId,
+            "playerName": playerName,
+            stat.rawValue: FieldValue.increment(Int64(delta))
+        ], merge: true)
+    }
+
+    func fetchStats(gameId: String) async throws -> [String: [String: Int]] {
+        let snapshot = try await db.collection("games").document(gameId).collection("stats").getDocuments()
+        var result: [String: [String: Int]] = [:]
+        for doc in snapshot.documents {
+            let data = doc.data()
+            var stats: [String: Int] = [:]
+            for stat in BasketballStat.allCases {
+                stats[stat.rawValue] = (data[stat.rawValue] as? Int) ?? 0
+            }
+            result[doc.documentID] = stats
+        }
+        return result
+    }
 }

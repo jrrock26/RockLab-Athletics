@@ -89,5 +89,16 @@ service cloud.firestore {
         allow update, delete: if false;
       }
     }
+
+    // Games + live stats.
+    match /games/{gameId} {
+      allow read: if signedIn();
+      allow create, update, delete: if signedIn() && role() in ['ad', 'coach', 'staff'];
+
+      match /stats/{entryId} {
+        allow read: if signedIn();
+        allow write: if signedIn() && role() in ['ad', 'coach', 'staff'];
+      }
+    }
   }
 }

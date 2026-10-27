@@ -10,7 +10,7 @@ struct TeamsView: View {
             List {
                 ForEach(vm.teams) { team in
                     NavigationLink {
-                        RosterView(teamId: team.id)
+                        TeamDetailView(team: team)
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("\(team.sportName) \(team.level)")
