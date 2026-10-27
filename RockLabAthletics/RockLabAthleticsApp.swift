@@ -3,13 +3,17 @@ import FirebaseCore
 
 @main
 struct RockLabAthleticsApp: App {
+    @State private var auth = AuthViewModel()
+
     init() {
         FirebaseApp.configure()
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
+                .environment(auth)
         }
     }
 }
+
