@@ -60,5 +60,21 @@ service cloud.firestore {
         }
       }
     }
+
+    // Events + RSVPs + attendance.
+    match /events/{eventId} {
+      allow read: if signedIn();
+      allow create, update, delete: if signedIn() && role() in ['ad', 'coach', 'staff'];
+
+      match /rsvps/{userId} {
+        allow read: if signedIn();
+        allow write: if signedIn() && (request.auth.uid == userId || role() in ['ad', 'coach', 'staff']);
+      }
+
+      match /attendance/{entryId} {
+        allow read: if signedIn();
+        allow write: if signedIn() && role() in ['ad', 'coach', 'staff'];
+      }
+    }
   }
 }

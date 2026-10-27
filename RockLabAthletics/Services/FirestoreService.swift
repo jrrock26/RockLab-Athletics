@@ -189,4 +189,73 @@ struct FirestoreService {
             "linkedPlayerIds": FieldValue.arrayUnion([playerUserId])
         ], merge: true)
     }
+
+    // MARK: - Events
+
+    func createEvent(teamId: String, title: String, type: EventType, date: Date, location: String, notes: String) async throws -> String {
+        let ref = db.collection("events").document()
+        let data: [String: Any] = [
+            "teamId": teamId,
+            "title": title,
+            "type": type.rawValue,
+            "date": date.timeIntervalSince1970,
+            "location": location,
+            "notes": notes,
+            "createdAt": FieldValue.serverTimestamp()
+        ]
+        try await ref.setData(data)
+        return ref.documentID
+    }
+
+    func fetchEvents(teamId: String) async throws -> [Event] {
+        let snapshot = try await db.collection("events")
+            .whereField("teamId", isEqualTo: teamId)
+            .getDocuments()
+        return snapshot.documents
+            .compactMap { Event(id: $0.documentID, data: $0.data()) }
+            .sorted { $0.date < $1.date }
+    }
+
+    func deleteEvent(eventId: String) async throws {
+        try await db.collection("events").document(eventId).delete()
+    }
+
+    // MARK: - RSVP
+
+    func setRSVP(eventId: String, userId: String, status: RSVPStatus) async throws {
+        try await db.collection("events").document(eventId).collection("rsvps").document(userId).setData([
+            "eventId": eventId,
+            "userId": userId,
+            "status": status.rawValue,
+            "updatedAt": FieldValue.serverTimestamp()
+        ])
+    }
+
+    func fetchRSVP(eventId: String, userId: String) async throws -> RSVPStatus? {
+        let snapshot = try await db.collection("events").document(eventId).collection("rsvps").document(userId).getDocument()
+        guard let data = snapshot.data(), let raw = data["status"] as? String else { return nil }
+        return RSVPStatus(rawValue: raw)
+    }
+
+    // MARK: - Attendance
+
+    func setAttendance(eventId: String, rosterEntryId: String, status: AttendanceStatus) async throws {
+        try await db.collection("events").document(eventId).collection("attendance").document(rosterEntryId).setData([
+            "eventId": eventId,
+            "rosterEntryId": rosterEntryId,
+            "status": status.rawValue,
+            "updatedAt": FieldValue.serverTimestamp()
+        ])
+    }
+
+    func fetchAttendance(eventId: String) async throws -> [String: AttendanceStatus] {
+        let snapshot = try await db.collection("events").document(eventId).collection("attendance").getDocuments()
+        var result: [String: AttendanceStatus] = [:]
+        for doc in snapshot.documents {
+            if let raw = doc.data()["status"] as? String, let status = AttendanceStatus(rawValue: raw) {
+                result[doc.documentID] = status
+            }
+        }
+        return result
+    }
 }
