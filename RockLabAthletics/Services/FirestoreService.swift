@@ -258,4 +258,53 @@ struct FirestoreService {
         }
         return result
     }
+
+    // MARK: - Chats
+
+    /// Ensures the three default channels (comm board, team chat, staff chat)
+    /// exist for a team and returns all of its channels.
+    func ensureDefaultChats(teamId: String) async throws -> [Chat] {
+        var result: [Chat] = []
+        for type in ChatType.allCases {
+            let snapshot = try await db.collection("chats")
+                .whereField("teamId", isEqualTo: teamId)
+                .whereField("type", isEqualTo: type.rawValue)
+                .getDocuments()
+            if let doc = snapshot.documents.first, let chat = Chat(id: doc.documentID, data: doc.data()) {
+                result.append(chat)
+            } else {
+                let ref = db.collection("chats").document()
+                let title = type.displayName
+                let data: [String: Any] = [
+                    "teamId": teamId,
+                    "type": type.rawValue,
+                    "title": title,
+                    "createdAt": FieldValue.serverTimestamp()
+                ]
+                try await ref.setData(data)
+                result.append(Chat(id: ref.documentID, teamId: teamId, type: type, title: title))
+            }
+        }
+        return result
+    }
+
+    func sendMessage(chatId: String, senderId: String, senderName: String, text: String) async throws {
+        let ref = db.collection("chats").document(chatId).collection("messages").document()
+        try await ref.setData([
+            "chatId": chatId,
+            "senderId": senderId,
+            "senderName": senderName,
+            "text": text,
+            "createdAt": Date().timeIntervalSince1970
+        ])
+    }
+
+    func listenToMessages(chatId: String, onChange: @escaping ([Message]) -> Void) -> ListenerRegistration {
+        db.collection("chats").document(chatId).collection("messages")
+            .order(by: "createdAt")
+            .addSnapshotListener { snapshot, _ in
+                let messages = (snapshot?.documents ?? []).compactMap { Message(id: $0.documentID, data: $0.data()) }
+                onChange(messages)
+            }
+    }
 }

@@ -19,6 +19,11 @@ struct ContentView: View {
                     Label("Schedule", systemImage: "calendar")
                 }
 
+            ChatView()
+                .tabItem {
+                    Label("Chat", systemImage: "bubble.left.and.bubble.right")
+                }
+
             SettingsView()
                 .tabItem {
                     Label("Settings", systemImage: "gearshape.fill")

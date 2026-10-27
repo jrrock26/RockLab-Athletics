@@ -76,5 +76,18 @@ service cloud.firestore {
         allow write: if signedIn() && role() in ['ad', 'coach', 'staff'];
       }
     }
+
+    // Chats + messages.
+    match /chats/{chatId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && role() in ['ad', 'coach', 'staff'];
+      allow update, delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if signedIn();
+        allow create: if signedIn();
+        allow update, delete: if false;
+      }
+    }
   }
 }
