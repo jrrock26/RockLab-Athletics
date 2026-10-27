@@ -3,13 +3,33 @@ import SwiftUI
 struct HomeView: View {
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 16) {
-                    summaryCard(title: "Teams", value: "0", systemImage: "person.3.fill", tint: .blue)
-                    summaryCard(title: "Players", value: "0", systemImage: "person.fill", tint: .green)
-                    summaryCard(title: "Upcoming Games", value: "0", systemImage: "calendar", tint: .orange)
+            ZStack {
+                // Background image with a soft white "watermark" overlay
+                Image("Background")
+                    .resizable()
+                    .scaledToFill()
+                    .ignoresSafeArea()
+                    .overlay(Color.white.opacity(0.65))
+
+                ScrollView {
+                    VStack(spacing: 24) {
+                        // Brand logo
+                        Image("Logo")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 140, height: 140)
+                            .clipShape(RoundedRectangle(cornerRadius: 24))
+                            .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+                            .padding(.top, 8)
+
+                        VStack(spacing: 16) {
+                            summaryCard(title: "Teams", value: "0", systemImage: "person.3.fill", tint: .blue)
+                            summaryCard(title: "Players", value: "0", systemImage: "person.fill", tint: .green)
+                            summaryCard(title: "Upcoming Games", value: "0", systemImage: "calendar", tint: .orange)
+                        }
+                    }
+                    .padding()
                 }
-                .padding()
             }
             .navigationTitle("RockLab Athletics")
         }
@@ -35,7 +55,8 @@ struct HomeView: View {
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.gray.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color.white.opacity(0.75), in: RoundedRectangle(cornerRadius: 14))
+        .shadow(color: .black.opacity(0.06), radius: 6, y: 2)
     }
 }
 
