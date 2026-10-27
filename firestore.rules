@@ -47,5 +47,22 @@ service cloud.firestore {
       allow update: if signedIn() && role() == 'ad';
       allow delete: if signedIn() && role() == 'ad';
     }
+
+    // Teams + roster + forms. Loose for now; scoped per-role in a later phase.
+    match /teams/{teamId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && role() in ['ad', 'coach', 'staff'];
+      allow delete: if signedIn() && role() == 'ad';
+
+      match /roster/{entryId} {
+        allow read: if signedIn();
+        allow write: if signedIn() && role() in ['ad', 'coach', 'staff'];
+
+        match /forms/{formId} {
+          allow read: if signedIn();
+          allow write: if signedIn() && role() in ['ad', 'coach', 'staff', 'parent', 'player'];
+        }
+      }
+    }
   }
 }
