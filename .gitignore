@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+
+# Xcode
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.xcscmblueprint
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# CocoaPods / Carthage
+Pods/
+Carthage/
+
+# Secrets — never commit
+*.p8
+.env
+.env.*
+Secrets/
+service-account*.json
+
+# Firebase config (uncomment if you intentionally want to track it in-repo)
+# GoogleService-Info.plist
