@@ -22,7 +22,7 @@ service cloud.firestore {
     // and per-collection scoping will harden these in later phases.
 
     match /users/{userId} {
-      allow read: if signedIn() && (request.auth.uid == userId || role() == 'ad');
+      allow read: if signedIn() && (request.auth.uid == userId || role() in ['ad', 'coach', 'staff']);
       allow create: if signedIn() && request.auth.uid == userId;
       // MVP: users can update their own profile (including role/schoolId during
       // onboarding). TODO: move role assignment to Cloud Functions custom claims.

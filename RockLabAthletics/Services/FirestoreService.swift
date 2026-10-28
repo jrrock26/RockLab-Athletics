@@ -601,4 +601,11 @@ struct FirestoreService {
             "parentName": parentName
         ], merge: true)
     }
+
+    func fetchSchoolUsers(schoolId: String) async throws -> [AppUser] {
+        let snapshot = try await db.collection("users")
+            .whereField("schoolId", isEqualTo: schoolId)
+            .getDocuments()
+        return snapshot.documents.map { AppUser(id: $0.documentID, data: $0.data()) }
+    }
 }

@@ -30,29 +30,66 @@ exports.syncUserRoleClaims = functions.firestore
 // ---------------------------------------------------------------------------
 const ALLOWED_ROLES = ['ad', 'coach', 'staff', 'player', 'parent', 'follower'];
 
-exports.grantRole = functions.https.onCall(async (data, context) => {
+exports.manageUserRole = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
   }
-
-  const { targetUid, role } = data || {};
-  if (!targetUid || !role) {
-    throw new functions.https.HttpsError('invalid-argument', 'targetUid and role are required.');
-  }
-  if (!ALLOWED_ROLES.includes(role)) {
-    throw new functions.https.HttpsError('invalid-argument', `Invalid role: ${role}`);
+  const callerId = context.auth.uid;
+  const { targetUid, action, newRole } = data || {};
+  if (!targetUid || !action) {
+    throw new functions.https.HttpsError('invalid-argument', 'targetUid and action are required.');
   }
 
-  // Only an AD can grant roles.
-  const callerSnap = await admin.firestore().collection('users').doc(context.auth.uid).get();
+  const db = admin.firestore();
+  const [callerSnap, targetSnap] = await Promise.all([
+    db.collection('users').doc(callerId).get(),
+    db.collection('users').doc(targetUid).get(),
+  ]);
+  if (!targetSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'User not found.');
+  }
   const callerRole = callerSnap.exists ? callerSnap.get('role') : null;
-  if (callerRole !== 'ad') {
-    throw new functions.https.HttpsError('permission-denied', 'Only an Athletic Director can grant roles.');
+  const targetRole = targetSnap.get('role') || 'follower';
+
+  const isAd = callerRole === 'ad';
+  const isCoach = callerRole === 'coach';
+  if (!isAd && !isCoach) {
+    throw new functions.https.HttpsError('permission-denied', 'Only an AD or coach can manage users.');
   }
 
-  await admin.firestore().collection('users').doc(targetUid).set({ role }, { merge: true });
-  console.log(`[roles] ${context.auth.uid} granted ${role} to ${targetUid}`);
-  return { ok: true, targetUid, role };
+  if (action === 'setRole') {
+    const allowed = ['ad', 'coach', 'staff', 'player', 'parent', 'follower'];
+    if (!allowed.includes(newRole)) {
+      throw new functions.https.HttpsError('invalid-argument', 'Invalid role.');
+    }
+    if (newRole === 'ad' && !isAd) {
+      throw new functions.https.HttpsError('permission-denied', 'Only an AD can assign the AD role.');
+    }
+    if (newRole === 'coach' && !isAd) {
+      throw new functions.https.HttpsError('permission-denied', 'Only an AD can assign the coach role.');
+    }
+    await db.collection('users').doc(targetUid).set({ role: newRole }, { merge: true });
+    console.log(`[roles] ${callerId} set ${targetUid} role to ${newRole}`);
+    return { ok: true, targetUid, role: newRole };
+  }
+
+  if (action === 'remove') {
+    if (targetRole === 'ad') {
+      throw new functions.https.HttpsError('permission-denied', 'An AD cannot be removed.');
+    }
+    if (targetRole === 'coach' && !isAd) {
+      throw new functions.https.HttpsError('permission-denied', 'Only an AD can remove a coach.');
+    }
+    // Remove from the school: clear schoolId and demote to follower.
+    await db.collection('users').doc(targetUid).set({ role: 'follower', schoolId: null }, { merge: true });
+    // Clear any head-coach assignment.
+    const teams = await db.collection('teams').where('headCoachId', '==', targetUid).get();
+    await Promise.all(teams.docs.map((d) => d.ref.set({ headCoachId: '' }, { merge: true })));
+    console.log(`[roles] ${callerId} removed ${targetUid}`);
+    return { ok: true, targetUid, removed: true };
+  }
+
+  throw new functions.https.HttpsError('invalid-argument', 'Unknown action.');
 });
 
 // ---------------------------------------------------------------------------

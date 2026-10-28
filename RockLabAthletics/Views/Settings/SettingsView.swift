@@ -25,6 +25,14 @@ struct SettingsView: View {
                     }
                 }
 
+                if let role = auth.user?.role, role == .ad || role == .coach {
+                    Section("Administration") {
+                        NavigationLink("Manage people") {
+                            PeopleView()
+                        }
+                    }
+                }
+
                 Section {
                     Button("Sign Out", role: .destructive) {
                         auth.signOut()

@@ -75,6 +75,7 @@
 				E2F3A4B5C6D7E2F3A4B5C6D7 /* FirebaseAuth */,
 				F3A4B5C6D7E8F3A4B5C6D7E8 /* FirebaseFirestore */,
 				A1C2E3F4A5B6C7D8E9F0A1B2 /* FirebaseMessaging */,
+				B2C3D4E5F6A7B8C9D0E1F2A3 /* FirebaseFunctions */,
 			);
 			productName = RockLabAthletics;
 			productReference = 1A1A1A1A1A1A1A1A1A1A1A1A /* RockLabAthletics.app */;
@@ -301,6 +302,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseMessaging;
+		};
+		B2C3D4E5F6A7B8C9D0E1F2A3 /* FirebaseFunctions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseFunctions;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
