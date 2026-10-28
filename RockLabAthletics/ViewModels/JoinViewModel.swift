@@ -8,13 +8,13 @@ final class JoinViewModel {
     var message = ""
     var isWorking = false
 
-    func join(userId: String, email: String) async -> Bool {
+    func join(userId: String, email: String, name: String) async -> Bool {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard !trimmed.isEmpty else { return false }
         isWorking = true
         defer { isWorking = false }
         do {
-            let role = try await FirestoreService.shared.joinWithCode(code: trimmed, userId: userId, email: email)
+            let role = try await FirestoreService.shared.joinWithCode(code: trimmed, userId: userId, email: email, name: name)
             message = "Joined as \(role.displayName)."
             return true
         } catch {

@@ -569,26 +569,34 @@ struct FirestoreService {
     }
 
     /// Joins the current user via an invite code (role-specific) or a team
-    /// join code (follower). Returns the role that was granted.
-    func joinWithCode(code: String, userId: String, email: String) async throws -> UserRole {
+    /// join code (follower). Creates the team membership. Returns the role.
+    func joinWithCode(code: String, userId: String, email: String, name: String = "") async throws -> UserRole {
         if let invitation = try await findInvitationByCode(code) {
             guard invitation.email.lowercased() == email.lowercased() else {
                 throw NSError(domain: "join", code: 1,
                               userInfo: [NSLocalizedDescriptionKey: "This invite is for \(invitation.email)."])
             }
             var schoolId = invitation.schoolId
-            if let teamId = invitation.teamId, let team = try await fetchTeam(teamId: teamId) {
+            var teamId: String?
+            if let tid = invitation.teamId, let team = try await fetchTeam(teamId: tid) {
                 schoolId = team.schoolId
+                teamId = tid
             }
             try await updateUserRoleAndSchool(id: userId, role: invitation.role, schoolId: schoolId)
-            // A coach who joins a team becomes that team's head coach (admin).
-            if invitation.role == .coach, let teamId = invitation.teamId {
-                try await db.collection("teams").document(teamId).setData(["headCoachId": userId], merge: true)
+            if let tid = teamId {
+                try await createMembership(teamId: tid, userId: userId, role: invitation.role, name: name, email: email)
+                try await addTeamToUser(userId: userId, teamId: tid)
+                // A coach who joins a team becomes that team's head coach (admin).
+                if invitation.role == .coach {
+                    try await db.collection("teams").document(tid).setData(["headCoachId": userId], merge: true)
+                }
             }
             return invitation.role
         }
         if let team = try await findTeamByJoinCode(code) {
             try await db.collection("users").document(userId).setData(["schoolId": team.schoolId], merge: true)
+            try await createMembership(teamId: team.id, userId: userId, role: .follower, name: name, email: email)
+            try await addTeamToUser(userId: userId, teamId: team.id)
             return .follower
         }
         throw NSError(domain: "join", code: 2,
@@ -607,5 +615,43 @@ struct FirestoreService {
             .whereField("schoolId", isEqualTo: schoolId)
             .getDocuments()
         return snapshot.documents.map { AppUser(id: $0.documentID, data: $0.data()) }
+    }
+
+    // MARK: - Team memberships & permissions
+
+    func createMembership(teamId: String, userId: String, role: UserRole, name: String, email: String, permissions: [String] = []) async throws {
+        try await db.collection("teams").document(teamId).collection("members").document(userId).setData([
+            "teamId": teamId,
+            "userId": userId,
+            "role": role.rawValue,
+            "name": name,
+            "email": email,
+            "permissions": permissions,
+            "createdAt": FieldValue.serverTimestamp()
+        ], merge: true)
+    }
+
+    func fetchMemberships(teamId: String) async throws -> [TeamMembership] {
+        let snapshot = try await db.collection("teams").document(teamId).collection("members").getDocuments()
+        return snapshot.documents.compactMap { TeamMembership(id: $0.documentID, data: $0.data()) }
+    }
+
+    func fetchMembership(teamId: String, userId: String) async throws -> TeamMembership? {
+        let snapshot = try await db.collection("teams").document(teamId).collection("members").document(userId).getDocument()
+        guard let data = snapshot.data() else { return nil }
+        return TeamMembership(id: snapshot.documentID, data: data)
+    }
+
+    func updateMemberPermissions(teamId: String, userId: String, permissions: [String]) async throws {
+        try await db.collection("teams").document(teamId).collection("members").document(userId).setData(["permissions": permissions], merge: true)
+    }
+
+    func removeMember(teamId: String, userId: String) async throws {
+        try await db.collection("teams").document(teamId).collection("members").document(userId).delete()
+        try await db.collection("users").document(userId).setData(["teamIds": FieldValue.arrayRemove([teamId])], merge: true)
+    }
+
+    func addTeamToUser(userId: String, teamId: String) async throws {
+        try await db.collection("users").document(userId).setData(["teamIds": FieldValue.arrayUnion([teamId])], merge: true)
     }
 }

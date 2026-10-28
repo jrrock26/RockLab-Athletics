@@ -23,7 +23,7 @@ struct JoinTeamView: View {
             Section {
                 Button("Join") {
                     Task {
-                        let ok = await vm.join(userId: auth.user?.id ?? "", email: auth.user?.email ?? "")
+                        let ok = await vm.join(userId: auth.user?.id ?? "", email: auth.user?.email ?? "", name: auth.user?.displayName ?? "")
                         if ok {
                             await auth.refreshUser()
                         }

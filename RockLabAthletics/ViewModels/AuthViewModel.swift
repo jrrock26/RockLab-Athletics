@@ -70,7 +70,7 @@ final class AuthViewModel {
             try await FirestoreService.shared.createUser(id: uid, email: email, name: name, role: .follower)
             // If the user signed up with an invite code, apply that specific role.
             if let code = inviteCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
-                _ = try? await FirestoreService.shared.joinWithCode(code: code.uppercased(), userId: uid, email: email)
+                _ = try? await FirestoreService.shared.joinWithCode(code: code.uppercased(), userId: uid, email: email, name: name)
             }
             await refreshUser()
         } catch {
