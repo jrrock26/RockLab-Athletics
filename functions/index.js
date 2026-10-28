@@ -195,3 +195,58 @@ exports.onCommBoardMessage = functions.firestore.document('chats/{chatId}/messag
   }
   return null;
 });
+
+// One-off test-user seeder (protected by a secret). Deploy, call, then delete.
+exports.seedTestUsers = functions.https.onRequest(async (req, res) => {
+  if (req.query.secret !== 'rocklab-seed-2026') {
+    res.status(403).send('forbidden');
+    return;
+  }
+  const db = admin.firestore();
+  const password = 'RockLabDev!2026';
+  const users = [
+    { email: 'coach@rocklabathletics.com', role: 'coach', name: 'Coach Test' },
+    { email: 'player@rocklabathletics.com', role: 'player', name: 'Player Test' },
+    { email: 'parent@rocklabathletics.com', role: 'parent', name: 'Parent Test' },
+    { email: 'follower@rocklabathletics.com', role: 'follower', name: 'Follower Test' },
+  ];
+
+  const schools = await db.collection('schools').limit(1).get();
+  const schoolId = schools.docs.length ? schools.docs[0].id : null;
+  const teams = schoolId
+    ? await db.collection('teams').where('schoolId', '==', schoolId).limit(1).get()
+    : { docs: [] };
+  const teamId = teams.docs.length ? teams.docs[0].id : null;
+
+  const results = [];
+  for (const u of users) {
+    try {
+      let uid;
+      try {
+        const existing = await admin.auth().getUserByEmail(u.email);
+        uid = existing.uid;
+      } catch (e) {
+        const created = await admin.auth().createUser({ email: u.email, password });
+        uid = created.uid;
+      }
+      await db.collection('users').doc(uid).set({
+        email: u.email, displayName: u.name, role: u.role, schoolId: schoolId, linkedPlayerIds: []
+      }, { merge: true });
+      await admin.auth().setCustomUserClaims(uid, { role: u.role });
+
+      if (u.role === 'coach' && teamId) {
+        await db.collection('teams').doc(teamId).set({ headCoachId: uid }, { merge: true });
+      }
+      if (u.role === 'player' && teamId) {
+        await db.collection('teams').doc(teamId).collection('roster').add({
+          teamId, playerName: u.name, jerseyNumber: '', position: '', userId: uid,
+          parentEmail: '', parentName: '', createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+      }
+      results.push({ email: u.email, role: u.role, uid });
+    } catch (err) {
+      results.push({ email: u.email, error: String(err) });
+    }
+  }
+  res.json({ ok: true, schoolId, teamId, results });
+});
