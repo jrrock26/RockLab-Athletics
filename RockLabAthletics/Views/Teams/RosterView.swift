@@ -17,6 +17,7 @@ struct EligibilityBadge: View {
 
 struct RosterView: View {
     let teamId: String
+    let sportId: String
     @State private var vm = RosterViewModel()
     @State private var showingAddPlayer = false
     @State private var showingCSV = false
@@ -57,6 +58,9 @@ struct RosterView: View {
         }
         .navigationTitle("Roster")
         .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .top) {
+            BrandedHeader(imageName: SportBackground.image(for: sportId))
+        }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button { showingCSV = true } label: { Image(systemName: "square.and.arrow.down") }

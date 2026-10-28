@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FundraisingView: View {
     let teamId: String
+    let sportId: String
     @State private var vm = LogisticsViewModel()
     @State private var showingAdd = false
 
@@ -36,6 +37,9 @@ struct FundraisingView: View {
         }
         .navigationTitle("Fundraising")
         .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .top) {
+            BrandedHeader(imageName: SportBackground.image(for: sportId))
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showingAdd = true } label: { Image(systemName: "plus") }

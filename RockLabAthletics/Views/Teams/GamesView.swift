@@ -2,6 +2,7 @@ import SwiftUI
 
 struct GamesView: View {
     let teamId: String
+    let sportId: String
     @State private var vm = StatsViewModel()
     @State private var showingAdd = false
 
@@ -26,6 +27,9 @@ struct GamesView: View {
         }
         .navigationTitle("Games")
         .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .top) {
+            BrandedHeader(imageName: SportBackground.image(for: sportId))
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showingAdd = true } label: { Image(systemName: "plus") }

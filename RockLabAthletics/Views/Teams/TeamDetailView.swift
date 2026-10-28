@@ -14,16 +14,16 @@ struct TeamDetailView: View {
     var body: some View {
         List {
             Section {
-                NavigationLink { RosterView(teamId: team.id) } label: {
+                NavigationLink { RosterView(teamId: team.id, sportId: team.sportId) } label: {
                     Label("Roster", systemImage: "person.3")
                 }
-                NavigationLink { GamesView(teamId: team.id) } label: {
+                NavigationLink { GamesView(teamId: team.id, sportId: team.sportId) } label: {
                     Label("Games", systemImage: "sportscourt")
                 }
-                NavigationLink { TripsView(teamId: team.id) } label: {
+                NavigationLink { TripsView(teamId: team.id, sportId: team.sportId) } label: {
                     Label("Trips", systemImage: "bus")
                 }
-                NavigationLink { FundraisingView(teamId: team.id) } label: {
+                NavigationLink { FundraisingView(teamId: team.id, sportId: team.sportId) } label: {
                     Label("Fundraising", systemImage: "dollarsign.circle")
                 }
             }
@@ -69,6 +69,9 @@ struct TeamDetailView: View {
         }
         .navigationTitle("\(team.sportName) \(team.level)")
         .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .top) {
+            BrandedHeader(imageName: SportBackground.image(for: team.sportId))
+        }
         .sheet(isPresented: $showingInvite) {
             InviteCoachSheet(team: team) {
                 Task { await loadInvites() }
