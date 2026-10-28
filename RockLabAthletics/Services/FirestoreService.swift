@@ -581,6 +581,10 @@ struct FirestoreService {
                 schoolId = team.schoolId
             }
             try await updateUserRoleAndSchool(id: userId, role: invitation.role, schoolId: schoolId)
+            // A coach who joins a team becomes that team's head coach (admin).
+            if invitation.role == .coach, let teamId = invitation.teamId {
+                try await db.collection("teams").document(teamId).setData(["headCoachId": userId], merge: true)
+            }
             return invitation.role
         }
         if let team = try await findTeamByJoinCode(code) {

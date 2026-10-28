@@ -12,19 +12,29 @@ struct InviteCoachSheet: View {
     @State private var isWorking = false
     @State private var errorMessage: String?
 
-    private let roles: [UserRole] = [.coach, .staff, .player, .parent, .follower]
+    /// ADs only invite coaches; coaches/staff invite players, parents, etc.
+    private var availableRoles: [UserRole] {
+        if auth.user?.role == .ad {
+            return [.coach]
+        }
+        return [.staff, .player, .parent, .follower]
+    }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Invite someone") {
+                Section(auth.user?.role == .ad ? "Invite a coach" : "Invite someone") {
                     TextField("Email", text: $email)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.emailAddress)
-                    Picker("Role", selection: $role) {
-                        ForEach(roles, id: \.self) { r in
-                            Text(r.displayName).tag(r)
+                    if availableRoles.count > 1 {
+                        Picker("Role", selection: $role) {
+                            ForEach(availableRoles, id: \.self) { r in
+                                Text(r.displayName).tag(r)
+                            }
                         }
+                    } else {
+                        LabeledContent("Role", value: "Coach")
                     }
                 }
 
@@ -44,7 +54,7 @@ struct InviteCoachSheet: View {
                     }
                 }
             }
-            .navigationTitle("Invite Coach")
+            .navigationTitle(auth.user?.role == .ad ? "Invite Coach" : "Invite")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
@@ -53,6 +63,11 @@ struct InviteCoachSheet: View {
                         Task { await createInvite() }
                     }
                     .disabled(email.isEmpty || isWorking)
+                }
+            }
+            .onAppear {
+                if let first = availableRoles.first, !availableRoles.contains(role) {
+                    role = first
                 }
             }
         }
