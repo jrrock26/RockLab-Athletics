@@ -38,10 +38,11 @@ service cloud.firestore {
     }
 
     match /invitations/{invitationId} {
-      allow read: if signedIn() && role() == 'ad';
-      allow create: if signedIn() && role() == 'ad';
-      allow update: if signedIn() && role() == 'ad';
-      allow delete: if signedIn() && role() == 'ad';
+      // Any signed-in user can read an invitation by code (to join).
+      allow read: if signedIn();
+      allow create: if signedIn() && role() in ['ad', 'coach', 'staff'];
+      allow update: if signedIn() && role() in ['ad', 'coach', 'staff'];
+      allow delete: if signedIn() && role() in ['ad', 'coach', 'staff'];
     }
 
     // Teams + roster + forms. Loose for now; scoped per-role in a later phase.

@@ -1,6 +1,6 @@
 import Foundation
 
-/// An invitation sent by the AD to bring a coach/staff member onto the system.
+/// An invitation to join a school/team with a specific role.
 struct Invitation: Identifiable, Codable {
     let id: String
     var email: String
@@ -9,6 +9,9 @@ struct Invitation: Identifiable, Codable {
     var schoolName: String
     var sportNames: [String]
     var status: String
+    var teamId: String?
+    var teamName: String?
+    var code: String
 
     init(
         id: String,
@@ -17,7 +20,10 @@ struct Invitation: Identifiable, Codable {
         schoolId: String,
         schoolName: String,
         sportNames: [String],
-        status: String
+        status: String,
+        teamId: String? = nil,
+        teamName: String? = nil,
+        code: String = ""
     ) {
         self.id = id
         self.email = email
@@ -26,6 +32,9 @@ struct Invitation: Identifiable, Codable {
         self.schoolName = schoolName
         self.sportNames = sportNames
         self.status = status
+        self.teamId = teamId
+        self.teamName = teamName
+        self.code = code
     }
 
     init?(id: String, data: [String: Any]) {
@@ -37,5 +46,9 @@ struct Invitation: Identifiable, Codable {
         self.schoolName = data["schoolName"] as? String ?? ""
         self.sportNames = data["sportNames"] as? [String] ?? []
         self.status = data["status"] as? String ?? "pending"
+        self.teamId = data["teamId"] as? String
+        self.teamName = data["teamName"] as? String
+        self.code = data["code"] as? String ?? ""
     }
 }
+

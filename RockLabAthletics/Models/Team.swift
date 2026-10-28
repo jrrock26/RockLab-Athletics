@@ -10,6 +10,7 @@ struct Team: Identifiable, Codable {
     var season: String
     var gender: String
     var headCoachId: String
+    var joinCode: String
 
     init(
         id: String,
@@ -19,7 +20,8 @@ struct Team: Identifiable, Codable {
         level: String,
         season: String,
         gender: String,
-        headCoachId: String
+        headCoachId: String,
+        joinCode: String
     ) {
         self.id = id
         self.schoolId = schoolId
@@ -29,6 +31,7 @@ struct Team: Identifiable, Codable {
         self.season = season
         self.gender = gender
         self.headCoachId = headCoachId
+        self.joinCode = joinCode
     }
 
     init?(id: String, data: [String: Any]) {
@@ -42,6 +45,8 @@ struct Team: Identifiable, Codable {
         self.season = data["season"] as? String ?? ""
         self.gender = data["gender"] as? String ?? ""
         self.headCoachId = data["headCoachId"] as? String ?? ""
+        self.joinCode = data["joinCode"] as? String ?? ""
     }
 }
+
 

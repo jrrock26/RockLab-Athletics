@@ -58,20 +58,27 @@ struct FirestoreService {
         role: UserRole,
         schoolId: String,
         schoolName: String,
-        sportNames: [String]
-    ) async throws {
+        sportNames: [String],
+        teamId: String? = nil,
+        teamName: String? = nil
+    ) async throws -> String {
         let ref = db.collection("invitations").document()
-        let data: [String: Any] = [
+        let code = randomCode()
+        var data: [String: Any] = [
             "email": email,
             "role": role.rawValue,
             "schoolId": schoolId,
             "schoolName": schoolName,
             "sportNames": sportNames,
+            "code": code,
             "token": UUID().uuidString,
             "status": "pending",
             "createdAt": FieldValue.serverTimestamp()
         ]
+        if let teamId { data["teamId"] = teamId }
+        if let teamName { data["teamName"] = teamName }
         try await ref.setData(data)
+        return code
     }
 
     func fetchInvitations(schoolId: String) async throws -> [Invitation] {
@@ -91,8 +98,9 @@ struct FirestoreService {
         season: String,
         gender: String,
         headCoachId: String
-    ) async throws -> String {
+    ) async throws -> Team {
         let ref = db.collection("teams").document()
+        let joinCode = randomCode()
         let data: [String: Any] = [
             "schoolId": schoolId,
             "sportId": sportId,
@@ -101,10 +109,12 @@ struct FirestoreService {
             "season": season,
             "gender": gender,
             "headCoachId": headCoachId,
+            "joinCode": joinCode,
             "createdAt": FieldValue.serverTimestamp()
         ]
         try await ref.setData(data)
-        return ref.documentID
+        return Team(id: ref.documentID, schoolId: schoolId, sportId: sportId, sportName: sportName,
+                    level: level, season: season, gender: gender, headCoachId: headCoachId, joinCode: joinCode)
     }
 
     func fetchTeams(schoolId: String) async throws -> [Team] {
@@ -522,5 +532,69 @@ struct FirestoreService {
             }
         }
         return totals
+    }
+
+    // MARK: - Invites & joining
+
+    private func randomCode(length: Int = 6) -> String {
+        let chars = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+        return String((0..<length).map { _ in chars.randomElement()! })
+    }
+
+    func fetchTeam(teamId: String) async throws -> Team? {
+        let snapshot = try await db.collection("teams").document(teamId).getDocument()
+        guard let data = snapshot.data() else { return nil }
+        return Team(id: snapshot.documentID, data: data)
+    }
+
+    func findTeamByJoinCode(_ code: String) async throws -> Team? {
+        let snapshot = try await db.collection("teams")
+            .whereField("joinCode", isEqualTo: code)
+            .getDocuments()
+        return snapshot.documents.first.flatMap { Team(id: $0.documentID, data: $0.data()) }
+    }
+
+    func findInvitationByCode(_ code: String) async throws -> Invitation? {
+        let snapshot = try await db.collection("invitations")
+            .whereField("code", isEqualTo: code)
+            .getDocuments()
+        return snapshot.documents.first.flatMap { Invitation(id: $0.documentID, data: $0.data()) }
+    }
+
+    func fetchTeamInvitations(teamId: String) async throws -> [Invitation] {
+        let snapshot = try await db.collection("invitations")
+            .whereField("teamId", isEqualTo: teamId)
+            .getDocuments()
+        return snapshot.documents.compactMap { Invitation(id: $0.documentID, data: $0.data()) }
+    }
+
+    /// Joins the current user via an invite code (role-specific) or a team
+    /// join code (follower). Returns the role that was granted.
+    func joinWithCode(code: String, userId: String, email: String) async throws -> UserRole {
+        if let invitation = try await findInvitationByCode(code) {
+            guard invitation.email.lowercased() == email.lowercased() else {
+                throw NSError(domain: "join", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "This invite is for \(invitation.email)."])
+            }
+            var schoolId = invitation.schoolId
+            if let teamId = invitation.teamId, let team = try await fetchTeam(teamId: teamId) {
+                schoolId = team.schoolId
+            }
+            try await updateUserRoleAndSchool(id: userId, role: invitation.role, schoolId: schoolId)
+            return invitation.role
+        }
+        if let team = try await findTeamByJoinCode(code) {
+            try await db.collection("users").document(userId).setData(["schoolId": team.schoolId], merge: true)
+            return .follower
+        }
+        throw NSError(domain: "join", code: 2,
+                      userInfo: [NSLocalizedDescriptionKey: "Invalid invite code."])
+    }
+
+    func updateRosterEntryParent(teamId: String, entryId: String, parentEmail: String, parentName: String) async throws {
+        try await db.collection("teams").document(teamId).collection("roster").document(entryId).setData([
+            "parentEmail": parentEmail,
+            "parentName": parentName
+        ], merge: true)
     }
 }

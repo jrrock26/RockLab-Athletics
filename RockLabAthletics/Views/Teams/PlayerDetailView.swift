@@ -4,6 +4,7 @@ struct PlayerDetailView: View {
     let teamId: String
     let entry: RosterEntry
     @State private var selection = 0
+    @State private var showingLinkParent = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,5 +24,16 @@ struct PlayerDetailView: View {
         }
         .navigationTitle(entry.playerName)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showingLinkParent = true } label: {
+                    Image(systemName: "person.crop.circle.badge.plus")
+                }
+            }
+        }
+        .sheet(isPresented: $showingLinkParent) {
+            LinkParentSheet(teamId: teamId, entry: entry)
+        }
     }
 }
+

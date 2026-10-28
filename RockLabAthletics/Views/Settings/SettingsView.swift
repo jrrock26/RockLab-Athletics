@@ -19,9 +19,9 @@ struct SettingsView: View {
                     LabeledContent("Platform", value: "iOS 17+")
                 }
 
-                Section("Family") {
-                    NavigationLink("Link a child (parent)") {
-                        ClaimChildView()
+                Section("Teams") {
+                    NavigationLink("Join a team with a code") {
+                        JoinTeamView()
                     }
                 }
 

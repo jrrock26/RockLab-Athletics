@@ -36,7 +36,7 @@ final class RosterViewModel {
     func createTeam(schoolId: String, headCoachId: String) async -> Bool {
         guard let sport = SportsCatalog.all.first(where: { $0.id == newTeamSportId }) else { return false }
         do {
-            let id = try await FirestoreService.shared.createTeam(
+            let team = try await FirestoreService.shared.createTeam(
                 schoolId: schoolId,
                 sportId: sport.id,
                 sportName: sport.name,
@@ -45,9 +45,7 @@ final class RosterViewModel {
                 gender: newTeamGender,
                 headCoachId: headCoachId
             )
-            teams.append(Team(id: id, schoolId: schoolId, sportId: sport.id, sportName: sport.name,
-                              level: newTeamLevel, season: newTeamSeason, gender: newTeamGender,
-                              headCoachId: headCoachId))
+            teams.append(team)
             return true
         } catch {
             errorMessage = error.localizedDescription

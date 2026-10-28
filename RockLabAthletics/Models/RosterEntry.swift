@@ -8,6 +8,8 @@ struct RosterEntry: Identifiable, Codable {
     var jerseyNumber: String
     var position: String
     var userId: String?
+    var parentEmail: String
+    var parentName: String
 
     init(
         id: String,
@@ -15,7 +17,9 @@ struct RosterEntry: Identifiable, Codable {
         playerName: String,
         jerseyNumber: String,
         position: String,
-        userId: String? = nil
+        userId: String? = nil,
+        parentEmail: String = "",
+        parentName: String = ""
     ) {
         self.id = id
         self.teamId = teamId
@@ -23,6 +27,8 @@ struct RosterEntry: Identifiable, Codable {
         self.jerseyNumber = jerseyNumber
         self.position = position
         self.userId = userId
+        self.parentEmail = parentEmail
+        self.parentName = parentName
     }
 
     init?(id: String, data: [String: Any]) {
@@ -33,5 +39,8 @@ struct RosterEntry: Identifiable, Codable {
         self.jerseyNumber = data["jerseyNumber"] as? String ?? ""
         self.position = data["position"] as? String ?? ""
         self.userId = data["userId"] as? String
+        self.parentEmail = data["parentEmail"] as? String ?? ""
+        self.parentName = data["parentName"] as? String ?? ""
     }
 }
+
