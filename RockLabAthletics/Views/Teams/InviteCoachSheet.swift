@@ -4,6 +4,7 @@ struct InviteCoachSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AuthViewModel.self) private var auth
     let team: Team
+    let onCreated: () -> Void
 
     @State private var email = ""
     @State private var role: UserRole = .coach
@@ -29,7 +30,7 @@ struct InviteCoachSheet: View {
 
                 if !generatedCode.isEmpty {
                     Section("Invite code") {
-                        Text("Share this code with \(email):")
+                        Text("Share this code with \(email). They enter it in Settings → Join a team.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         Text(generatedCode)
@@ -43,7 +44,7 @@ struct InviteCoachSheet: View {
                     }
                 }
             }
-            .navigationTitle("Invite")
+            .navigationTitle("Invite Coach")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
@@ -72,8 +73,10 @@ struct InviteCoachSheet: View {
                 teamName: "\(team.sportName) \(team.level)"
             )
             generatedCode = code
+            onCreated()
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 }
+

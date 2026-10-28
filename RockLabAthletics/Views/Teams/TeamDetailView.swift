@@ -3,6 +3,7 @@ import SwiftUI
 struct TeamDetailView: View {
     let team: Team
     @State private var showingInvite = false
+    @State private var invites: [Invitation] = []
 
     var body: some View {
         List {
@@ -21,6 +22,32 @@ struct TeamDetailView: View {
                 }
             }
 
+            Section("Coaching staff") {
+                Button {
+                    showingInvite = true
+                } label: {
+                    Label("Invite a coach", systemImage: "person.badge.plus")
+                }
+
+                if invites.isEmpty {
+                    Text("No coaches invited yet.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(invites) { invite in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(invite.email) · \(invite.role.displayName)")
+                                .font(.subheadline)
+                            if !invite.code.isEmpty {
+                                Text("Code: \(invite.code)")
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+
             Section("Join code") {
                 HStack {
                     Text("Share this code so players, parents, and followers can join.")
@@ -34,15 +61,22 @@ struct TeamDetailView: View {
         }
         .navigationTitle("\(team.sportName) \(team.level)")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showingInvite = true } label: { Image(systemName: "person.badge.plus") }
+        .sheet(isPresented: $showingInvite) {
+            InviteCoachSheet(team: team) {
+                Task { await loadInvites() }
             }
         }
-        .sheet(isPresented: $showingInvite) {
-            InviteCoachSheet(team: team)
+        .task { await loadInvites() }
+    }
+
+    private func loadInvites() async {
+        do {
+            invites = try await FirestoreService.shared.fetchTeamInvitations(teamId: team.id)
+        } catch {
+            // keep the list empty on error
         }
     }
 }
+
 
 
