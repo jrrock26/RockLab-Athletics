@@ -2,134 +2,153 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function signedIn() {
-      return request.auth != null;
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function userData() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function role() { return userData().role; }
+
+    function membership(t) {
+      return exists(/databases/$(database)/documents/teams/$(t)/members/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/teams/$(t)/members/$(request.auth.uid)).data : null;
+    }
+    function memberRole(t) { return membership(t) == null ? null : membership(t).role; }
+
+    function isAd() { return role() == 'ad'; }
+    function isCoachOf(t) { return memberRole(t) == 'coach'; }
+    function isStaffOf(t) { return memberRole(t) == 'staff'; }
+    function isTeamMember(t) { return memberRole(t) in ['coach','staff','player','parent']; }
+    function isFollowerOf(t) { return memberRole(t) == 'follower'; }
+    function canManageTeam(t) { return isAd() || isCoachOf(t); }
+    function staffHasPerm(t, p) {
+      let m = membership(t);
+      return m != null && m.role == 'staff' && 'permissions' in m && m.permissions.hasAny([p]);
     }
 
-    function userData() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-    }
+    function eventTeam(id) { return get(/databases/$(database)/documents/events/$(id)).data.teamId; }
+    function gameTeam(id) { return get(/databases/$(database)/documents/games/$(id)).data.teamId; }
+    function fundTeam(id) { return get(/databases/$(database)/documents/fundraisers/$(id)).data.teamId; }
+    function chatDoc(id) { return get(/databases/$(database)/documents/chats/$(id)).data; }
 
-    function role() {
-      return userData().role;
+    function chatReadAllowed(type, t) {
+      return isAd()
+        || type == 'commBoard'
+        || (type in ['team','parent'] && isTeamMember(t))
+        || (type == 'staff' && (isAd() || isCoachOf(t) || staffHasPerm(t, 'staffChat')));
     }
-
-    function schoolId() {
-      return userData().schoolId;
+    function chatWriteAllowed(type, t) {
+      return isAd()
+        || (type == 'commBoard' && (isAd() || isCoachOf(t) || isStaffOf(t)))
+        || (type in ['team','parent'] && isTeamMember(t))
+        || (type == 'staff' && (isAd() || isCoachOf(t) || staffHasPerm(t, 'staffChat')));
     }
-
-    // NOTE: This is a baseline. Role-based custom claims (via Cloud Functions)
-    // and per-collection scoping will harden these in later phases.
 
     match /users/{userId} {
-      allow read: if signedIn() && (request.auth.uid == userId || role() in ['ad', 'coach', 'staff']);
-      allow create: if signedIn() && request.auth.uid == userId;
-      // MVP: users can update their own profile (including role/schoolId during
-      // onboarding). TODO: move role assignment to Cloud Functions custom claims.
-      allow update: if signedIn() && (request.auth.uid == userId || role() == 'ad');
+      allow read: if signedIn() && (uid() == userId || role() in ['ad','coach','staff']);
+      allow create: if signedIn() && uid() == userId;
+      allow update: if signedIn() && (uid() == userId || isAd());
       allow delete: if false;
     }
 
-    match /schools/{school} {
+    match /schools/{schoolId} {
       allow read: if signedIn();
-      allow create: if signedIn() && request.resource.data.adUserId == request.auth.uid;
-      allow update: if signedIn() && role() == 'ad' && schoolId() == school;
-      allow delete: if false;
+      allow create: if signedIn() && request.resource.data.adUserId == uid();
+      allow update, delete: if isAd();
     }
 
-    match /invitations/{invitationId} {
-      // Any signed-in user can read an invitation by code (to join).
-      allow read: if signedIn();
-      allow create: if signedIn() && role() in ['ad', 'coach', 'staff'];
-      allow update: if signedIn() && role() in ['ad', 'coach', 'staff'];
-      allow delete: if signedIn() && role() in ['ad', 'coach', 'staff'];
-    }
-
-    // Teams + roster + forms. Loose for now; scoped per-role in a later phase.
     match /teams/{teamId} {
       allow read: if signedIn();
-      allow create, update: if signedIn() && role() in ['ad', 'coach', 'staff'];
-      allow delete: if signedIn() && role() == 'ad';
+      allow create: if signedIn() && role() in ['ad','coach'];
+      allow update: if canManageTeam(teamId);
+      allow delete: if isAd();
+
+      match /members/{memberId} {
+        allow read: if signedIn() && (uid() == memberId || isAd() || isCoachOf(teamId));
+        allow write: if canManageTeam(teamId);
+      }
 
       match /roster/{entryId} {
-        allow read: if signedIn();
-        allow write: if signedIn() && role() in ['ad', 'coach', 'staff'];
+        allow read: if signedIn() && (isAd() || isTeamMember(teamId));
+        allow write: if canManageTeam(teamId);
 
         match /forms/{formId} {
-          allow read: if signedIn();
-          allow write: if signedIn() && role() in ['ad', 'coach', 'staff', 'parent', 'player'];
+          allow read: if signedIn() && (isAd() || isTeamMember(teamId));
+          allow write: if signedIn() && (canManageTeam(teamId) || isTeamMember(teamId));
         }
       }
     }
 
-    // Events + RSVPs + attendance.
     match /events/{eventId} {
-      allow read: if signedIn();
-      allow create, update, delete: if signedIn() && role() in ['ad', 'coach', 'staff'];
+      allow read: if signedIn() && (isAd() || isTeamMember(resource.data.teamId)
+        || (isFollowerOf(resource.data.teamId) && resource.data.type == 'game'));
+      allow create, update, delete: if canManageTeam(request.resource.data.teamId);
 
-      match /rsvps/{userId} {
-        allow read: if signedIn();
-        allow write: if signedIn() && (request.auth.uid == userId || role() in ['ad', 'coach', 'staff']);
+      match /rsvps/{rsvpUserId} {
+        allow read: if signedIn() && (uid() == rsvpUserId || isAd() || isCoachOf(eventTeam(eventId)));
+        allow write: if signedIn() && (uid() == rsvpUserId || isAd() || isCoachOf(eventTeam(eventId)));
       }
 
       match /attendance/{entryId} {
-        allow read: if signedIn();
-        allow write: if signedIn() && role() in ['ad', 'coach', 'staff'];
+        allow read: if signedIn() && (isAd() || isCoachOf(eventTeam(eventId)) || staffHasPerm(eventTeam(eventId), 'attendance'));
+        allow write: if signedIn() && (isAd() || isCoachOf(eventTeam(eventId)) || staffHasPerm(eventTeam(eventId), 'attendance'));
       }
     }
 
-    // Chats + messages.
-    match /chats/{chatId} {
+    match /games/{gameId} {
       allow read: if signedIn();
-      allow create: if signedIn() && role() in ['ad', 'coach', 'staff'];
+      allow create: if signedIn() && canManageTeam(request.resource.data.teamId);
+      allow update, delete: if canManageTeam(resource.data.teamId) || staffHasPerm(resource.data.teamId, 'statistician');
+
+      match /stats/{entryId} {
+        allow read: if signedIn();
+        allow write: if isAd() || isCoachOf(gameTeam(gameId)) || staffHasPerm(gameTeam(gameId), 'statistician');
+      }
+    }
+
+    match /chats/{chatId} {
+      allow read: if signedIn() && chatReadAllowed(resource.data.type, resource.data.teamId);
+      allow create: if signedIn() && role() in ['ad','coach','staff'];
       allow update, delete: if false;
 
       match /messages/{messageId} {
-        allow read: if signedIn();
-        allow create: if signedIn();
+        allow read: if signedIn() && chatReadAllowed(chatDoc(chatId).type, chatDoc(chatId).teamId);
+        allow create: if signedIn() && chatWriteAllowed(chatDoc(chatId).type, chatDoc(chatId).teamId);
         allow update, delete: if false;
       }
     }
 
-    // Games + live stats.
-    match /games/{gameId} {
-      allow read: if signedIn();
-      allow create, update, delete: if signedIn() && role() in ['ad', 'coach', 'staff'];
-
-      match /stats/{entryId} {
-        allow read: if signedIn();
-        allow write: if signedIn() && role() in ['ad', 'coach', 'staff'];
-      }
-    }
-
-    // Trips + fundraisers.
     match /trips/{tripId} {
-      allow read: if signedIn();
-      allow create, update, delete: if signedIn() && role() in ['ad', 'coach', 'staff'];
+      allow read: if signedIn() && (isAd() || isTeamMember(resource.data.teamId));
+      allow create, update, delete: if isAd() || isCoachOf(request.resource.data.teamId);
     }
 
     match /fundraisers/{fundraiserId} {
       allow read: if signedIn();
-      allow create, update, delete: if signedIn() && role() in ['ad', 'coach', 'staff'];
+      allow create, update, delete: if isAd() || isCoachOf(request.resource.data.teamId)
+        || staffHasPerm(request.resource.data.teamId, 'fundraising');
 
       match /donations/{donationId} {
-        allow read: if signedIn();
+        allow read: if signedIn() && (isAd() || isCoachOf(fundTeam(fundraiserId)) || isStaffOf(fundTeam(fundraiserId)));
         allow create: if signedIn();
         allow update, delete: if false;
       }
     }
 
-    // Player recruiting showcases + highlights.
     match /showcases/{showcaseId} {
       allow read: if signedIn();
-      allow create, update: if signedIn() && role() in ['ad', 'coach', 'staff'];
+      allow create, update: if signedIn() && (isAd() || role() in ['coach','staff','player']);
       allow delete: if false;
 
       match /highlights/{highlightId} {
         allow read: if signedIn();
-        allow create, update: if signedIn() && role() in ['ad', 'coach', 'staff', 'player'];
-        allow delete: if signedIn() && role() in ['ad', 'coach', 'staff'];
+        allow create, update: if signedIn() && (isAd() || role() in ['coach','staff','player']);
+        allow delete: if signedIn() && (isAd() || role() in ['coach','staff']);
       }
+    }
+
+    match /invitations/{invitationId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && role() in ['ad','coach','staff'];
+      allow update, delete: if signedIn() && role() in ['ad','coach','staff'];
     }
   }
 }

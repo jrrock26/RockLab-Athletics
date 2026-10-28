@@ -250,3 +250,40 @@ exports.seedTestUsers = functions.https.onRequest(async (req, res) => {
   }
   res.json({ ok: true, schoolId, teamId, results });
 });
+
+// One-off: create team memberships for the existing test accounts.
+exports.seedMemberships = functions.https.onRequest(async (req, res) => {
+  if (req.query.secret !== 'rocklab-seed-2026') { res.status(403).send('forbidden'); return; }
+  const db = admin.firestore();
+  const roles = {
+    'coach@rocklabathletics.com': 'coach',
+    'player@rocklabathletics.com': 'player',
+    'parent@rocklabathletics.com': 'parent',
+    'follower@rocklabathletics.com': 'follower',
+  };
+  const schools = await db.collection('schools').limit(1).get();
+  const schoolId = schools.docs.length ? schools.docs[0].id : null;
+  const teams = schoolId ? await db.collection('teams').where('schoolId', '==', schoolId).limit(1).get() : { docs: [] };
+  const teamId = teams.docs.length ? teams.docs[0].id : null;
+  const results = [];
+  for (const email of Object.keys(roles)) {
+    try {
+      const u = await admin.auth().getUserByEmail(email);
+      const role = roles[email];
+      await db.collection('teams').doc(teamId).collection('members').doc(u.uid).set({
+        teamId, userId: u.uid, role, name: u.displayName || email, email,
+        permissions: [], createdAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+      await db.collection('users').doc(u.uid).set({
+        teamIds: admin.firestore.FieldValue.arrayUnion(teamId), schoolId: schoolId
+      }, { merge: true });
+      if (role === 'coach') {
+        await db.collection('teams').doc(teamId).set({ headCoachId: u.uid }, { merge: true });
+      }
+      results.push({ email, role, uid: u.uid });
+    } catch (e) {
+      results.push({ email, error: String(e) });
+    }
+  }
+  res.json({ ok: true, schoolId, teamId, results });
+});
