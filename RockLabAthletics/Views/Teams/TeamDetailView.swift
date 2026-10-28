@@ -1,9 +1,15 @@
 import SwiftUI
 
 struct TeamDetailView: View {
+    @Environment(AuthViewModel.self) private var auth
     let team: Team
     @State private var showingInvite = false
     @State private var invites: [Invitation] = []
+
+    private var canInvite: Bool {
+        let role = auth.user?.role
+        return role == .ad || role == .coach
+    }
 
     var body: some View {
         List {
@@ -22,26 +28,28 @@ struct TeamDetailView: View {
                 }
             }
 
-            Section("Coaching staff") {
-                Button {
-                    showingInvite = true
-                } label: {
-                    Label("Invite a coach", systemImage: "person.badge.plus")
-                }
+            if canInvite {
+                Section("Coaching staff") {
+                    Button {
+                        showingInvite = true
+                    } label: {
+                        Label("Invite a coach", systemImage: "person.badge.plus")
+                    }
 
-                if invites.isEmpty {
-                    Text("No coaches invited yet.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(invites) { invite in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("\(invite.email) · \(invite.role.displayName)")
-                                .font(.subheadline)
-                            if !invite.code.isEmpty {
-                                Text("Code: \(invite.code)")
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
+                    if invites.isEmpty {
+                        Text("No coaches invited yet.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(invites) { invite in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(invite.email) · \(invite.role.displayName)")
+                                    .font(.subheadline)
+                                if !invite.code.isEmpty {
+                                    Text("Code: \(invite.code)")
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
@@ -77,6 +85,7 @@ struct TeamDetailView: View {
         }
     }
 }
+
 
 
 

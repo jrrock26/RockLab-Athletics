@@ -59,7 +59,7 @@ final class AuthViewModel {
         self.isLoading = false
     }
 
-    func signUp(email: String, password: String, name: String) async {
+    func signUp(email: String, password: String, name: String, inviteCode: String? = nil) async {
         do {
             let uid = try await AuthService.shared.signUp(email: email, password: password)
             if let current = Auth.auth().currentUser {
@@ -68,6 +68,11 @@ final class AuthViewModel {
                 try? await change.commitChanges()
             }
             try await FirestoreService.shared.createUser(id: uid, email: email, name: name, role: .follower)
+            // If the user signed up with an invite code, apply that specific role.
+            if let code = inviteCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
+                _ = try? await FirestoreService.shared.joinWithCode(code: code.uppercased(), userId: uid, email: email)
+            }
+            await refreshUser()
         } catch {
             errorMessage = error.localizedDescription
         }

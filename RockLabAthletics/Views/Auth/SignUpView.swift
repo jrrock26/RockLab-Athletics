@@ -7,6 +7,7 @@ struct SignUpView: View {
     @State private var name = ""
     @State private var email = ""
     @State private var password = ""
+    @State private var inviteCode = ""
     @State private var isWorking = false
 
     var body: some View {
@@ -31,6 +32,12 @@ struct SignUpView: View {
 
             SecureField("Password (6+ characters)", text: $password)
                 .textContentType(.newPassword)
+                .padding()
+                .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+
+            TextField("Invite code (optional)", text: $inviteCode)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
                 .padding()
                 .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
 
@@ -62,7 +69,8 @@ struct SignUpView: View {
 
     private func signUp() async {
         isWorking = true
-        await auth.signUp(email: email, password: password, name: name)
+        await auth.signUp(email: email, password: password, name: name, inviteCode: inviteCode)
         isWorking = false
     }
 }
+
