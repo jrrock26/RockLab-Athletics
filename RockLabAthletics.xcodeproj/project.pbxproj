@@ -74,6 +74,7 @@
 			packageProductDependencies = (
 				E2F3A4B5C6D7E2F3A4B5C6D7 /* FirebaseAuth */,
 				F3A4B5C6D7E8F3A4B5C6D7E8 /* FirebaseFirestore */,
+				A1C2E3F4A5B6C7D8E9F0A1B2 /* FirebaseMessaging */,
 			);
 			productName = RockLabAthletics;
 			productReference = 1A1A1A1A1A1A1A1A1A1A1A1A /* RockLabAthletics.app */;
@@ -197,6 +198,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = RockLabAthletics.entitlements;
 				DEVELOPMENT_TEAM = 2G78XY4X97;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
@@ -226,6 +228,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = RockLabAthletics.entitlements;
 				DEVELOPMENT_TEAM = 2G78XY4X97;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
@@ -293,6 +296,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseFirestore;
+		};
+		A1C2E3F4A5B6C7D8E9F0A1B2 /* FirebaseMessaging */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseMessaging;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

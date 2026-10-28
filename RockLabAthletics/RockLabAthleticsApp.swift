@@ -1,13 +1,9 @@
 import SwiftUI
-import FirebaseCore
 
 @main
 struct RockLabAthleticsApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @State private var auth = AuthViewModel()
-
-    init() {
-        FirebaseApp.configure()
-    }
 
     var body: some Scene {
         WindowGroup {
@@ -16,4 +12,5 @@ struct RockLabAthleticsApp: App {
         }
     }
 }
+
 

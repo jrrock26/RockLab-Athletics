@@ -94,3 +94,67 @@ exports.onInvitationCreated = functions.firestore
     console.log(`[invite] email sent to ${email}`);
     return null;
   });
+
+// ---------------------------------------------------------------------------
+// Push notifications (FCM)
+// ---------------------------------------------------------------------------
+async function sendToUser(userId, title, body) {
+  const snap = await admin.firestore().collection('users').doc(userId).get();
+  const token = snap.exists ? snap.get('fcmToken') : null;
+  if (!token) return false;
+  try {
+    await admin.messaging().send({ token, notification: { title, body } });
+    return true;
+  } catch (err) {
+    console.error('[push] send failed', err);
+    return false;
+  }
+}
+
+async function notifyTeam(teamId, title, body) {
+  const teamSnap = await admin.firestore().collection('teams').doc(teamId).get();
+  const team = teamSnap.exists ? teamSnap.data() : {};
+  const ids = new Set();
+  if (team.headCoachId) ids.add(team.headCoachId);
+  const roster = await admin.firestore().collection('teams').doc(teamId).collection('roster').get();
+  roster.docs.forEach((d) => {
+    const uid = d.get('userId');
+    if (uid) ids.add(uid);
+  });
+  for (const uid of ids) {
+    await sendToUser(uid, title, body);
+  }
+}
+
+exports.sendTestPush = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const title = (data && data.title) || 'Test';
+  const body = (data && data.body) || 'Push notifications are working!';
+  const ok = await sendToUser(context.auth.uid, title, body);
+  if (!ok) {
+    throw new functions.https.HttpsError('not-found', 'No FCM token for this user yet. Register for push on a real device first.');
+  }
+  return { ok: true };
+});
+
+exports.onEventCreated = functions.firestore.document('events/{eventId}').onCreate(async (snap) => {
+  const ev = snap.data() || {};
+  if (ev.teamId) {
+    await notifyTeam(ev.teamId, 'New event', ev.title || 'A new event was added');
+  }
+  return null;
+});
+
+exports.onCommBoardMessage = functions.firestore.document('chats/{chatId}/messages/{messageId}').onCreate(async (snap, context) => {
+  const chatId = context.params.chatId;
+  const chatSnap = await admin.firestore().collection('chats').doc(chatId).get();
+  const chat = chatSnap.exists ? chatSnap.data() : {};
+  if (chat.type !== 'commBoard') return null;
+  const msg = snap.data() || {};
+  if (chat.teamId) {
+    await notifyTeam(chat.teamId, 'Announcement', msg.text || '');
+  }
+  return null;
+});
