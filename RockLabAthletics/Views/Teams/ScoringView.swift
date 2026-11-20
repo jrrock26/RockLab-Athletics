@@ -40,10 +40,18 @@ struct SetsScoringView: View {
     @State private var usScore = 0
     @State private var themScore = 0
     @State private var access = TeamAccess()
+    @State private var vm = StatsViewModel()
+    @State private var statEntry: RosterEntry?
+    @State private var scoringMode = "simple"
+    @State private var isGameScorer = false
     @State private var errorMessage = ""
     @State private var busy = false
 
-    private var canScore: Bool { access.canManageTeam || access.hasPerm(.statistician) }
+    private var canScore: Bool { access.canManageTeam || access.hasPerm(.statistician) || isGameScorer }
+    /// Advanced stats only when the coach granted advanced scoring (or for staff).
+    private var canTrackPlayerStats: Bool {
+        access.canManageTeam || access.hasPerm(.statistician) || scoringMode == "advanced"
+    }
     private var usWon: Int { sets.filter { ($0["us"] ?? 0) > ($0["them"] ?? 0) }.count }
     private var themWon: Int { sets.filter { ($0["them"] ?? 0) > ($0["us"] ?? 0) }.count }
     private var matchOver: Bool { usWon >= 3 || themWon >= 3 }
@@ -79,6 +87,34 @@ struct SetsScoringView: View {
                 }
             }
 
+            if canTrackPlayerStats && !vm.roster.isEmpty {
+                Section("Player stats") {
+                    ForEach(vm.roster) { entry in
+                        Button {
+                            statEntry = entry
+                        } label: {
+                            HStack {
+                                Text(entry.playerName)
+                                Spacer()
+                                Text(statSummary(entry))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .foregroundStyle(.primary)
+                    }
+                }
+            } else if isGameScorer && scoringMode == "simple" {
+                Section {
+                    Label("Simple scoring — sets only", systemImage: "1.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text("Player stats are added after the game by the coach.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             if matchOver {
                 Section {
                     Text("Match complete — \(usWon > themWon ? "win" : "loss") \(usWon)–\(themWon).")
@@ -104,11 +140,31 @@ struct SetsScoringView: View {
         }
         .navigationTitle("Score")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $statEntry) { entry in
+            StatEntrySheet(
+                vm: vm,
+                gameId: game.id,
+                entry: entry,
+                canEdit: canTrackPlayerStats,
+                stats: SportDefinitions.definition(for: sportId).stats)
+        }
         .task {
             sets = game.sets
             access = await FirestoreService.shared.teamAccess(
                 teamId: teamId, userId: auth.user?.id, isAd: auth.user?.role == .ad)
+            await vm.beginGame(game, teamId: teamId)
+            if let uid = auth.user?.id {
+                let grant = await FirestoreService.shared.scoringGrant(gameId: game.id, userId: uid)
+                isGameScorer = grant.isScorer
+                scoringMode = grant.mode
+            }
         }
+    }
+
+    private func statSummary(_ entry: RosterEntry) -> String {
+        let current = vm.stats[entry.id] ?? [:]
+        let stats = SportDefinitions.definition(for: sportId).stats
+        return stats.prefix(2).map { "\(current[$0.key] ?? 0) \($0.name)" }.joined(separator: " · ")
     }
 
     private func saveSet() async {

@@ -2047,6 +2047,9 @@ exports.verifyGameStats = functions.https.onCall(async (data, context) => {
     const stats = {};
     for (const [key, value] of Object.entries(raw)) {
       if (STAT_META_KEYS.includes(key)) continue;
+      // Golf writes per-hole keys (h1..h9) for live scoring; they are not career
+      // stats and would corrupt record sums if allowed through.
+      if (/^h\d+$/.test(key)) continue;
       if (typeof value === 'number' && isFinite(value)) stats[key] = value;
     }
     if (Object.keys(stats).length === 0) continue;

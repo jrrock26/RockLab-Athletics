@@ -136,7 +136,33 @@ removed, so selection cannot be bypassed.
 
 Still to build: MaxPreps export (deliberately deferred).
 
-## 7. Status and priority
+## 7. Advanced stats by sport
+
+Advanced stats are available wherever the sport has stat definitions:
+
+| Screen | Sports | Advanced stats |
+| --- | --- | --- |
+| `LiveScoringView` | football, basketball, baseball, softball, soccer, lacrosse, field/ice hockey, water polo, tennis, wrestling, swimming, track, cross country, bowling | full per-player set from `SportDefinitions` |
+| `SetsScoringView` | volleyball | kills, aces, blocks, digs, assists, serve receptions — added this pass |
+| `GolfScoringView` | golf | per-hole strokes (existing) + putts and fairways via swipe → *Putts/Fairways* — added this pass |
+| `JudgedScoringView` | cheer, dance | none by design (judged placement) |
+
+All of them write the same shape — `games/{gameId}/stats/{rosterEntryId}` — so
+verification, the career ledger and record watch work identically regardless of
+which screen produced the numbers.
+
+Two rules the server enforces at verification:
+
+- **Per-hole golf keys (`h1`…`h9`) are excluded.** They exist for live hole
+  scoring and are not career stats; letting them through would corrupt record
+  sums.
+- **Only varsity games reach the ledger** (§6).
+
+Stat sets are defined once in `Models/SportDefinition.swift`. Adding a stat to a
+sport there makes it appear in simple/advanced entry, the verification ledger and
+record watch without further wiring.
+
+## 8. Status and priority
 
 Implemented:
 

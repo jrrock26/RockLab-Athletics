@@ -8,6 +8,7 @@ struct GolfScoringView: View {
     let vm: StatsViewModel
     @State private var access = TeamAccess()
     @State private var selectedPlayer: RosterEntry?
+    @State private var statEntry: RosterEntry?
 
     private var canScore: Bool { access.canManageTeam || access.hasPerm(.statistician) }
 
@@ -61,6 +62,16 @@ struct GolfScoringView: View {
                         }
                         .foregroundStyle(.primary)
                         .disabled(!canScore)
+                        .swipeActions(edge: .leading) {
+                            if canScore {
+                                Button {
+                                    statEntry = entry
+                                } label: {
+                                    Label("Putts/Fairways", systemImage: "list.bullet.rectangle")
+                                }
+                                .tint(.blue)
+                            }
+                        }
                     }
                 }
             }
@@ -106,6 +117,14 @@ struct GolfScoringView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $selectedPlayer) { entry in
             GolfHoleSheet(vm: vm, gameId: (vm.selectedGame ?? game).id, entry: entry)
+        }
+        .sheet(item: $statEntry) { entry in
+            StatEntrySheet(
+                vm: vm,
+                gameId: (vm.selectedGame ?? game).id,
+                entry: entry,
+                canEdit: canScore,
+                stats: SportDefinitions.definition(for: "golf").stats)
         }
         .task {
             await vm.beginGame(game, teamId: teamId)
