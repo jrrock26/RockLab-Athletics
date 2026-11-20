@@ -1133,11 +1133,17 @@ struct FirestoreService {
         return snapshot.documents.first.flatMap { Team(id: $0.documentID, data: $0.data()) }
     }
 
-    func findInvitationByCode(_ code: String) async throws -> Invitation? {
-        let snapshot = try await db.collection("invitations")
-            .whereField("code", isEqualTo: code)
-            .getDocuments()
-        return snapshot.documents.first.flatMap { Invitation(id: $0.documentID, data: $0.data()) }
+    /// Looks up one of the caller's OWN invitations by code.
+    ///
+    /// Deliberately queries by email rather than by code: invitation documents
+    /// are only readable by their invitee (or that school's staff), so a
+    /// code-only query is denied — and permitting it would let anyone holding a
+    /// guessed code enumerate other schools' invitations, including parent
+    /// email addresses.
+    func findInvitationByCode(_ code: String, email: String) async throws -> Invitation? {
+        let wanted = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let mine = try await fetchInvitationsByEmail(email: email)
+        return mine.first { $0.code.uppercased() == wanted }
     }
 
     func fetchTeamInvitations(teamId: String) async throws -> [Invitation] {
@@ -1150,7 +1156,7 @@ struct FirestoreService {
     /// Joins the current user via an invite code (role-specific) or a team
     /// join code (follower). Creates the team membership. Returns the role.
     func joinWithCode(code: String, userId: String, email: String, name: String = "") async throws -> UserRole {
-        if let invitation = try await findInvitationByCode(code) {
+        if let invitation = try await findInvitationByCode(code, email: email) {
             guard invitation.email.lowercased() == email.lowercased() else {
                 throw NSError(domain: "join", code: 1,
                               userInfo: [NSLocalizedDescriptionKey: "This invite is for \(invitation.email)."])
