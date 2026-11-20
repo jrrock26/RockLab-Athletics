@@ -284,6 +284,51 @@ struct FunctionsService {
         return (result.data as? [String: Any]) ?? [:]
     }
 
+    /// Staff override of a guardian's travel plan. Requires a reason and is
+    /// audited, because changing where a child goes home needs an accountable
+    /// record.
+    func setReleasePlanOverride(eventId: String,
+                               rosterEntryId: String,
+                               homeWith: String,
+                               pickupName: String = "",
+                               reason: String) async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("setReleasePlanOverride").call([
+            "eventId": eventId,
+            "rosterEntryId": rosterEntryId,
+            "homeWith": homeWith,
+            "pickupName": pickupName,
+            "reason": reason,
+        ])
+        return (result.data as? [String: Any]) ?? [:]
+    }
+
+    /// Records the handoff: who released the athlete, to whom, and when.
+    func confirmRelease(eventId: String,
+                        rosterEntryId: String,
+                        releasedToType: String,
+                        releasedToName: String,
+                        note: String = "") async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("confirmRelease").call([
+            "eventId": eventId,
+            "rosterEntryId": rosterEntryId,
+            "releasedToType": releasedToType,
+            "releasedToName": releasedToName,
+            "note": note,
+        ])
+        return (result.data as? [String: Any]) ?? [:]
+    }
+
+    /// Corrects a mistaken release. Keeps the original record and stamps the
+    /// correction, so the history shows both.
+    func reopenRelease(eventId: String, rosterEntryId: String, reason: String) async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("reopenRelease").call([
+            "eventId": eventId,
+            "rosterEntryId": rosterEntryId,
+            "reason": reason,
+        ])
+        return (result.data as? [String: Any]) ?? [:]
+    }
+
     /// Repairs a missing head-coach membership on an existing team.
     func ensureTeamCoachMembership(teamId: String) async throws -> [String: Any] {
         let result = try await functions.httpsCallable("ensureTeamCoachMembership").call([

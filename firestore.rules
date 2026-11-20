@@ -225,11 +225,23 @@ service cloud.firestore {
           || staffHasPerm(eventTeam(eventId), 'attendance')
           || isGuardianOf(eventTeam(eventId), entryId)
         );
-        allow write: if signedIn() && (
-          isGuardianOf(eventTeam(eventId), entryId)
-          || isAd()
+        // Guardians write their own athlete's plan. Staff changes go through the
+        // setReleasePlanOverride callable so they always carry a reason and land
+        // in the audit log — a coach silently changing a child's destination is
+        // exactly what must be recorded.
+        allow write: if signedIn() && isGuardianOf(eventTeam(eventId), entryId);
+      }
+
+      // The handoff record. Written only by confirmRelease / reopenRelease, so a
+      // release cannot be forged or erased from a client.
+      match /releases/{entryId} {
+        allow read: if signedIn() && (
+          isAd()
           || isCoachOf(eventTeam(eventId))
+          || staffHasPerm(eventTeam(eventId), 'attendance')
+          || isGuardianOf(eventTeam(eventId), entryId)
         );
+        allow write: if false;
       }
     }
 

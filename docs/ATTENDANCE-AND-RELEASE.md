@@ -94,9 +94,21 @@ the plan itself (`pickupName`), chosen from the roster's parent names. That keep
 the consent explicit and per-game, and avoids a standing permission that a parent
 forgets they granted.
 
-Status: **Phase 1 implemented** as described above (guardian sets a plan per
-athlete per event; staff see a manifest with "No plan" flags). The
-handoff-confirmation record and the offline queue below are not built yet.
+Status: **Phases 1 and 2 implemented.**
+
+- Phase 1: guardians set a plan per athlete per event; staff see a manifest with
+  "No plan" flags and a relative timestamp on every plan ("Set by J. Smith 12 min
+  ago"), so a plan changed as the bus was loading is visibly different from one set
+  last Tuesday.
+- Phase 2: the coach records the handoff (`confirmRelease`) with who released the
+  athlete, to whom, and when — including which plan version was in force. A
+  correction is a separate audited action (`reopenRelease`) that keeps the original
+  record rather than deleting it.
+- Staff edits to a guardian's plan go through `setReleasePlanOverride`, which
+  requires a written reason and writes to the audit log. The rules no longer allow
+  a coach to write a plan directly.
+
+Still to build: the offline manifest and queued sync (Phase 3).
 
 ## 5. Enforcement, not just UI
 
@@ -139,7 +151,7 @@ worth solving once, properly.
 | Phase | Scope | Why this order |
 | --- | --- | --- |
 | **1** ✅ | Per-athlete travel/release plan for events; guardian picks bus / self / another parent from the team list; coach manifest with *no plan* flags | Delivers the core safety value with no third-party registry |
-| **2** | Coach handoff confirmation with an immutable release record | The full chain: who physically released the athlete, to whom, when |
+| **2** ✅ | Coach handoff confirmation with an immutable release record | The full chain: who physically released the athlete, to whom, when |
 | **3** | Offline manifest + queued sync with device timestamps | Needed before a real Friday night |
 | **4** | Reconciliation counts (bus manifest vs pickups), guardian change notifications, 18+ self-release under district policy | Operational polish |
 

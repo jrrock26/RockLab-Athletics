@@ -1392,6 +1392,12 @@ struct FirestoreService {
         return snap.documents.compactMap { ReleasePlan(id: $0.documentID, data: $0.data()) }
     }
 
+    func fetchReleases(eventId: String) async throws -> [ReleaseRecord] {
+        let snap = try await db.collection("events").document(eventId)
+            .collection("releases").getDocuments()
+        return snap.documents.compactMap { ReleaseRecord(id: $0.documentID, data: $0.data()) }
+    }
+
     /// Declares how an athlete is getting home. Recording `declaredByUserId` and a
     /// timestamp is what makes this the guardian's consent, including when they
     /// name another parent.

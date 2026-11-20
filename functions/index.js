@@ -2552,6 +2552,229 @@ exports.scheduledRecordChases = functions.pubsub
     return null;
   });
 
+// ---------------------------------------------------------------------------
+// Travel & release.
+//
+// Guardians declare the plan themselves (client write, guardian-scoped in rules).
+// Anything a coach does to a plan is an OVERRIDE and must carry a reason and land
+// in the audit log — a staff member changing where a child is going home is
+// exactly the kind of action that needs an accountable record.
+// ---------------------------------------------------------------------------
+const RELEASE_HOME_OPTIONS = ['bus', 'me', 'other_parent', 'not_attending'];
+
+exports.setReleasePlanOverride = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const payload = data || {};
+  const eventId = payload.eventId ? String(payload.eventId) : '';
+  const rosterEntryId = payload.rosterEntryId ? String(payload.rosterEntryId) : '';
+  const homeWith = payload.homeWith ? String(payload.homeWith) : '';
+  const reason = payload.reason ? String(payload.reason).trim() : '';
+  if (!eventId || !rosterEntryId || !RELEASE_HOME_OPTIONS.includes(homeWith)) {
+    throw new functions.https.HttpsError('invalid-argument',
+      'eventId, rosterEntryId and a valid homeWith are required.');
+  }
+  if (!reason) {
+    throw new functions.https.HttpsError('invalid-argument',
+      'A reason is required to override a guardian\'s plan.');
+  }
+
+  const db = admin.firestore();
+  const callerId = context.auth.uid;
+  const eventSnap = await db.collection('events').doc(eventId).get();
+  if (!eventSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Event not found.');
+  }
+  const teamId = eventSnap.get('teamId') || '';
+  const teamSnap = await db.collection('teams').doc(teamId).get();
+  const schoolId = teamSnap.exists ? (teamSnap.get('schoolId') || '') : '';
+
+  const caller = await userProfile(db, callerId);
+  const memSnap = await db.collection('teams').doc(teamId).collection('members').doc(callerId).get();
+  const teamRole = memSnap.exists ? memSnap.get('role') : null;
+  const isSchoolAd = caller.role === 'ad' && caller.schoolId === schoolId;
+  if (!isSchoolAd && teamRole !== 'coach') {
+    throw new functions.https.HttpsError('permission-denied',
+      "Only an AD or this team's coach can override a plan.");
+  }
+
+  const entrySnap = await db.collection('teams').doc(teamId).collection('roster').doc(rosterEntryId).get();
+  if (!entrySnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Player not found on the roster.');
+  }
+
+  await db.collection('events').doc(eventId).collection('releasePlans').doc(rosterEntryId).set({
+    eventId: eventId,
+    rosterEntryId: rosterEntryId,
+    athleteName: entrySnap.get('playerName') || '',
+    homeWith: homeWith,
+    pickupUserId: '',
+    pickupName: homeWith === 'other_parent' ? String(payload.pickupName || '') : '',
+    declaredByUserId: callerId,
+    declaredByName: caller.name || '',
+    declaredAtMs: Date.now(),
+    overridden: true,
+    overrideReason: reason.slice(0, 300),
+    overriddenByUserId: callerId,
+    overriddenByName: caller.name || '',
+    overriddenAtMs: Date.now(),
+  }, { merge: true });
+
+  await writeAudit({
+    schoolId: schoolId,
+    actorId: callerId,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'release.plan_override',
+    targetType: 'releasePlan',
+    targetId: `${eventId}/${rosterEntryId}`,
+    detail: `${entrySnap.get('playerName') || rosterEntryId} -> ${homeWith}: ${reason.slice(0, 200)}`,
+  });
+
+  return { ok: true };
+});
+
+// ---------------------------------------------------------------------------
+// Release confirmation (Phase 2).
+//
+// The coach records the handoff: who physically released the athlete, to whom,
+// and when. This is the liability record, so it captures the plan version that was
+// in force at the moment of release. An athlete with no declared plan cannot be
+// released — that is the safety default, not a bug.
+// ---------------------------------------------------------------------------
+const RELEASE_TARGET_TYPES = ['bus', 'guardian', 'other_parent'];
+
+exports.confirmRelease = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const payload = data || {};
+  const eventId = payload.eventId ? String(payload.eventId) : '';
+  const rosterEntryId = payload.rosterEntryId ? String(payload.rosterEntryId) : '';
+  const releasedToType = payload.releasedToType ? String(payload.releasedToType) : '';
+  if (!eventId || !rosterEntryId || !RELEASE_TARGET_TYPES.includes(releasedToType)) {
+    throw new functions.https.HttpsError('invalid-argument',
+      'eventId, rosterEntryId and a valid releasedToType are required.');
+  }
+
+  const db = admin.firestore();
+  const callerId = context.auth.uid;
+  const eventSnap = await db.collection('events').doc(eventId).get();
+  if (!eventSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Event not found.');
+  }
+  const teamId = eventSnap.get('teamId') || '';
+  const teamSnap = await db.collection('teams').doc(teamId).get();
+  const schoolId = teamSnap.exists ? (teamSnap.get('schoolId') || '') : '';
+
+  const caller = await userProfile(db, callerId);
+  const memSnap = await db.collection('teams').doc(teamId).collection('members').doc(callerId).get();
+  const teamRole = memSnap.exists ? memSnap.get('role') : null;
+  const perms = memSnap.exists ? (memSnap.get('permissions') || []) : [];
+  const canRelease = caller.role === 'ad'
+    || teamRole === 'coach'
+    || (teamRole === 'staff' && perms.includes('attendance'));
+  if (!canRelease) {
+    throw new functions.https.HttpsError('permission-denied',
+      'Only an AD, the coach, or attendance staff can confirm a release.');
+  }
+
+  const planSnap = await db.collection('events').doc(eventId)
+    .collection('releasePlans').doc(rosterEntryId).get();
+  if (!planSnap.exists) {
+    throw new functions.https.HttpsError('failed-precondition',
+      'This athlete has no travel plan, so they cannot be released.');
+  }
+  const plan = planSnap.data() || {};
+
+  await db.collection('events').doc(eventId).collection('releases').doc(rosterEntryId).set({
+    eventId: eventId,
+    rosterEntryId: rosterEntryId,
+    athleteName: plan.athleteName || '',
+    status: 'released',
+    releasedToType: releasedToType,
+    releasedToName: String(payload.releasedToName || ''),
+    note: payload.note ? String(payload.note).slice(0, 300) : '',
+    planHomeWith: plan.homeWith || '',
+    planDeclaredAtMs: plan.declaredAtMs || 0,
+    planDeclaredByName: plan.declaredByName || '',
+    confirmedByUserId: callerId,
+    confirmedByName: caller.name || '',
+    confirmedAtMs: Date.now(),
+  }, { merge: true });
+
+  await writeAudit({
+    schoolId: schoolId,
+    actorId: callerId,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'release.confirmed',
+    targetType: 'release',
+    targetId: `${eventId}/${rosterEntryId}`,
+    detail: `${plan.athleteName || rosterEntryId} released (${releasedToType}${payload.releasedToName ? `: ${payload.releasedToName}` : ''})`,
+  });
+
+  return { ok: true };
+});
+
+exports.reopenRelease = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const payload = data || {};
+  const eventId = payload.eventId ? String(payload.eventId) : '';
+  const rosterEntryId = payload.rosterEntryId ? String(payload.rosterEntryId) : '';
+  const reason = payload.reason ? String(payload.reason).trim() : '';
+  if (!eventId || !rosterEntryId) {
+    throw new functions.https.HttpsError('invalid-argument', 'eventId and rosterEntryId are required.');
+  }
+  if (!reason) {
+    throw new functions.https.HttpsError('invalid-argument', 'A reason is required to correct a release.');
+  }
+
+  const db = admin.firestore();
+  const callerId = context.auth.uid;
+  const eventSnap = await db.collection('events').doc(eventId).get();
+  if (!eventSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Event not found.');
+  }
+  const teamId = eventSnap.get('teamId') || '';
+  const teamSnap = await db.collection('teams').doc(teamId).get();
+  const schoolId = teamSnap.exists ? (teamSnap.get('schoolId') || '') : '';
+
+  const caller = await userProfile(db, callerId);
+  const memSnap = await db.collection('teams').doc(teamId).collection('members').doc(callerId).get();
+  const teamRole = memSnap.exists ? memSnap.get('role') : null;
+  if (!(caller.role === 'ad' || teamRole === 'coach')) {
+    throw new functions.https.HttpsError('permission-denied',
+      'Only an AD or the coach can correct a release.');
+  }
+
+  // Never delete the record: keep the original handoff and stamp the correction,
+  // so the history shows both what happened and that it was amended.
+  await db.collection('events').doc(eventId).collection('releases').doc(rosterEntryId).set({
+    status: 'reopened',
+    correctedByUserId: callerId,
+    correctedByName: caller.name || '',
+    correctedAtMs: Date.now(),
+    correctionReason: reason.slice(0, 300),
+  }, { merge: true });
+
+  await writeAudit({
+    schoolId: schoolId,
+    actorId: callerId,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'release.reopened',
+    targetType: 'release',
+    targetId: `${eventId}/${rosterEntryId}`,
+    detail: reason.slice(0, 200),
+  });
+
+  return { ok: true };
+});
+
 // Safety net: if a head coach is missing their membership (e.g. a team created
 // before the flow above), this repairs it so no team is left without its coach.
 exports.ensureTeamCoachMembership = functions.https.onCall(async (data, context) => {

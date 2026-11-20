@@ -106,8 +106,31 @@ struct ReleasePlan: Identifiable, Equatable {
     var pickupName: String
     var declaredByName: String
     var declaredAtMs: Double
+    /// Set when an AD or coach changed a guardian's plan instead of the guardian.
+    var isOverridden: Bool
+    var overriddenByName: String
+    var overrideReason: String
 
     var isDeclared: Bool { !homeWith.isEmpty }
+
+    /// "Declared 12 min ago" — so a coach can tell a plan set last Tuesday from
+    /// one changed as the bus was loading.
+    var declaredAgo: String {
+        guard declaredAtMs > 0 else { return "" }
+        let date = Date(timeIntervalSince1970: declaredAtMs / 1000)
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    var declaredByLabel: String {
+        if isOverridden {
+            let who = overriddenByName.isEmpty ? "Staff" : overriddenByName
+            return "Overridden by \(who) \(declaredAgo)"
+        }
+        let who = declaredByName.isEmpty ? "guardian" : declaredByName
+        return "Set by \(who) \(declaredAgo)"
+    }
 
     var summary: String {
         switch homeWith {
@@ -126,7 +149,10 @@ struct ReleasePlan: Identifiable, Equatable {
          pickupUserId: String = "",
          pickupName: String = "",
          declaredByName: String = "",
-         declaredAtMs: Double = 0) {
+         declaredAtMs: Double = 0,
+         isOverridden: Bool = false,
+         overriddenByName: String = "",
+         overrideReason: String = "") {
         self.id = id
         self.athleteName = athleteName
         self.homeWith = homeWith
@@ -134,6 +160,9 @@ struct ReleasePlan: Identifiable, Equatable {
         self.pickupName = pickupName
         self.declaredByName = declaredByName
         self.declaredAtMs = declaredAtMs
+        self.isOverridden = isOverridden
+        self.overriddenByName = overriddenByName
+        self.overrideReason = overrideReason
     }
 
     init?(id: String, data: [String: Any]) {
@@ -146,6 +175,56 @@ struct ReleasePlan: Identifiable, Equatable {
         self.pickupName = data["pickupName"] as? String ?? ""
         self.declaredByName = data["declaredByName"] as? String ?? ""
         self.declaredAtMs = data["declaredAtMs"] as? Double ?? 0
+        self.isOverridden = data["overridden"] as? Bool ?? false
+        self.overriddenByName = data["overriddenByName"] as? String ?? ""
+        self.overrideReason = data["overrideReason"] as? String ?? ""
+    }
+}
+
+/// The coach's handoff record: who released the athlete, to whom, and when.
+/// Kept separately from the plan because a plan is intent and this is the event.
+struct ReleaseRecord: Identifiable {
+    var id: String          // rosterEntryId
+    var athleteName: String
+    /// released | reopened
+    var status: String
+    var releasedToType: String
+    var releasedToName: String
+    var note: String
+    var confirmedByName: String
+    var confirmedAtMs: Double
+    var correctionReason: String
+
+    var isReleased: Bool { status == "released" }
+
+    var confirmedAgo: String {
+        guard confirmedAtMs > 0 else { return "" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(
+            for: Date(timeIntervalSince1970: confirmedAtMs / 1000), relativeTo: Date())
+    }
+
+    var summary: String {
+        let target = releasedToName.isEmpty ? releasedToType : releasedToName
+        return "Released to \(target) · \(confirmedByLabel) \(confirmedAgo)"
+    }
+
+    var confirmedByLabel: String {
+        confirmedByName.isEmpty ? "staff" : confirmedByName
+    }
+
+    init?(id: String, data: [String: Any]) {
+        guard let status = data["status"] as? String else { return nil }
+        self.id = id
+        self.athleteName = data["athleteName"] as? String ?? ""
+        self.status = status
+        self.releasedToType = data["releasedToType"] as? String ?? ""
+        self.releasedToName = data["releasedToName"] as? String ?? ""
+        self.note = data["note"] as? String ?? ""
+        self.confirmedByName = data["confirmedByName"] as? String ?? ""
+        self.confirmedAtMs = data["confirmedAtMs"] as? Double ?? 0
+        self.correctionReason = data["correctionReason"] as? String ?? ""
     }
 }
 
