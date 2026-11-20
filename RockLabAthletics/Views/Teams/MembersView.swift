@@ -157,7 +157,7 @@ struct AddMemberSheet: View {
     @State private var isWorking = false
     @State private var errorMessage: String?
 
-    private let assignableRoles: [UserRole] = [.staff, .player, .parent, .family, .follower]
+    private let assignableRoles: [UserRole] = [.staff, .player, .parent, .follower]
 
     var body: some View {
         NavigationStack {

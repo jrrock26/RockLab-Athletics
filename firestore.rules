@@ -46,7 +46,7 @@ service cloud.firestore {
 
     function chatReadAllowed(type, t) {
       return isAd()
-        || (type == 'commBoard' && (isMemberRole(t) || memberRole(t) in ['follower', 'family']))
+        || (type == 'commBoard' && (isMemberRole(t) || memberRole(t) == 'follower'))
         || (type == 'team' && memberRole(t) in ['coach','staff','player'])
         || (type == 'parent' && memberRole(t) in ['coach','player','parent'])
         || (type == 'staff' && (isAd() || isCoachOf(t) || staffHasPerm(t, 'staffChat')));
@@ -57,7 +57,7 @@ service cloud.firestore {
       return type == 'commBoard'
         ? (isAd()
             || isMemberRole(t)
-            || (memberRole(t) in ['follower', 'family']
+            || (memberRole(t) == 'follower'
                 && 'category' in resource.data
                 && resource.data.category in ['liveGame', 'gameday', 'fundraiser']))
         : chatReadAllowed(type, t);

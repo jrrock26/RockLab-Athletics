@@ -16,7 +16,7 @@ struct InviteCoachSheet: View {
         if auth.user?.role == .ad {
             return [.coach]
         }
-        return [.staff, .player, .parent, .family, .follower]
+        return [.staff, .player, .parent, .follower]
     }
 
     var body: some View {

@@ -1,85 +1,126 @@
-# Role model and gaps
+# Role model
 
-Audited 2026-11-20 against the stated goal: a complete sports-management system
-covering **teams, coaches, players, parents, family, followers, and staff**.
-
-This is a code-grounded audit, not an aspiration list. Everything marked ✅ is
-enforced in `firestore.rules`, not just hidden in the UI.
+Corrected 2026-11-20 from the product owner's definitions. This supersedes an
+earlier draft of this document, which incorrectly split "family" out as a
+seventh role linked to an individual athlete.
 
 ---
 
-## 1. Roles that exist
+## 1. The six roles, as defined
 
-`UserRole` (`Models/UserRole.swift`) has six cases:
+| Role | Definition | Relationship |
+| --- | --- | --- |
+| **Athletic Director** (`ad`) | Runs the athletic department | school-wide |
+| **Coach** (`coach`) | Head or assistant coach | owns a team |
+| **Staff** (`staff`) | Trainer, media, boosters, volunteers | scoped to a team, granular permissions |
+| **Player** (`player`) | **A student added to a team** | on a roster |
+| **Parent** (`parent`) | **The guardian of that player** | linked to the player account |
+| **Follower** (`follower`) | Anyone in the community who wants to follow the school | none — read-only, public |
 
-| Role | Intended for | Sees | Cannot see |
+### Player
+
+A player is a *student on a team*, not a login. That distinction already works:
+a roster entry exists independently of whether the student has an account, and
+`roster.userId` links the account when they sign up. A player can be on several
+teams (fall + winter sport), and is promoted between teams (see §4).
+
+### Parent
+
+A parent is the guardian of a specific player — a **linked connection**, not a
+team role. Linking runs through `requestParentLink` → `approveParentLink` by an
+AD or coach, which writes `linkedPlayerIds` on the guardian's user document. One
+guardian can be linked to several children.
+
+Fixed this pass: approving a link previously forced the requester to role
+`parent`, which would silently demote a coach or staff member who linked to their
+own child. Approval now only ever upgrades a follower/player; it never demotes.
+
+### Follower (also referred to as "family")
+
+One role, deliberately shallow. A follower is any community member — grandparent,
+sibling, alumni, local fan — who wants public information about the school's
+programs. They are **not** linked to an individual athlete.
+
+What a follower sees:
+
+- upcoming games with location and time
+- live scoring while a game is in progress
+- fundraisers
+- announcements (public categories only)
+- social posts / team media
+- a pre-match summary and post-match summary
+
+What a follower never sees: rosters, RSVPs, forms or signatures, injury status,
+medical or emergency contact data, team chat, staff chat, eligibility, trips, or
+any athlete-level record. These are blocked in `firestore.rules`, not merely
+hidden in the UI.
+
+## 2. Multi-team and multi-sport
+
+- A player or coach can hold membership on any number of teams.
+- Teams are per sport **per level** per season: `sportId`, `level` (Jr High, JV,
+  Varsity), `season`. So "basketball" is not one thing — it is Jr High
+  basketball, JV basketball and Varsity basketball, each a separate team.
+- That level dimension is what makes promotion meaningful (§4).
+
+## 3. Adding and moving players
+
+- **Add**: manually, by CSV import, or by invitation.
+- **Move/promote**: see §4.
+- **Remove**: `dropPlayer` deletes the roster entry.
+
+## 4. Promotion between teams
+
+The stated case: a Jr High basketball player moves up to JV next season, with a
+button rather than retyping the athlete.
+
+`promotePlayer` copies the athlete to the target roster:
+
+- carries: name, jersey, position, guardian name/email/phone, and the linked
+  `userId` (so the student keeps their account and access)
+- carries: a `player` membership on the target team, and the team is added to the
+  student's `teamIds`
+- resets: injury status to healthy — a stale "injured" flag following an athlete
+  between teams is how bad data spreads
+- keeps: the source entry, marked `promotionStatus: promoted` with
+  `promotedToTeamId`, so the old season remains an accurate record
+- is idempotent: if the athlete is already on the target roster, it returns that
+  entry instead of creating a duplicate
+
+Permissioned to the school's AD or the source team's coach, audited as
+`player.promoted`, and restricted to teams within the same school. In the app:
+swipe a roster row → **Move**, then pick the destination (same-sport teams
+listed first).
+
+## 5. Known gap: followers follow teams, not the school
+
+You described following an **organization**. Today a follower follows individual
+*teams*, so a community member who wants "everything at RockLab High" must
+follow each team one at a time, and a new team created next season is not
+auto-followed.
+
+Closing this means an org-level follow: follow the school once, and the public
+surface aggregates every team's games, scores, announcements and fundraisers.
+That is the single biggest remaining mismatch between the described product and
+the built one, and it is small — a school-level membership plus an aggregate
+feed.
+
+## 6. Remaining gaps, ranked
+
+| # | Gap | Why it matters | Size |
 | --- | --- | --- | --- |
-| `ad` | Athletic director | whole school: all teams, rosters, staff, reports, audit log, exports | — |
-| `coach` | Head/assistant coach | own teams: roster, forms, injuries, schedule, staff chat, parent chat | other schools/teams |
-| `staff` | Trainer, media, boosters | own teams, **granular**: only the permissions granted (`forms`, `staffChat`, `commBoardPost`, `fundraising`) | anything not granted |
-| `player` | Student-athlete | own teams, own forms, own profile/showcase | eligibility status, other athletes' medical data |
-| `parent` | Parent/guardian | child's teams, own forms, emergency/medical contact updates | eligibility status, team staff chat |
-| `follower` | Fans, community | public comm-board only (live game, gameday, fundraiser), public games/scores | practice details, rosters, chat, medical |
+| 1 | Follower is per-team, not per-school | The described community use case doesn't fully work until a fan can follow the school once | 2–3 d |
+| 2 | No athlete-centric profile | Parents see a team list, not *my child* across sports and levels | 2–3 d |
+| 3 | No graduation pruning at rollover | Rollover copies seniors forward; need a graduated flag and prune step | 1 d |
+| 4 | No school-wide staff directory | An AD can't see all coaches/staff and their permissions in one place | 2–3 d |
+| 5 | No tryout/cut workflow | 60 try out, 18 make it — still manual list management | 3–4 d |
+| 6 | No season archive | Old teams accumulate with no read-only archive view | 1–2 d |
+| 7 | No equipment/uniform inventory | Issuance forms exist; nothing tracks who holds which jersey | 3 d |
 
-Multi-team is handled throughout: a coach or athlete can hold memberships on
-several teams (fall + winter sport), and `linkedPlayerIds` lets one guardian
-account follow multiple children.
+## 7. Verified this pass
 
-## 2. The gap you named: `family`
-
-**There is no `family` role.** Today a grandparent, sibling, or aunt is a
-`follower` — they can follow a *team*, but they cannot express "I am family of
-this athlete."
-
-That distinction matters because it is the difference between:
-
-- a follower who watches whatever team they happen to follow, and
-- family who should reliably see **their** athlete's schedule, results, photos
-  and public highlights across every team that athlete plays on — without ever
-  seeing team chat, medical data, or eligibility.
-
-### Recommendation: family = follower *scoped to an athlete*
-
-Do not build a seventh role with a new permission set. Instead:
-
-1. Add `family` to `UserRole`, with **identical read permissions to `follower`**.
-   This keeps the rules surface unchanged and is why it is low-risk.
-2. Family members link to a roster entry (`linkedPlayerIds`), exactly the way
-   parents already do, via the existing `requestParentLink` / `approveParentLink`
-   flow.
-3. The link earns them one extra thing followers don't get: their athlete's
-   **public** profile, per-team jersey/position, and highlights.
-
-Why not just let them be parents? Because parent grants forms, medical edits and
-eligibility-adjacent visibility. A grandparent must not receive a consenting
-adult's authority over a student's records — that is a FERPA problem, and schools
-will ask.
-
-Effort: ~1–2 days (enum + rules lists + invitation role + HomeView section).
-
-## 3. Other gaps for a complete system
-
-Ordered by operational pain, with honest size:
-
-| # | Gap | Why it hurts | Size |
-| --- | --- | --- | --- |
-| 1 | ~~No season rollover~~ | **Closed this pass.** Teams + rosters + staff now roll forward; forms and injury clearances reset by design. | done |
-| 2 | No athlete-centric profile | Parents see a *team list*, not *my child*: one card across sports with jersey, position, status per team | 2–3 d |
-| 3 | No "follow an athlete" | The family use case above; also lets relatives find a kid without knowing the team | 2 d |
-| 4 | No graduation / roster pruning | Rollover copies seniors too; need a "graduated" flag and a prune step at rollover | 1 d |
-| 5 | No school-wide staff directory | Staff are managed per team; an AD cannot see "who are my 14 coaches and what can they do" in one place | 2–3 d |
-| 6 | No season archive | Old teams stay forever; need archive/read-only by season | 1–2 d |
-| 7 | No tryout/cut workflow | HS reality: 60 try out, 18 make it. Today that's manual list management | 3–4 d |
-| 8 | No equipment/uniform inventory | Issuance forms exist, but nothing tracks who has which jersey | 3 d |
-
-## 4. What "complete" means for the pilot
-
-A school can run a full season end to end today: create teams, import a roster,
-invite parents (links work without email configured), publish schedules, post
-announcements, collect and sign forms, compute paperwork eligibility, log
-injuries and clearances, score games, share media, and **now** roll the whole
-thing into next season without re-entering a single athlete.
-
-What it cannot yet do is the human layer around the roster: represent
-non-parent family, show one athlete across sports, run tryouts, and let an AD see
-their staff as a roster. Those are the next four items, in that order.
+- BUILD SUCCEEDED, 49 tests passing, rules validated and deployed.
+- `rolloverTeam` and `promotePlayer` reject unauthenticated callers.
+- The `family` role added earlier in the session has been fully reverted:
+  `UserRole`, `HomeView`, `TeamAccess`, `TeamDetailView`, rules, role pickers and
+  `ALLOWED_ROLES` are back to a single `follower` role.

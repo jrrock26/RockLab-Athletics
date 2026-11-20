@@ -57,12 +57,12 @@ struct UserManagementSheet: View {
         _selectedRole = State(initialValue: user.role)
     }
 
-    /// AD can assign any role; coach can assign staff/player/parent/family/follower.
+    /// AD can assign any role; coach can assign staff/player/parent/follower.
     private var allowedRoles: [UserRole] {
         if auth.user?.role == .ad {
-            return [.ad, .coach, .staff, .player, .parent, .family, .follower]
+            return [.ad, .coach, .staff, .player, .parent, .follower]
         }
-        return [.staff, .player, .parent, .family, .follower]
+        return [.staff, .player, .parent, .follower]
     }
 
     private var canRemove: Bool {

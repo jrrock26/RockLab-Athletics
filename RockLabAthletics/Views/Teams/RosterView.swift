@@ -57,6 +57,7 @@ struct RosterView: View {
     @State private var access = TeamAccess()
     @State private var editingEntry: RosterEntry?
     @State private var injuryEntry: RosterEntry?
+    @State private var promoteEntry: RosterEntry?
 
     /// Eligibility is visible only to AD, coaches, and staff — never to
     /// players, parents, or followers.
@@ -118,6 +119,16 @@ struct RosterView: View {
                         .tint(.blue)
                     }
                 }
+                .swipeActions(edge: .trailing) {
+                    if access.canManageTeam {
+                        Button {
+                            promoteEntry = entry
+                        } label: {
+                            Label("Move", systemImage: "arrow.up.forward.circle")
+                        }
+                        .tint(.green)
+                    }
+                }
             }
             .onDelete { indexSet in
                 for index in indexSet {
@@ -162,6 +173,11 @@ struct RosterView: View {
         }
         .sheet(item: $injuryEntry) { entry in
             InjuryReportSheet(vm: vm, teamId: teamId, entry: entry)
+        }
+        .sheet(item: $promoteEntry) { entry in
+            PromotePlayerSheet(entry: entry, fromTeamId: teamId, sportId: sportId) {
+                Task { await vm.loadRoster(teamId: teamId, includeEligibility: canViewEligibility) }
+            }
         }
         .task {
             access = await FirestoreService.shared.teamAccess(teamId: teamId, userId: auth.user?.id, isAd: auth.user?.role == .ad)
@@ -257,3 +273,137 @@ struct CSVImportSheet: View {
         }
     }
 }
+
+// MARK: - Move / promote a player
+
+/// Moves an athlete to another team — the end-of-season case being Jr High up to
+/// JV. Identity and guardian contact carry over, the athlete's account stays
+/// linked, and injury state resets. The old roster keeps the entry, marked as
+/// promoted, so the previous season stays accurate.
+private struct PromotePlayerSheet: View {
+    let entry: RosterEntry
+    let fromTeamId: String
+    let sportId: String
+    var onDone: () -> Void
+
+    @Environment(AuthViewModel.self) private var auth
+    @Environment(\.dismiss) private var dismiss
+    @State private var teams: [Team] = []
+    @State private var busyTeamId: String?
+    @State private var error = ""
+
+    /// Same-sport teams first — that is almost always the intended destination.
+    private var destinations: [Team] {
+        teams
+            .filter { $0.id != fromTeamId }
+            .sorted { lhs, rhs in
+                if (lhs.sportId == sportId) != (rhs.sportId == sportId) {
+                    return lhs.sportId == sportId
+                }
+                return lhs.title < rhs.title
+            }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Player") {
+                    Text(entry.playerName).font(.headline)
+                    if !summary.isEmpty {
+                        Text(summary)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section {
+                    if destinations.isEmpty {
+                        Text("No other teams in this school yet.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(destinations) { team in
+                        Button {
+                            Task { await move(to: team) }
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(team.title)
+                                        .foregroundStyle(.primary)
+                                    Text(team.season.isEmpty ? "Season not set" : team.season)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if busyTeamId == team.id {
+                                    ProgressView()
+                                } else if team.sportId == sportId {
+                                    Text("Same sport")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .disabled(busyTeamId != nil)
+                    }
+                } header: {
+                    Text("Move to")
+                } footer: {
+                    Text("Guardian contacts and the athlete's account move with them. Injury status resets for the new team. The player stays on the old roster, marked as promoted, so that season stays accurate.")
+                }
+
+                if !error.isEmpty {
+                    Section {
+                        Text(error).foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Move player")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+            .task { await load() }
+        }
+    }
+
+    private var summary: String {
+        var parts: [String] = []
+        if !entry.jerseyNumber.isEmpty { parts.append("#\(entry.jerseyNumber)") }
+        if !entry.position.isEmpty { parts.append(entry.position) }
+        return parts.joined(separator: " · ")
+    }
+
+    private func load() async {
+        do {
+            if let schoolId = auth.user?.schoolId, !schoolId.isEmpty {
+                teams = try await FirestoreService.shared.fetchTeams(schoolId: schoolId)
+            } else {
+                teams = try await FirestoreService.shared.fetchTeams(
+                    forUser: auth.user?.id ?? "",
+                    teamIds: auth.user?.teamIds ?? [])
+            }
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func move(to team: Team) async {
+        busyTeamId = team.id
+        error = ""
+        do {
+            let result = try await FunctionsService.shared.promotePlayer(
+                entryId: entry.id,
+                fromTeamId: fromTeamId,
+                toTeamId: team.id)
+            let existed = result["existed"] as? Bool ?? false
+            if !existed { onDone() }
+            dismiss()
+        } catch {
+            self.error = error.localizedDescription
+        }
+        busyTeamId = nil
+    }
+}
+

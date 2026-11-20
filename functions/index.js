@@ -134,7 +134,7 @@ exports.syncUserRoleClaims = functions.firestore
 // 2. grantRole — an AD assigns a role to another user (server-side, validated).
 //    Writes the role to Firestore; the sync trigger above sets the claim.
 // ---------------------------------------------------------------------------
-const ALLOWED_ROLES = ['ad', 'coach', 'staff', 'player', 'parent', 'family', 'follower'];
+const ALLOWED_ROLES = ['ad', 'coach', 'staff', 'player', 'parent', 'follower'];
 
 exports.manageUserRole = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
@@ -996,11 +996,11 @@ exports.approveParentLink = functions.https.onCall(async (data, context) => {
   const isCoach = memSnap.exists && memSnap.get('role') === 'coach';
   if (callerRole !== 'ad' && !isCoach) throw new functions.https.HttpsError('permission-denied', 'Only an AD or coach can approve.');
 
-  // A family member keeps the family role: linking to an athlete must never
-  // grant them a parent's consent authority over that student's records.
+  // Never demote an existing coach/staff/AD who links to their own child.
+  // Approving a link should only ever upgrade a plain follower or player.
   const requesterSnap = await db.collection('users').doc(req.parentUserId).get();
   const requesterRole = requesterSnap.exists ? requesterSnap.get('role') : null;
-  const grantedRole = requesterRole === 'family' ? 'family' : 'parent';
+  const grantedRole = ['ad', 'coach', 'staff'].includes(requesterRole) ? requesterRole : 'parent';
 
   const userUpdate = { role: grantedRole };
   if (req.playerUserId) {
@@ -1547,6 +1547,132 @@ exports.rolloverTeam = functions.https.onCall(async (data, context) => {
   });
 
   return { teamId: newTeamRef.id, joinCode, existed: false, rosterCount, memberCount, season: newSeason };
+});
+
+// ---------------------------------------------------------------------------
+// Promote / move a player to another team.
+//
+// The common case is end of season: a Jr High athlete moves up to JV. Rather
+// than retyping the athlete, this copies their identity and guardian contact to
+// the target roster, keeps the linked player account, and carries the player
+// membership across. Injury state is reset — a promotion is a fresh start, and
+// a stale "injured" flag silently following a player between teams is how bad
+// data spreads.
+//
+// The source entry is NOT deleted: it is marked as promoted so the old roster
+// remains an accurate historical record for that season.
+// ---------------------------------------------------------------------------
+exports.promotePlayer = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const entryId = data && data.entryId ? String(data.entryId) : '';
+  const fromTeamId = data && data.fromTeamId ? String(data.fromTeamId) : '';
+  const toTeamId = data && data.toTeamId ? String(data.toTeamId) : '';
+  if (!entryId || !fromTeamId || !toTeamId) {
+    throw new functions.https.HttpsError('invalid-argument', 'entryId, fromTeamId and toTeamId are required.');
+  }
+  if (fromTeamId === toTeamId) {
+    throw new functions.https.HttpsError('invalid-argument', 'Source and target teams are the same.');
+  }
+
+  const db = admin.firestore();
+  const callerId = context.auth.uid;
+  const fromRef = db.collection('teams').doc(fromTeamId);
+  const toRef = db.collection('teams').doc(toTeamId);
+  const [fromSnap, toSnap, entrySnap] = await Promise.all([
+    fromRef.get(), toRef.get(), fromRef.collection('roster').doc(entryId).get(),
+  ]);
+  if (!fromSnap.exists || !toSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Team not found.');
+  }
+  if (!entrySnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Player not found on the source roster.');
+  }
+  if (fromSnap.get('schoolId') !== toSnap.get('schoolId')) {
+    throw new functions.https.HttpsError('failed-precondition',
+      'Players can only be moved between teams in the same school.');
+  }
+
+  const schoolId = fromSnap.get('schoolId') || '';
+  const caller = await userProfile(db, callerId);
+  const fromMem = await fromRef.collection('members').doc(callerId).get();
+  const fromRole = fromMem.exists ? fromMem.get('role') : null;
+  const isSchoolAd = caller.role === 'ad' && caller.schoolId === schoolId;
+  const isSourceCoach = fromRole === 'coach' || fromSnap.get('headCoachId') === callerId;
+  if (!isSchoolAd && !isSourceCoach) {
+    throw new functions.https.HttpsError('permission-denied',
+      "Only an AD or this team's coach can move a player.");
+  }
+
+  const entry = entrySnap.data() || {};
+  const playerUserId = entry.userId || null;
+
+  // Idempotent: if that athlete is already on the target roster, return it.
+  const targetRoster = await toRef.collection('roster').get();
+  const already = targetRoster.docs.find((d) => {
+    if (playerUserId && d.get('userId') === playerUserId) return true;
+    return !playerUserId
+      && (d.get('playerName') || '').trim().toLowerCase() === (entry.playerName || '').trim().toLowerCase();
+  });
+  if (already) {
+    return { entryId: already.id, teamId: toTeamId, existed: true, playerUserId: playerUserId };
+  }
+
+  const targetEntry = toRef.collection('roster').doc();
+  const payload = {
+    teamId: toTeamId,
+    playerName: entry.playerName || '',
+    jerseyNumber: entry.jerseyNumber || '',
+    position: entry.position || '',
+    parentEmail: entry.parentEmail || '',
+    parentName: entry.parentName || '',
+    parentPhone: entry.parentPhone || '',
+    injuryStatus: 'healthy',
+    movedFromTeamId: fromTeamId,
+    promotedAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  if (playerUserId) payload.userId = playerUserId;
+  await targetEntry.set(payload);
+
+  // Mark the source entry rather than deleting it: the old season stays accurate.
+  await entrySnap.ref.set({
+    promotionStatus: 'promoted',
+    promotedToTeamId: toTeamId,
+    promotedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  // Carry the athlete's account across so they keep access to the new team.
+  if (playerUserId) {
+    const playerProfile = await userProfile(db, playerUserId);
+    await toRef.collection('members').doc(playerUserId).set({
+      teamId: toTeamId,
+      userId: playerUserId,
+      role: 'player',
+      name: playerProfile.name || entry.playerName || '',
+      email: playerProfile.email || '',
+      permissions: [],
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    await db.collection('users').doc(playerUserId).set({
+      teamIds: admin.firestore.FieldValue.arrayUnion([toTeamId]),
+      role: playerProfile.role === 'follower' || !playerProfile.role ? 'player' : playerProfile.role,
+    }, { merge: true });
+  }
+
+  await writeAudit({
+    schoolId: schoolId,
+    actorId: callerId,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'player.promoted',
+    targetType: 'roster',
+    targetId: targetEntry.id,
+    detail: `${entry.playerName || entryId}: ${fromSnap.get('sportName') || fromTeamId} ${fromSnap.get('level') || ''} -> ${toSnap.get('sportName') || toTeamId} ${toSnap.get('level') || ''}`,
+  });
+
+  return { entryId: targetEntry.id, teamId: toTeamId, existed: false, playerUserId: playerUserId };
 });
 
 // Safety net: if a head coach is missing their membership (e.g. a team created

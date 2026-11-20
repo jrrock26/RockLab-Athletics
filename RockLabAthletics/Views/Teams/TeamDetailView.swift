@@ -30,18 +30,17 @@ struct TeamDetailView: View {
         myMembership?.role == .follower
     }
 
-    /// Members (not followers) see roster/trips/fundraising; followers and
-    /// family see games only.
+    /// Members (not followers) see roster/trips/fundraising; followers see games only.
     private var showsTeamContent: Bool {
         if auth.user?.role == .ad { return true }
         guard let role = myMembership?.role else { return false }
-        return role != .follower && role != .family
+        return role != .follower
     }
 
     private var showsFollowButton: Bool {
         if auth.user?.role == .ad { return false }
         if myMembership == nil { return true }
-        if myMembership?.role == .follower || myMembership?.role == .family { return true }
+        if myMembership?.role == .follower { return true }
         return false
     }
 

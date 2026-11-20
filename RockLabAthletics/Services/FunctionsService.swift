@@ -210,6 +210,18 @@ struct FunctionsService {
         return (result.data as? [String: Any]) ?? [:]
     }
 
+    /// Moves a player to another team (e.g. Jr High -> JV). Keeps the athlete's
+    /// account link and guardian contact, resets injury state, and leaves the
+    /// source entry on the old roster marked as promoted.
+    func promotePlayer(entryId: String, fromTeamId: String, toTeamId: String) async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("promotePlayer").call([
+            "entryId": entryId,
+            "fromTeamId": fromTeamId,
+            "toTeamId": toTeamId,
+        ])
+        return (result.data as? [String: Any]) ?? [:]
+    }
+
     /// Repairs a missing head-coach membership on an existing team.
     func ensureTeamCoachMembership(teamId: String) async throws -> [String: Any] {
         let result = try await functions.httpsCallable("ensureTeamCoachMembership").call([
