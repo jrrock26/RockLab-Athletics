@@ -3,7 +3,15 @@
 **Goal:** close the one gap that loses demos against Rank One and FinalForms —
 academic eligibility sourced from the district's student information system.
 
-Status: scoping only. Nothing here is implemented yet.
+Status: **DEFERRED — post-launch.** Decision made 2026-11-20: do not build SIS
+or grade integration now. Ship the sports-management core first; academic
+eligibility follows after production release. This document is retained as the
+completed research so the work does not restart from zero later.
+
+Rationale for deferring: academic eligibility is a *credibility* feature, while
+a complete sports-management system is the *product*. SIS integration puts
+district procurement and per-district onboarding in the critical path, and none
+of that work is reusable for teams that are not yet using the app at all.
 
 ---
 

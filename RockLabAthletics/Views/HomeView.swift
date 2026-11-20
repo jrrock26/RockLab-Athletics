@@ -51,6 +51,11 @@ struct HomeView: View {
             teamsSection("Your child's teams")
             formsSection
             organizationSection
+        case .family:
+            // Family see the same public surface as followers. Their athlete
+            // link (via the parent-link approval) is what makes it personal.
+            if myTeams.isEmpty { noTeamSection } else { teamsSection("Family") }
+            organizationSection
         case .follower:
             if myTeams.isEmpty { noTeamSection } else { teamsSection("Following") }
             organizationSection
@@ -111,6 +116,7 @@ struct HomeView: View {
         case .staff: return "Staff · \(count) team\(count == 1 ? "" : "s")"
         case .player: return "Player · \(count) team\(count == 1 ? "" : "s")"
         case .parent: return "Parent / Guardian"
+        case .family: return "Family · \(count) team\(count == 1 ? "" : "s")"
         case .follower: return "Following \(count) team\(count == 1 ? "" : "s")"
         }
     }

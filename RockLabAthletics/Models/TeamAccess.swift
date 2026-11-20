@@ -10,7 +10,7 @@ struct TeamAccess {
     var isStaff: Bool { membership?.role == .staff }
     var isPlayer: Bool { membership?.role == .player }
     var isParent: Bool { membership?.role == .parent }
-    var isFollower: Bool { membership?.role == .follower }
+    var isFollower: Bool { membership?.role == .follower || membership?.role == .family }
 
     /// AD or the coach assigned to this team: full management.
     var canManageTeam: Bool { isAd || isCoach }

@@ -18,6 +18,8 @@ struct TeamDetailView: View {
     @State private var gamesListener: ListenerRegistration?
     @State private var broadcastsListener: ListenerRegistration?
     @State private var publishedReels: [HighlightReel] = []
+    @State private var showingRollover = false
+    @State private var rolloverMessage = ""
     @Environment(\.openURL) private var openURL
 
     private var canInvite: Bool {
@@ -28,17 +30,18 @@ struct TeamDetailView: View {
         myMembership?.role == .follower
     }
 
-    /// Members (not followers) see roster/trips/fundraising; followers/outsiders see games only.
+    /// Members (not followers) see roster/trips/fundraising; followers and
+    /// family see games only.
     private var showsTeamContent: Bool {
         if auth.user?.role == .ad { return true }
         guard let role = myMembership?.role else { return false }
-        return role != .follower
+        return role != .follower && role != .family
     }
 
     private var showsFollowButton: Bool {
         if auth.user?.role == .ad { return false }
         if myMembership == nil { return true }
-        if myMembership?.role == .follower { return true }
+        if myMembership?.role == .follower || myMembership?.role == .family { return true }
         return false
     }
 
@@ -225,6 +228,11 @@ struct TeamDetailView: View {
                     } label: {
                         Label("Invite a coach", systemImage: "person.badge.plus")
                     }
+                    Button {
+                        showingRollover = true
+                    } label: {
+                        Label("Start next season", systemImage: "calendar.badge.plus")
+                    }
 
                     let pendingInvites = invites.filter { $0.status == "pending" }
                     if pendingInvites.isEmpty {
@@ -311,6 +319,16 @@ struct TeamDetailView: View {
             AddMediaSheet(teamId: team.id) {
                 Task { await loadMedia() }
             }
+        }
+        .sheet(isPresented: $showingRollover) {
+            RolloverSeasonSheet(team: team) { message in
+                rolloverMessage = message
+            }
+        }
+        .alert("Next season", isPresented: .constant(!rolloverMessage.isEmpty)) {
+            Button("OK") { rolloverMessage = "" }
+        } message: {
+            Text(rolloverMessage)
         }
         .onAppear { startLiveListeners() }
         .onDisappear { stopLiveListeners() }
@@ -409,4 +427,102 @@ struct TeamDetailView: View {
 
 
 
+
+
+// MARK: - Season rollover
+
+/// Creates next season's team from an existing one.
+///
+/// The copy is deliberately partial: athletes, guardian contacts and coaches
+/// carry over, but forms and injury clearances do not, because those expire with
+/// the season. Every athlete must be re-cleared — that is the compliance-safe
+/// default, not an oversight.
+private struct RolloverSeasonSheet: View {
+    let team: Team
+    var onDone: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var season = ""
+    @State private var busy = false
+    @State private var error = ""
+
+    private var canSubmit: Bool {
+        !busy && !season.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("New season") {
+                    TextField("e.g. Fall 2027", text: $season)
+                        .textInputAutocapitalization(.words)
+                }
+
+                Section("What carries over") {
+                    Label("Athletes and guardian contacts", systemImage: "checkmark.circle.fill")
+                    Label("Coaches and staff", systemImage: "checkmark.circle.fill")
+                    Label("Forms and injury clearances", systemImage: "xmark.circle")
+                        .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Text("Forms and injury status reset, so every athlete must be cleared again for the new season. Existing photos, schedules and results stay with the old team.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                if !error.isEmpty {
+                    Section {
+                        Text(error).foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Start next season")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(busy ? "Working…" : "Create") {
+                        Task { await run() }
+                    }
+                    .disabled(!canSubmit)
+                }
+            }
+            .onAppear {
+                if season.isEmpty { season = suggestedSeason }
+            }
+        }
+    }
+
+    /// A guess at the next season based on today's date. Coaches can overwrite it.
+    private var suggestedSeason: String {
+        let month = Calendar.current.component(.month, from: Date())
+        let year = Calendar.current.component(.year, from: Date())
+        switch month {
+        case 3...6: return "Fall \(year)"
+        case 7...11: return "Winter \(year + 1)"
+        default: return "Spring \(year)"
+        }
+    }
+
+    private func run() async {
+        let trimmed = season.trimmingCharacters(in: .whitespacesAndNewlines)
+        busy = true
+        error = ""
+        do {
+            let result = try await FunctionsService.shared.rolloverTeam(teamId: team.id, newSeason: trimmed)
+            let existed = result["existed"] as? Bool ?? false
+            let roster = result["rosterCount"] as? Int ?? 0
+            onDone(existed
+                   ? "\(team.sportName) \(trimmed) already exists — nothing was created."
+                   : "Created \(team.sportName) \(trimmed) with \(roster) athlete(s).")
+            dismiss()
+        } catch {
+            self.error = error.localizedDescription
+        }
+        busy = false
+    }
+}
 

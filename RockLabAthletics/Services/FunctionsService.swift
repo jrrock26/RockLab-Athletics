@@ -199,6 +199,17 @@ struct FunctionsService {
         return (result.data as? [String: Any]) ?? [:]
     }
 
+    /// Starts next season's team from an existing one: copies athletes and
+    /// guardian contacts, carries coaches/staff over, and deliberately resets
+    /// injury state so every athlete must be re-cleared for the new season.
+    func rolloverTeam(teamId: String, newSeason: String) async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("rolloverTeam").call([
+            "teamId": teamId,
+            "newSeason": newSeason,
+        ])
+        return (result.data as? [String: Any]) ?? [:]
+    }
+
     /// Repairs a missing head-coach membership on an existing team.
     func ensureTeamCoachMembership(teamId: String) async throws -> [String: Any] {
         let result = try await functions.httpsCallable("ensureTeamCoachMembership").call([

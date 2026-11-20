@@ -134,7 +134,7 @@ exports.syncUserRoleClaims = functions.firestore
 // 2. grantRole — an AD assigns a role to another user (server-side, validated).
 //    Writes the role to Firestore; the sync trigger above sets the claim.
 // ---------------------------------------------------------------------------
-const ALLOWED_ROLES = ['ad', 'coach', 'staff', 'player', 'parent', 'follower'];
+const ALLOWED_ROLES = ['ad', 'coach', 'staff', 'player', 'parent', 'family', 'follower'];
 
 exports.manageUserRole = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
@@ -996,14 +996,20 @@ exports.approveParentLink = functions.https.onCall(async (data, context) => {
   const isCoach = memSnap.exists && memSnap.get('role') === 'coach';
   if (callerRole !== 'ad' && !isCoach) throw new functions.https.HttpsError('permission-denied', 'Only an AD or coach can approve.');
 
-  const userUpdate = { role: 'parent' };
+  // A family member keeps the family role: linking to an athlete must never
+  // grant them a parent's consent authority over that student's records.
+  const requesterSnap = await db.collection('users').doc(req.parentUserId).get();
+  const requesterRole = requesterSnap.exists ? requesterSnap.get('role') : null;
+  const grantedRole = requesterRole === 'family' ? 'family' : 'parent';
+
+  const userUpdate = { role: grantedRole };
   if (req.playerUserId) {
     userUpdate.linkedPlayerIds = admin.firestore.FieldValue.arrayUnion(req.playerUserId);
   }
   await db.collection('users').doc(req.parentUserId).set(userUpdate, { merge: true });
-  await admin.auth().setCustomUserClaims(req.parentUserId, { role: 'parent' });
+  await admin.auth().setCustomUserClaims(req.parentUserId, { role: grantedRole });
 
-  await db.collection('teams').doc(teamId).collection('members').doc(req.parentUserId).set({ role: 'parent' }, { merge: true });
+  await db.collection('teams').doc(teamId).collection('members').doc(req.parentUserId).set({ role: grantedRole }, { merge: true });
 
   if (req.rosterEntryId) {
     await db.collection('teams').doc(teamId).collection('roster').doc(req.rosterEntryId).set({
@@ -1412,6 +1418,135 @@ exports.createTeam = functions.https.onCall(async (data, context) => {
   }
 
   return { teamId: teamRef.id, joinCode: joinCode };
+});
+
+// ---------------------------------------------------------------------------
+// Season rollover — start next season's team from this one.
+//
+// Otherwise a school re-creates every team and re-adds every athlete by hand
+// each year, then re-sends invitations. This copies the durable parts (athletes,
+// guardian contacts, coach/staff memberships) and deliberately does NOT copy the
+// parts that must be renewed for compliance: forms, signatures and injury state.
+// A rolled-over athlete therefore starts the season un-cleared — the correct and
+// safe default.
+// ---------------------------------------------------------------------------
+exports.rolloverTeam = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const teamId = data && data.teamId ? String(data.teamId) : '';
+  const newSeason = data && data.newSeason ? String(data.newSeason).trim() : '';
+  if (!teamId || !newSeason) {
+    throw new functions.https.HttpsError('invalid-argument', 'teamId and newSeason are required.');
+  }
+
+  const db = admin.firestore();
+  const callerId = context.auth.uid;
+  const teamRef = db.collection('teams').doc(teamId);
+  const teamSnap = await teamRef.get();
+  if (!teamSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Team not found.');
+  }
+
+  const caller = await userProfile(db, callerId);
+  const memSnap = await teamRef.collection('members').doc(callerId).get();
+  const teamRole = memSnap.exists ? memSnap.get('role') : null;
+  const schoolId = teamSnap.get('schoolId') || '';
+  const isSchoolAd = caller.role === 'ad' && caller.schoolId === schoolId;
+  const isHeadCoach = teamSnap.get('headCoachId') === callerId;
+  if (!isSchoolAd && !isHeadCoach && teamRole !== 'coach') {
+    throw new functions.https.HttpsError('permission-denied',
+      "Only an AD or this team's coach can start the next season.");
+  }
+
+  const sportId = teamSnap.get('sportId') || '';
+  const level = teamSnap.get('level') || 'Varsity';
+  const gender = teamSnap.get('gender') || '';
+
+  // Idempotent: if that season already exists, hand it back rather than
+  // creating a duplicate team. Queried by schoolId only (no composite index).
+  const schoolTeams = await db.collection('teams').where('schoolId', '==', schoolId).get();
+  const duplicate = schoolTeams.docs.find((d) =>
+    d.get('sportId') === sportId && d.get('level') === level && d.get('season') === newSeason);
+  if (duplicate) {
+    return {
+      teamId: duplicate.id,
+      joinCode: duplicate.get('joinCode') || '',
+      existed: true,
+      rosterCount: 0,
+      memberCount: 0,
+      season: newSeason,
+    };
+  }
+
+  const joinCode = randomJoinCode();
+  const newTeamRef = db.collection('teams').doc();
+  await newTeamRef.set({
+    schoolId: schoolId,
+    sportId: sportId,
+    sportName: teamSnap.get('sportName') || '',
+    level: level,
+    season: newSeason,
+    gender: gender,
+    headCoachId: teamSnap.get('headCoachId') || callerId,
+    joinCode: joinCode,
+    schoolNameHint: teamSnap.get('schoolNameHint') || '',
+    adoptionStatus: teamSnap.get('adoptionStatus') || 'adopted',
+    rolledOverFrom: teamId,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  // Coaches and staff carry over; players and parents re-derive from the roster.
+  const membersSnap = await teamRef.collection('members').get();
+  let memberCount = 0;
+  for (const m of membersSnap.docs) {
+    const role = m.get('role');
+    if (role !== 'coach' && role !== 'staff') continue;
+    await newTeamRef.collection('members').doc(m.id).set({
+      teamId: newTeamRef.id,
+      userId: m.get('userId') || m.id,
+      role: role,
+      name: m.get('name') || '',
+      email: m.get('email') || '',
+      permissions: m.get('permissions') || [],
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    memberCount++;
+  }
+
+  // Identity and guardian contact carry over; injury state and forms do not.
+  const rosterSnap = await teamRef.collection('roster').get();
+  let rosterCount = 0;
+  for (const r of rosterSnap.docs) {
+    const payload = {
+      teamId: newTeamRef.id,
+      playerName: r.get('playerName') || '',
+      jerseyNumber: r.get('jerseyNumber') || '',
+      position: r.get('position') || '',
+      parentEmail: r.get('parentEmail') || '',
+      parentName: r.get('parentName') || '',
+      parentPhone: r.get('parentPhone') || '',
+      injuryStatus: 'healthy',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    const linkedUser = r.get('userId');
+    if (linkedUser) payload.userId = linkedUser;
+    await newTeamRef.collection('roster').doc().set(payload);
+    rosterCount++;
+  }
+
+  await writeAudit({
+    schoolId: schoolId,
+    actorId: callerId,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'team.rolled_over',
+    targetType: 'team',
+    targetId: newTeamRef.id,
+    detail: `${teamSnap.get('sportName') || sportId} ${level} -> ${newSeason} (${rosterCount} athletes, ${memberCount} staff)`,
+  });
+
+  return { teamId: newTeamRef.id, joinCode, existed: false, rosterCount, memberCount, season: newSeason };
 });
 
 // Safety net: if a head coach is missing their membership (e.g. a team created
