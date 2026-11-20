@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CLIENT_ID</key>
-	<string>79884425424-129f67ilbjbiach7tsf70fdoefis1mo7.apps.googleusercontent.com</string>
+	<string>79884425424-218t7bjb40l9pk1u4v1cip14b3inr844.apps.googleusercontent.com</string>
 	<key>REVERSED_CLIENT_ID</key>
-	<string>com.googleusercontent.apps.79884425424-129f67ilbjbiach7tsf70fdoefis1mo7</string>
+	<string>com.googleusercontent.apps.79884425424-218t7bjb40l9pk1u4v1cip14b3inr844</string>
 	<key>API_KEY</key>
 	<string>AIzaSyCF4WA4Xog2-fx6VwL0gLFGUYQteYllwrQ</string>
 	<key>GCM_SENDER_ID</key>
@@ -13,7 +13,7 @@
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
-	<string>com.rocklabathletics.app</string>
+	<string>RockLabAthletics</string>
 	<key>PROJECT_ID</key>
 	<string>rocklab-athletics</string>
 	<key>STORAGE_BUCKET</key>
@@ -29,6 +29,6 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:79884425424:ios:6c8c0cb433781efc1c26d5</string>
+	<string>1:79884425424:ios:438920b30a0490d81c26d5</string>
 </dict>
 </plist>
