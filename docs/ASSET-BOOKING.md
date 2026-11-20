@@ -60,14 +60,62 @@ The Schedule tab has a **Facilities & buses** button:
 
 ADs get an "Add a resource" section at the top of the same screen.
 
-## 5. Known gaps
+## 5. Recurring bookings
 
-- **No recurring bookings.** Practice is often 4–6pm Mon–Thu; today that is four
-  separate bookings. This is the next thing to add.
-- **No open-hours model.** Any time can be booked, including 2am. A resource
-  could carry available hours, and bookings outside them would be refused.
-- **Bookings are not yet linked to events.** A booking records the team and a
-  label; it does not create or attach to a schedule event. Linking them would let
-  one action schedule the practice *and* reserve the gym.
-- **No notification when a booking is cancelled**, so a coach whose slot is
-  released is not told the gym is free.
+A practice is usually the same window several days a week for weeks. The booking
+form has **Repeat weekly**: pick weekday chips plus a number of weeks, and the
+server expands the series into concrete windows and books each one.
+
+- Expansion is pure, tested logic (`functions/booking.js`, `expandRecurring`).
+- **Partial success is reported rather than swallowed.** If three windows clash,
+  the rest are booked and the response lists the conflicts, so a coach gets a
+  mostly-complete schedule plus an explicit note instead of an all-or-nothing
+  failure.
+- The first window is always the one the coach picked; weekdays are time-of-day
+  copies of it.
+
+## 6. Open hours
+
+Each resource carries `openMin` / `closeMin` in local minutes past midnight
+(default 06:00–22:00). The AD sets them when adding an asset.
+
+- `bookResource` refuses anything outside those hours, and refuses a booking that
+  crosses midnight.
+- The booking form shows "Bookable 06:00–22:00" for the selected resource so the
+  restriction is visible before someone tries.
+- The client sends its UTC offset; the server uses it to turn absolute timestamps
+  into local minutes. This is a usability guard, not a security boundary — the
+  overlap transaction is the security boundary.
+
+## 7. Bookings and schedule events
+
+Booking can create the schedule entry at the same time.
+
+- `bookResource` accepts `createEvent` (plus `eventTitle` / `eventType`) and writes
+  the `events` document **inside the same transaction**, only if at least one
+  window was actually booked.
+- The event carries `location` = resource name, plus `resourceId` and
+  `resourceBookingIds`, so the schedule and the calendar point at each other.
+- Passing an existing `eventId` instead attaches the booking to that event rather
+  than creating a second one.
+
+## 8. Test coverage
+
+`functions/booking.js` holds the pure rules and `functions/booking.test.js` covers
+them with `node --test` (`npm test`):
+
+- overlap semantics, including that touching intervals are free
+- local day / minute conversion round-trip
+- open hours: inside, too early, too late, crossing midnight, end before start
+- recurrence: Mon–Thu × 2 weeks = 8 windows, correct weekday and time, sorted,
+  first window equal to the chosen one; empty weekdays = single window
+- partition: clashes reported with the blocking team, cancelled bookings ignored
+
+## 9. Remaining gaps
+
+- **No cancellation notification** — a coach whose slot is cancelled is not told
+  the resource is free again.
+- **Bookings cannot be edited in place**; you cancel and re-book.
+- **No conflict preview before booking** across a whole series (the form shows the
+  selected day, and the server reports what it refused).
+

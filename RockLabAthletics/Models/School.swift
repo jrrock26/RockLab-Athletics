@@ -56,6 +56,16 @@ struct OrgResource: Identifiable {
     var name: String
     var notes: String
     var active: Bool
+    /// Bookable window in local minutes past midnight (default 06:00–22:00).
+    var openMin: Int
+    var closeMin: Int
+
+    var openLabel: String {
+        func fmt(_ minutes: Int) -> String {
+            String(format: "%02d:%02d", minutes / 60, minutes % 60)
+        }
+        return "\(fmt(openMin))–\(fmt(closeMin))"
+    }
 
     var typeLabel: String {
         switch type {
@@ -83,6 +93,9 @@ struct OrgResource: Identifiable {
         self.name = name
         self.notes = data["notes"] as? String ?? ""
         self.active = data["active"] as? Bool ?? true
+        self.openMin = data["openMin"] as? Int ?? 6 * 60
+        let close = data["closeMin"] as? Int ?? 22 * 60
+        self.closeMin = close > 0 ? close : 24 * 60
     }
 }
 

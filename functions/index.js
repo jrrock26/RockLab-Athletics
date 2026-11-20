@@ -2,6 +2,11 @@ const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
+const {
+  expandRecurring,
+  openHoursViolation,
+  partitionCandidates,
+} = require('./booking');
 
 admin.initializeApp();
 
@@ -2825,6 +2830,9 @@ exports.createResource = functions.https.onCall(async (data, context) => {
     name: name.slice(0, 120),
     type: type,
     notes: payload.notes ? String(payload.notes).slice(0, 300) : '',
+    // Open hours in local minutes past midnight. Defaults to 06:00–22:00.
+    openMin: Number.isFinite(Number(payload.openMin)) ? Number(payload.openMin) : 6 * 60,
+    closeMin: Number.isFinite(Number(payload.closeMin)) ? Number(payload.closeMin) : 22 * 60,
     active: true,
     createdBy: context.auth.uid,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -2926,42 +2934,89 @@ exports.bookResource = functions.https.onCall(async (data, context) => {
       "Only an AD or this team's coach can book a resource.");
   }
 
-  const bookingRef = db.collection('resourceBookings').doc();
   const teamName = [teamSnap.get('sportName'), teamSnap.get('level')].filter(Boolean).join(' ');
+  const resourceName = resourceSnap.get('name') || '';
+  const utcOffset = Number.isFinite(Number(payload.utcOffsetMinutes))
+    ? Number(payload.utcOffsetMinutes) : 0;
 
-  // Overlap check inside a transaction: two coaches must not get the same gym slot.
+  // Open hours: a resource is not bookable at 2am just because nobody booked it.
+  const openMin = Number.isFinite(Number(resourceSnap.get('openMin')))
+    ? Number(resourceSnap.get('openMin')) : 6 * 60;
+  const closeMinRaw = Number(resourceSnap.get('closeMin'));
+  const closeMin = Number.isFinite(closeMinRaw) && closeMinRaw > 0 ? closeMinRaw : 24 * 60;
+  const violation = openHoursViolation(startMs, endMs, utcOffset, openMin, closeMin);
+  if (violation) {
+    throw new functions.https.HttpsError('failed-precondition', violation);
+  }
+
+  // A recurring series expands into concrete windows, and each one is checked.
+  const candidates = expandRecurring({
+    startMs: startMs,
+    endMs: endMs,
+    weekdays: payload.weekdays,
+    weeks: payload.weeks,
+    utcOffsetMinutes: utcOffset,
+  });
+
+  const createdIds = [];
+  let conflicts = [];
+  let linkedEventId = payload.eventId ? String(payload.eventId) : '';
+
+  // Availability check and writes in the same transaction, so two coaches cannot
+  // both take a slot that looked free to each of them.
   await db.runTransaction(async (tx) => {
-    const existing = await tx.get(
+    const existingSnap = await tx.get(
       db.collection('resourceBookings').where('resourceId', '==', resourceId));
-    const clash = existing.docs.find((doc) => {
-      const d = doc.data() || {};
-      if (d.status === 'cancelled') return false;
-      const s = Number(d.startMs) || 0;
-      const e = Number(d.endMs) || 0;
-      return startMs < e && endMs > s;
-    });
-    if (clash) {
-      const c = clash.data() || {};
-      throw new functions.https.HttpsError('already-exists',
-        `Already booked by ${c.teamName || 'another team'} at that time.`);
+    const existing = existingSnap.docs.map((d) => d.data());
+    const split = partitionCandidates(candidates, existing);
+    conflicts = split.conflicts;
+
+    for (const window of split.available) {
+      const ref = db.collection('resourceBookings').doc();
+      tx.set(ref, {
+        schoolId: schoolId,
+        resourceId: resourceId,
+        resourceName: resourceName,
+        resourceType: resourceSnap.get('type') || '',
+        teamId: teamId,
+        teamName: teamName,
+        title: payload.title ? String(payload.title).slice(0, 120) : '',
+        startMs: window.startMs,
+        endMs: window.endMs,
+        status: 'booked',
+        bookedBy: callerId,
+        bookedByName: caller.name || '',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      createdIds.push(ref.id);
     }
 
-    tx.set(bookingRef, {
-      schoolId: schoolId,
-      resourceId: resourceId,
-      resourceName: resourceSnap.get('name') || '',
-      resourceType: resourceSnap.get('type') || '',
-      teamId: teamId,
-      teamName: teamName,
-      title: payload.title ? String(payload.title).slice(0, 120) : '',
-      dateKey: payload.dateKey ? String(payload.dateKey) : '',
-      startMs: startMs,
-      endMs: endMs,
-      status: 'booked',
-      bookedBy: callerId,
-      bookedByName: caller.name || '',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    // Only create or link a schedule event if something was actually booked.
+    if (createdIds.length > 0) {
+      if (!linkedEventId && payload.createEvent === true) {
+        const eventRef = db.collection('events').doc();
+        tx.set(eventRef, {
+          teamId: teamId,
+          title: payload.eventTitle ? String(payload.eventTitle).slice(0, 120)
+            : (payload.title ? String(payload.title).slice(0, 120) : 'Practice'),
+          type: payload.eventType ? String(payload.eventType) : 'practice',
+          date: split.available[0].startMs / 1000,
+          location: resourceName,
+          notes: `Booked ${resourceName}`,
+          schoolId: schoolId,
+          resourceId: resourceId,
+          resourceBookingIds: createdIds,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        linkedEventId = eventRef.id;
+      } else if (linkedEventId) {
+        tx.set(db.collection('events').doc(linkedEventId), {
+          location: resourceName,
+          resourceId: resourceId,
+          resourceBookingIds: createdIds,
+        }, { merge: true });
+      }
+    }
   });
 
   await writeAudit({
@@ -2971,11 +3026,17 @@ exports.bookResource = functions.https.onCall(async (data, context) => {
     actorRole: caller.role || '',
     action: 'resource.booked',
     targetType: 'resourceBooking',
-    targetId: bookingRef.id,
-    detail: `${resourceSnap.get('name')} · ${teamName || teamId} · ${new Date(startMs).toISOString()}`,
+    targetId: createdIds[0] || '',
+    detail: `${resourceName} · ${teamName || teamId} · ${createdIds.length} window(s)${conflicts.length ? `, ${conflicts.length} conflict(s)` : ''}`,
   });
 
-  return { ok: true, bookingId: bookingRef.id };
+  return {
+    ok: true,
+    bookingIds: createdIds,
+    booked: createdIds.length,
+    conflicts: conflicts,
+    eventId: linkedEventId,
+  };
 });
 
 exports.cancelResourceBooking = functions.https.onCall(async (data, context) => {

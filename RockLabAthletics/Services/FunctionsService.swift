@@ -338,9 +338,14 @@ struct FunctionsService {
     // MARK: - Resources
 
     /// AD-only: adds a permanent bookable asset to the organization.
-    func createResource(name: String, type: String, notes: String = "") async throws -> [String: Any] {
+    func createResource(name: String,
+                        type: String,
+                        notes: String = "",
+                        openMin: Int = 6 * 60,
+                        closeMin: Int = 22 * 60) async throws -> [String: Any] {
         let result = try await functions.httpsCallable("createResource").call([
             "name": name, "type": type, "notes": notes,
+            "openMin": openMin, "closeMin": closeMin,
         ])
         return (result.data as? [String: Any]) ?? [:]
     }
@@ -352,19 +357,29 @@ struct FunctionsService {
         return (result.data as? [String: Any]) ?? [:]
     }
 
-    /// Books a resource window. The server rejects overlaps in a transaction, so
-    /// two coaches cannot claim the same gym slot.
+    /// Books a resource window. The server rejects overlaps in a transaction,
+    /// enforces the resource's open hours, and expands a recurring series.
     func bookResource(resourceId: String,
                       teamId: String,
                       title: String,
                       start: Date,
-                      end: Date) async throws -> [String: Any] {
+                      end: Date,
+                      weekdays: [Int] = [],
+                      weeks: Int = 1,
+                      createEvent: Bool = false,
+                      eventTitle: String = "") async throws -> [String: Any] {
         let result = try await functions.httpsCallable("bookResource").call([
             "resourceId": resourceId,
             "teamId": teamId,
             "title": title,
             "startMs": start.timeIntervalSince1970 * 1000,
             "endMs": end.timeIntervalSince1970 * 1000,
+            // JS getTimezoneOffset() is inverted, so negate it for the server.
+            "utcOffsetMinutes": -TimeZone.current.secondsFromGMT() / 60,
+            "weekdays": weekdays,
+            "weeks": weeks,
+            "createEvent": createEvent,
+            "eventTitle": eventTitle,
         ])
         return (result.data as? [String: Any]) ?? [:]
     }
