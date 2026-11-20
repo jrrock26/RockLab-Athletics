@@ -1,5 +1,18 @@
 {
   "projects": {
     "default": "rocklab-athletics"
-  }
+  },
+  "targets": {
+    "rocklab-athletics": {
+      "hosting": {
+        "landing": [
+          "rocklab-technologies"
+        ],
+        "app": [
+          "rocklab-athletics"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

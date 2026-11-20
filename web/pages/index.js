@@ -57,7 +57,8 @@ export default function Login() {
         {error && <p className="error">{error}</p>}
       </form>
       <p className="muted small">
-        <Link href="/privacy">Privacy</Link> · <Link href="/support">Support</Link>
+        <Link href="/privacy">Privacy</Link> · <Link href="/support">Support</Link> ·{" "}
+        <a href="https://www.rocklabtechnologies.com">RockLab Technologies</a>
       </p>
       {user && <button className="link" onClick={() => signOut(auth)}>Sign out</button>}
     </main>
