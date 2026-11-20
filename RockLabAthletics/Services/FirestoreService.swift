@@ -225,6 +225,36 @@ struct FirestoreService {
         return items
     }
 
+    // MARK: - Statistician requests
+
+    func fetchStatisticianRequests(teamId: String) async throws -> [GameStatisticianRequest] {
+        let snap = try await db.collection("gameStatisticianRequests")
+            .whereField("teamId", isEqualTo: teamId)
+            .getDocuments()
+        return snap.documents.compactMap { GameStatisticianRequest(id: $0.documentID, data: $0.data()) }
+    }
+
+    /// True when this user holds a per-game scoring grant (claimed a request).
+    func isGameScorer(gameId: String, userId: String) async -> Bool {
+        guard !userId.isEmpty else { return false }
+        let doc = try? await db.collection("games").document(gameId)
+            .collection("scorers").document(userId).getDocument()
+        return doc?.exists ?? false
+    }
+
+    /// Volleyball: persist per-set scores and derive the match score from sets
+    /// won, so `teamScore`/`opponentScore` mean "sets", not "points".
+    func saveVolleyballSets(gameId: String, sets: [[String: Int]], status: GameStatus) async throws {
+        let usWon = sets.filter { ($0["us"] ?? 0) > ($0["them"] ?? 0) }.count
+        let themWon = sets.filter { ($0["them"] ?? 0) > ($0["us"] ?? 0) }.count
+        try await db.collection("games").document(gameId).setData([
+            "sets": sets,
+            "teamScore": usWon,
+            "opponentScore": themWon,
+            "status": status.rawValue,
+        ], merge: true)
+    }
+
     /// Client-side school search (fine for a single-school directory; use a
     /// dedicated search index like Algolia/Typesense at production scale).
     func searchSchools(query: String) async throws -> [School] {

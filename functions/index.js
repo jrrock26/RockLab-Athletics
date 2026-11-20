@@ -1675,6 +1675,185 @@ exports.promotePlayer = functions.https.onCall(async (data, context) => {
   return { entryId: targetEntry.id, teamId: toTeamId, existed: false, playerUserId: playerUserId };
 });
 
+// ---------------------------------------------------------------------------
+// Statistician requests.
+//
+// Not every team has a coach who can run the scorer, or a staff statistician.
+// A coach opens a request for one game; a parent or student on the team claims
+// it; claiming grants scoring rights for THAT GAME ONLY via
+// games/{gameId}/scorers/{uid}. Nobody inherits season-long staff access by
+// volunteering once.
+// ---------------------------------------------------------------------------
+exports.requestGameStatistician = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const gameId = data && data.gameId ? String(data.gameId) : '';
+  if (!gameId) {
+    throw new functions.https.HttpsError('invalid-argument', 'gameId is required.');
+  }
+
+  const db = admin.firestore();
+  const gameSnap = await db.collection('games').doc(gameId).get();
+  if (!gameSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Game not found.');
+  }
+
+  const teamId = gameSnap.get('teamId') || '';
+  const callerId = context.auth.uid;
+  const caller = await userProfile(db, callerId);
+  const memSnap = await db.collection('teams').doc(teamId).collection('members').doc(callerId).get();
+  const teamRole = memSnap.exists ? memSnap.get('role') : null;
+  if (!(caller.role === 'ad' || teamRole === 'coach')) {
+    throw new functions.https.HttpsError('permission-denied',
+      "Only an AD or this team's coach can ask for a statistician.");
+  }
+
+  // Idempotent: reuse an existing open request. Filtered in JS so no composite
+  // index (gameId + status) is required.
+  const existing = await db.collection('gameStatisticianRequests')
+    .where('gameId', '==', gameId).limit(10).get();
+  const open = existing.docs.find((d) => d.get('status') === 'open');
+  if (open) return { requestId: open.id, existed: true };
+
+  const ref = await db.collection('gameStatisticianRequests').add({
+    teamId: teamId,
+    gameId: gameId,
+    opponent: gameSnap.get('opponent') || '',
+    isHome: gameSnap.get('isHome') === true,
+    date: gameSnap.get('date') || null,
+    status: 'open',
+    requestedBy: callerId,
+    requestedByName: caller.name || '',
+    requestedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  await writeAudit({
+    schoolId: caller.schoolId || '',
+    actorId: callerId,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'scorer.requested',
+    targetType: 'game',
+    targetId: gameId,
+    detail: `vs ${gameSnap.get('opponent') || ''}`,
+  });
+
+  return { requestId: ref.id, existed: false };
+});
+
+exports.claimGameStatistician = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const requestId = data && data.requestId ? String(data.requestId) : '';
+  if (!requestId) {
+    throw new functions.https.HttpsError('invalid-argument', 'requestId is required.');
+  }
+
+  const db = admin.firestore();
+  const ref = db.collection('gameStatisticianRequests').doc(requestId);
+  const reqSnap = await ref.get();
+  if (!reqSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Request not found.');
+  }
+  const req = reqSnap.data() || {};
+  if (req.status !== 'open') {
+    throw new functions.https.HttpsError('failed-precondition', 'Someone has already taken this game.');
+  }
+
+  const callerId = context.auth.uid;
+  const caller = await userProfile(db, callerId);
+  const memSnap = await db.collection('teams').doc(req.teamId).collection('members').doc(callerId).get();
+  if (!memSnap.exists && caller.role !== 'ad') {
+    throw new functions.https.HttpsError('permission-denied',
+      'Follow or join the team before claiming a game.');
+  }
+
+  // The grant is per game, never a staff role.
+  await db.collection('games').doc(req.gameId).collection('scorers').doc(callerId).set({
+    userId: callerId,
+    name: caller.name || '',
+    email: caller.email || '',
+    requestId: requestId,
+    grantedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  await ref.set({
+    status: 'filled',
+    filledBy: callerId,
+    filledByName: caller.name || '',
+    filledAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  await writeAudit({
+    schoolId: caller.schoolId || '',
+    actorId: callerId,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'scorer.claimed',
+    targetType: 'game',
+    targetId: req.gameId || '',
+    detail: `vs ${req.opponent || ''}`,
+  });
+
+  return { ok: true, gameId: req.gameId || '' };
+});
+
+exports.releaseGameStatistician = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const requestId = data && data.requestId ? String(data.requestId) : '';
+  if (!requestId) {
+    throw new functions.https.HttpsError('invalid-argument', 'requestId is required.');
+  }
+
+  const db = admin.firestore();
+  const ref = db.collection('gameStatisticianRequests').doc(requestId);
+  const reqSnap = await ref.get();
+  if (!reqSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Request not found.');
+  }
+  const req = reqSnap.data() || {};
+  const callerId = context.auth.uid;
+  const caller = await userProfile(db, callerId);
+  const memSnap = await db.collection('teams').doc(req.teamId).collection('members').doc(callerId).get();
+  const isCoach = memSnap.exists && memSnap.get('role') === 'coach';
+  const isOwner = req.filledBy === callerId;
+  if (!isOwner && caller.role !== 'ad' && !isCoach) {
+    throw new functions.https.HttpsError('permission-denied', 'You cannot release this game.');
+  }
+
+  // A coach cancelling closes the request; a volunteer releasing reopens it so
+  // someone else can take the game.
+  const cancel = !!(data && data.cancel) && (caller.role === 'ad' || isCoach);
+
+  if (req.filledBy) {
+    await db.collection('games').doc(req.gameId).collection('scorers').doc(req.filledBy).delete();
+  }
+
+  await ref.set({
+    status: cancel ? 'cancelled' : 'open',
+    filledBy: admin.firestore.FieldValue.delete(),
+    filledByName: admin.firestore.FieldValue.delete(),
+    filledAt: admin.firestore.FieldValue.delete(),
+  }, { merge: true });
+
+  await writeAudit({
+    schoolId: caller.schoolId || '',
+    actorId: callerId,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: cancel ? 'scorer.cancelled' : 'scorer.released',
+    targetType: 'game',
+    targetId: req.gameId || '',
+    detail: `vs ${req.opponent || ''}`,
+  });
+
+  return { ok: true, status: cancel ? 'cancelled' : 'open' };
+});
+
 // Safety net: if a head coach is missing their membership (e.g. a team created
 // before the flow above), this repairs it so no team is left without its coach.
 exports.ensureTeamCoachMembership = functions.https.onCall(async (data, context) => {

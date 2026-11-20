@@ -18,8 +18,11 @@ struct Game: Identifiable, Codable {
     var opponentTeamId: String?
     var period: Int
     var clockSeconds: Int
+    /// Volleyball-style set results: [{ "us": 25, "them": 20 }, …]. A match is
+    /// decided by sets won, so the running score alone cannot express it.
+    var sets: [[String: Int]]
 
-    init(id: String, teamId: String, opponent: String, isHome: Bool, date: Date, status: GameStatus, teamScore: Int, opponentScore: Int, isDistrictGame: Bool = false, opponentTeamId: String? = nil, period: Int = 0, clockSeconds: Int = 0) {
+    init(id: String, teamId: String, opponent: String, isHome: Bool, date: Date, status: GameStatus, teamScore: Int, opponentScore: Int, isDistrictGame: Bool = false, opponentTeamId: String? = nil, period: Int = 0, clockSeconds: Int = 0, sets: [[String: Int]] = []) {
         self.id = id
         self.teamId = teamId
         self.opponent = opponent
@@ -32,6 +35,7 @@ struct Game: Identifiable, Codable {
         self.opponentTeamId = opponentTeamId
         self.period = period
         self.clockSeconds = clockSeconds
+        self.sets = sets
     }
 
     init?(id: String, data: [String: Any]) {
@@ -50,5 +54,39 @@ struct Game: Identifiable, Codable {
         self.opponentTeamId = data["opponentTeamId"] as? String
         self.period = data["period"] as? Int ?? 0
         self.clockSeconds = data["clockSeconds"] as? Int ?? 0
+        self.sets = (data["sets"] as? [[String: Any]])?.compactMap { raw in
+            guard let us = raw["us"] as? Int, let them = raw["them"] as? Int else { return nil }
+            return ["us": us, "them": them]
+        } ?? []
     }
 }
+
+/// A coach's open call for a volunteer to run one game's scoring.
+///
+/// Claiming creates a per-game grant (games/{gameId}/scorers/{uid}) rather than
+/// a staff role, so a parent who helps once does not keep scoring rights all
+/// season.
+struct GameStatisticianRequest: Identifiable {
+    let id: String
+    var teamId: String
+    var gameId: String
+    var opponent: String
+    var isHome: Bool
+    /// open | filled | cancelled
+    var status: String
+    var filledBy: String
+    var filledByName: String
+
+    init?(id: String, data: [String: Any]) {
+        guard let gameId = data["gameId"] as? String else { return nil }
+        self.id = id
+        self.teamId = data["teamId"] as? String ?? ""
+        self.gameId = gameId
+        self.opponent = data["opponent"] as? String ?? ""
+        self.isHome = data["isHome"] as? Bool ?? true
+        self.status = data["status"] as? String ?? "open"
+        self.filledBy = data["filledBy"] as? String ?? ""
+        self.filledByName = data["filledByName"] as? String ?? ""
+    }
+}
+

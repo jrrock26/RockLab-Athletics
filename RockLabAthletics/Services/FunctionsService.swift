@@ -222,6 +222,32 @@ struct FunctionsService {
         return (result.data as? [String: Any]) ?? [:]
     }
 
+    /// Asks the team for a volunteer to run one game's scoring.
+    func requestGameStatistician(gameId: String) async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("requestGameStatistician").call([
+            "gameId": gameId,
+        ])
+        return (result.data as? [String: Any]) ?? [:]
+    }
+
+    /// Claims an open request. Grants scoring rights for that game only.
+    func claimGameStatistician(requestId: String) async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("claimGameStatistician").call([
+            "requestId": requestId,
+        ])
+        return (result.data as? [String: Any]) ?? [:]
+    }
+
+    /// Gives a game back. `cancel: true` (coach/AD only) closes the request
+    /// instead of reopening it.
+    func releaseGameStatistician(requestId: String, cancel: Bool = false) async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("releaseGameStatistician").call([
+            "requestId": requestId,
+            "cancel": cancel,
+        ])
+        return (result.data as? [String: Any]) ?? [:]
+    }
+
     /// Repairs a missing head-coach membership on an existing team.
     func ensureTeamCoachMembership(teamId: String) async throws -> [String: Any] {
         let result = try await functions.httpsCallable("ensureTeamCoachMembership").call([

@@ -23,6 +23,14 @@ service cloud.firestore {
       return m != null && m.role == 'staff' && 'permissions' in m && m.permissions.hasAny([p]);
     }
 
+    /// Per-game scoring grant: a parent or student who claimed one game's
+    /// statistician request. Deliberately game-scoped — it must not confer
+    /// season-long staff standing.
+    function isGameScorer(g) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/games/$(g)/scorers/$(request.auth.uid));
+    }
+
     function eventTeam(id) { return get(/databases/$(database)/documents/events/$(id)).data.teamId; }
     function gameTeam(id) { return get(/databases/$(database)/documents/games/$(id)).data.teamId; }
     function fundTeam(id) { return get(/databases/$(database)/documents/fundraisers/$(id)).data.teamId; }
@@ -199,12 +207,33 @@ service cloud.firestore {
     match /games/{gameId} {
       allow read: if signedIn();
       allow create: if signedIn() && canManageTeam(request.resource.data.teamId);
-      allow update, delete: if canManageTeam(resource.data.teamId) || staffHasPerm(resource.data.teamId, 'statistician');
+      allow update, delete: if canManageTeam(resource.data.teamId)
+        || staffHasPerm(resource.data.teamId, 'statistician')
+        || isGameScorer(gameId);
 
       match /stats/{entryId} {
         allow read: if signedIn();
-        allow write: if isAd() || isCoachOf(gameTeam(gameId)) || staffHasPerm(gameTeam(gameId), 'statistician');
+        allow write: if isAd() || isCoachOf(gameTeam(gameId))
+          || staffHasPerm(gameTeam(gameId), 'statistician')
+          || isGameScorer(gameId);
       }
+
+      // Per-game scoring grants. Written only by claimGameStatistician.
+      match /scorers/{scorerId} {
+        allow read: if signedIn();
+        allow write: if false;
+      }
+    }
+
+    // A coach asking for a volunteer to run one game's scoring. Team members can
+    // see the request; only the Cloud Functions may create, fill or cancel it.
+    match /gameStatisticianRequests/{requestId} {
+      allow read: if signedIn() && (
+        isAd()
+        || isCoachOf(resource.data.teamId)
+        || isTeamMember(resource.data.teamId)
+      );
+      allow write: if false;
     }
 
     match /chats/{chatId} {

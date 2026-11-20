@@ -52,6 +52,31 @@ enum SportDefinitions {
         }
     }
 
+    /// How a sport's result is structured. `runningScore` is the generic
+    /// incrementing score; the others need their own scoring screen because the
+    /// result is not a number that only goes up.
+    enum ScoreModel {
+        case runningScore
+        case sets        // volleyball: match decided by sets won
+        case matches     // tennis: decided by individual matches
+        case dualMeet    // wrestling: points by result type per weight class
+        case meetPlaces  // swimming, track, gymnastics: placings/score sums
+        case judged      // cheer, dance: no live score at all
+        case holes       // golf
+    }
+
+    static func scoreModel(for sportId: String) -> ScoreModel {
+        switch sportId {
+        case "golf": return .holes
+        case "volleyball": return .sets
+        case "tennis": return .matches
+        case "wrestling": return .dualMeet
+        case "swimming", "gymnastics", "track_field", "cross_country": return .meetPlaces
+        case "cheerleading", "dance": return .judged
+        default: return .runningScore
+        }
+    }
+
     static let definitions: [String: SportDefinition] = [
         "football": SportDefinition(
             sportId: "football",

@@ -32,6 +32,9 @@ model the sports need.
 | Softball | none | 1 | same as baseball | ✅ |
 | Soccer | 2 × 40 | 1 | goals | ✅ |
 | Lacrosse | 4 × 12 | 1 | goals/assists etc. | ✅ |
+| Field hockey | 4 × 15 | 1 | goals, assists, saves, cards | ✅ |
+| Ice hockey | 3 × 17 | 1 | goals, assists, saves, PIM | ✅ |
+| Water polo | 4 × 7 | 1 | goals, assists, steals, saves, exclusions | ✅ |
 | Golf | n/a | hole-by-hole | strokes | ✅ dedicated view |
 | Bowling | none | 1 | — | ⚠️ pinfall per game not modelled |
 | **Volleyball** | none | 1 | — | ⚠️ **scored as points, but a match is decided by sets won** (best of 3/5), each with its own score |
@@ -44,15 +47,20 @@ model the sports need.
 
 ## 3. What is actually wrong
 
-1. **One score model for fourteen sports.** "Increment a number" is right for
-   football, basketball, soccer, lacrosse, hockey, water polo, baseball, softball.
-   It is wrong for the six sports whose result is *sets*, *matches*, *dual meets*,
-   *meets*, *apparatus totals*, or a *judged placement*.
-2. **Three sports have a clock but no definition** (`field_hockey`,
-   `ice_hockey`, `water_polo`). They silently get one stat and a +1 button.
-3. **Two sports should not be live-scored at all.** Cheer and dance are judged;
+> **Correction.** An earlier revision of this section claimed that
+> `field_hockey`, `ice_hockey` and `water_polo` had a clock but no stat
+> definition. That was wrong — it came from a grep pattern that excluded
+> identifiers containing underscores. All three do have positions, stats and
+> score buttons, and all eighteen defined sports are complete on that axis.
+
+1. **One score model for eighteen sports.** "Increment a number" is right for
+   football, basketball, soccer, lacrosse, field hockey, ice hockey, water polo,
+   baseball, softball and bowling. It is wrong for the six sports whose result is
+   *sets*, *matches*, *dual meets*, *meets*, *apparatus totals*, or a *judged
+   placement*.
+2. **Two sports should not be live-scored at all.** Cheer and dance are judged;
    publishing a score is worse than publishing nothing.
-4. **Missing sports**: track & field, cross country, competitive cheer, esports.
+3. **Missing sports**: track & field, cross country, competitive cheer, esports.
 
 ## 4. Recommended shape
 
@@ -95,11 +103,24 @@ gameStatisticianRequests/{gameId}
 Deliberately scoped to one game, not a season: a parent volunteer should not
 inherit standing access to every future game.
 
-## 6. Priority
+## 6. Status and priority
 
-1. **Statistician request/claim** — turns "every team can be scored" into reality
-   for schools with no dedicated staff. Highest practical value.
-2. **Volleyball sets** — most-played sport with a wrong score model.
-3. **`judged` for cheer/dance** — currently offers a misleading live score.
-4. **Fill the three clock-only sports.**
-5. Tennis / wrestling / swimming models.
+Implemented:
+
+- **Statistician request/claim** — a coach opens a request for one game; a parent
+  or student on the team claims it. The grant is per game
+  (`games/{gameId}/scorers/{uid}`), never a staff role, so helping once does not
+  confer season-long access. Audited on request, claim, release and cancel.
+- **Volleyball sets** — dedicated set-by-set scorer; the match score is sets won
+  and the game goes final at three.
+- **Judged for cheer/dance** — the misleading live score is gone; only the result
+  is recorded.
+- **Explicit `scoreModel` per sport** with routing in `ScoringView`. This is the
+  extension point for everything below.
+
+Still to build, in order:
+
+1. **Tennis** (`matches`) — singles/doubles lines, team score = matches won.
+2. **Wrestling** (`dualMeet`) — weight classes, points by result type.
+3. **Swimming / track / gymnastics** (`meetPlaces`) — events and placings.
+4. **Missing sports**: track & field, cross country, competitive cheer, esports.

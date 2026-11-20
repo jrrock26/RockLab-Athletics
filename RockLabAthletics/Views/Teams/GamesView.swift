@@ -7,9 +7,67 @@ struct GamesView: View {
     @State private var vm = StatsViewModel()
     @State private var showingAdd = false
     @State private var access = TeamAccess()
+    @State private var scorerRequests: [GameStatisticianRequest] = []
+    @State private var scorerBusy = ""
+    @State private var scorerError = ""
+
+    private var openRequests: [GameStatisticianRequest] {
+        scorerRequests.filter { $0.status == "open" }
+    }
+
+    /// Games this user is personally scoring (a per-game grant, not staff).
+    private var myClaims: [GameStatisticianRequest] {
+        scorerRequests.filter { $0.status == "filled" && $0.filledBy == (auth.user?.id ?? "") }
+    }
 
     var body: some View {
         List {
+            if !openRequests.isEmpty || !myClaims.isEmpty {
+                Section("Scoring help") {
+                    ForEach(openRequests) { req in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(req.isHome ? "vs" : "@") \(req.opponent)")
+                                    .font(.subheadline.weight(.semibold))
+                                Text("Needs a statistician")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+                            Spacer()
+                            if scorerBusy == req.id {
+                                ProgressView()
+                            } else {
+                                Button("I'll run it") { Task { await claim(req) } }
+                                    .font(.caption.bold())
+                                    .buttonStyle(.borderless)
+                            }
+                        }
+                    }
+                    ForEach(myClaims) { req in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(req.isHome ? "vs" : "@") \(req.opponent)")
+                                    .font(.subheadline.weight(.semibold))
+                                Text("You're scoring this game")
+                                    .font(.caption)
+                                    .foregroundStyle(.green)
+                            }
+                            Spacer()
+                            Button("Release") { Task { await release(req) } }
+                                .font(.caption)
+                                .buttonStyle(.borderless)
+                                .disabled(!scorerBusy.isEmpty)
+                        }
+                    }
+                }
+            }
+
+            if !scorerError.isEmpty {
+                Section {
+                    Text(scorerError).font(.footnote).foregroundStyle(.red)
+                }
+            }
+
             if vm.games.isEmpty {
                 Section {
                     Text(access.canManageTeam ? "No games yet. Tap + to schedule one." : "No games scheduled.")
@@ -22,6 +80,16 @@ struct GamesView: View {
                             ScoringView(game: game, teamId: teamId, sportId: sportId, vm: vm)
                         } label: {
                             GameRow(game: game)
+                        }
+                        .swipeActions(edge: .trailing) {
+                            if access.canManageTeam && game.status != .final {
+                                Button {
+                                    Task { await askForScorer(game) }
+                                } label: {
+                                    Label("Ask for a scorer", systemImage: "person.badge.clock")
+                                }
+                                .tint(.orange)
+                            }
                         }
                     }
                 }
@@ -46,7 +114,50 @@ struct GamesView: View {
         .task {
             await vm.loadGames(teamId: teamId)
             access = await FirestoreService.shared.teamAccess(teamId: teamId, userId: auth.user?.id, isAd: auth.user?.role == .ad)
+            await loadScorerRequests()
         }
+    }
+
+    // MARK: - Statistician help
+
+    private func loadScorerRequests() async {
+        scorerRequests = (try? await FirestoreService.shared.fetchStatisticianRequests(teamId: teamId)) ?? []
+    }
+
+    private func askForScorer(_ game: Game) async {
+        scorerBusy = game.id
+        scorerError = ""
+        do {
+            _ = try await FunctionsService.shared.requestGameStatistician(gameId: game.id)
+            await loadScorerRequests()
+        } catch {
+            scorerError = error.localizedDescription
+        }
+        scorerBusy = ""
+    }
+
+    private func claim(_ request: GameStatisticianRequest) async {
+        scorerBusy = request.id
+        scorerError = ""
+        do {
+            _ = try await FunctionsService.shared.claimGameStatistician(requestId: request.id)
+            await loadScorerRequests()
+        } catch {
+            scorerError = error.localizedDescription
+        }
+        scorerBusy = ""
+    }
+
+    private func release(_ request: GameStatisticianRequest) async {
+        scorerBusy = request.id
+        scorerError = ""
+        do {
+            _ = try await FunctionsService.shared.releaseGameStatistician(requestId: request.id)
+            await loadScorerRequests()
+        } catch {
+            scorerError = error.localizedDescription
+        }
+        scorerBusy = ""
     }
 }
 

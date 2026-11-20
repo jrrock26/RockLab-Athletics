@@ -8,6 +8,7 @@ struct LiveScoringView: View {
     let vm: StatsViewModel
     @State private var selectedPlayer: RosterEntry?
     @State private var access = TeamAccess()
+    @State private var isGameScorer = false
     @State private var clockRemaining = 0
     @State private var clockRunning = false
     private let clockTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -15,7 +16,7 @@ struct LiveScoringView: View {
     private var definition: SportDefinition { SportDefinitions.definition(for: sportId) }
 
     private var canScore: Bool {
-        access.canManageTeam || access.hasPerm(.statistician)
+        access.canManageTeam || access.hasPerm(.statistician) || isGameScorer
     }
 
     var body: some View {
@@ -99,6 +100,10 @@ struct LiveScoringView: View {
             await vm.beginGame(game, teamId: teamId)
             vm.watchGame(gameId: game.id)
             access = await FirestoreService.shared.teamAccess(teamId: teamId, userId: auth.user?.id, isAd: auth.user?.role == .ad)
+            // A volunteer who claimed this game holds a per-game grant.
+            if let uid = auth.user?.id {
+                isGameScorer = await FirestoreService.shared.isGameScorer(gameId: game.id, userId: uid)
+            }
         }
         .onAppear {
             if let clock = SportDefinitions.clock(for: sportId) {
