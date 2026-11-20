@@ -11,6 +11,7 @@ struct SignUpView: View {
     @State private var phone = ""
     @State private var role: UserRole = .follower
     @State private var isWorking = false
+    @State private var formError = ""
 
     var body: some View {
         VStack(spacing: 12) {
@@ -23,30 +24,30 @@ struct SignUpView: View {
             TextField("Full name", text: $name)
                 .textContentType(.name)
                 .padding()
-                .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
 
             TextField("Email", text: $email)
                 .textInputAutocapitalization(.never)
                 .keyboardType(.emailAddress)
                 .textContentType(.emailAddress)
                 .padding()
-                .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
 
             SecureField("Password (6+ characters)", text: $password)
                 .textContentType(.newPassword)
                 .padding()
-                .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
 
             TextField("Zip code (optional)", text: $zipCode)
                 .keyboardType(.numberPad)
                 .padding()
-                .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
 
             TextField("Phone number (for emergency contact)", text: $phone)
                 .keyboardType(.phonePad)
                 .textContentType(.telephoneNumber)
                 .padding()
-                .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
 
             HStack {
                 Text("I am a").foregroundStyle(.secondary)
@@ -60,9 +61,9 @@ struct SignUpView: View {
                 .tint(.primary)
             }
             .padding()
-            .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+            .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
 
-            if let error = auth.errorMessage {
+            if let error = errorText {
                 Text(error)
                     .font(.footnote)
                     .foregroundStyle(.red)
@@ -73,22 +74,36 @@ struct SignUpView: View {
                 Task { await signUp() }
             } label: {
                 if isWorking {
-                    ProgressView().frame(maxWidth: .infinity).padding()
+                    ProgressView().tint(.white)
                 } else {
-                    Text("Sign Up").fontWeight(.semibold).frame(maxWidth: .infinity).padding()
+                    Text("Sign Up")
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(name.isEmpty || email.isEmpty || password.count < 6 || isWorking)
+            .buttonStyle(PrimaryAuthButtonStyle())
 
             Button("Already have an account? Sign in", action: onSignIn)
                 .font(.footnote)
         }
-        .padding(24)
-        .frame(maxWidth: 420)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var errorText: String? {
+        if !formError.isEmpty { return formError }
+        return auth.errorMessage
+    }
+
+    private var canSubmit: Bool {
+        !name.isEmpty && !email.isEmpty && password.count >= 6 && !isWorking
     }
 
     private func signUp() async {
+        guard canSubmit else {
+            formError = password.count < 6 && !password.isEmpty
+                ? "Password must be at least 6 characters."
+                : "Enter your name, email, and a password of 6+ characters."
+            return
+        }
+        formError = ""
         isWorking = true
         await auth.signUp(email: email, password: password, name: name, role: role, zipCode: zipCode, phone: phone)
         isWorking = false

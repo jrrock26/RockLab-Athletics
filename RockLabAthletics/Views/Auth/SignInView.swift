@@ -8,6 +8,7 @@ struct SignInView: View {
     @State private var password = ""
     @State private var isWorking = false
     @State private var showingForgotPassword = false
+    @State private var formError = ""
 
     var body: some View {
         VStack(spacing: 12) {
@@ -22,14 +23,16 @@ struct SignInView: View {
                 .keyboardType(.emailAddress)
                 .textContentType(.emailAddress)
                 .padding()
-                .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
 
             SecureField("Password", text: $password)
                 .textContentType(.password)
+                .submitLabel(.go)
+                .onSubmit { Task { await signIn() } }
                 .padding()
-                .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
 
-            if let error = auth.errorMessage {
+            if let error = errorText {
                 Text(error)
                     .font(.footnote)
                     .foregroundStyle(.red)
@@ -40,13 +43,12 @@ struct SignInView: View {
                 Task { await signIn() }
             } label: {
                 if isWorking {
-                    ProgressView().frame(maxWidth: .infinity).padding()
+                    ProgressView().tint(.white)
                 } else {
-                    Text("Sign In").fontWeight(.semibold).frame(maxWidth: .infinity).padding()
+                    Text("Sign In")
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(email.isEmpty || password.isEmpty || isWorking)
+            .buttonStyle(PrimaryAuthButtonStyle())
 
             Button("Forgot password?") { showingForgotPassword = true }
                 .font(.footnote)
@@ -54,14 +56,29 @@ struct SignInView: View {
             Button("Don't have an account? Sign up", action: onSignUp)
                 .font(.footnote)
         }
-        .padding(24)
-        .frame(maxWidth: 420)
+        .frame(maxWidth: .infinity)
         .sheet(isPresented: $showingForgotPassword) {
             ForgotPasswordView(prefilledEmail: email)
         }
     }
 
+    /// Local validation takes precedence over the view model's auth error, so a
+    /// stale "wrong password" doesn't sit under an empty form.
+    private var errorText: String? {
+        if !formError.isEmpty { return formError }
+        return auth.errorMessage
+    }
+
+    private var canSubmit: Bool {
+        !email.isEmpty && !password.isEmpty && !isWorking
+    }
+
     private func signIn() async {
+        guard canSubmit else {
+            formError = "Enter your email and password to sign in."
+            return
+        }
+        formError = ""
         isWorking = true
         await auth.signIn(email: email, password: password)
         isWorking = false

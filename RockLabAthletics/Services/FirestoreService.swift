@@ -104,7 +104,9 @@ struct FirestoreService {
         let ref = db.collection("invitations").document()
         let code = randomCode()
         var data: [String: Any] = [
-            "email": email,
+            // Stored normalized: invitations are matched by exact string match
+            // against the account email, so casing must agree on both sides.
+            "email": email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
             "role": role.rawValue,
             "schoolId": schoolId,
             "schoolName": schoolName,
@@ -128,8 +130,11 @@ struct FirestoreService {
     }
 
     func fetchInvitationsByEmail(email: String) async throws -> [Invitation] {
+        // Bulk imports store invitations lowercased; query the same way or a
+        // parent who signed up with capitals silently sees none of them.
+        let normalized = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let snapshot = try await db.collection("invitations")
-            .whereField("email", isEqualTo: email)
+            .whereField("email", isEqualTo: normalized)
             .getDocuments()
         return snapshot.documents.compactMap { Invitation(id: $0.documentID, data: $0.data()) }
     }

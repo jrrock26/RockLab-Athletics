@@ -6,6 +6,111 @@ const crypto = require('crypto');
 admin.initializeApp();
 
 // ---------------------------------------------------------------------------
+// Shared: transactional email, invitation links, and the audit trail.
+//
+// Email is configured by environment, never by code:
+//   1. RESEND_API_KEY (+ RESEND_FROM)      — preferred
+//   2. SMTP_HOST / SMTP_USER / SMTP_PASS   — fallback
+//
+// If neither is set, invitations are STILL usable: every invitation carries a
+// shareable link the AD can paste into whatever channel the school already
+// uses. We record the true delivery state instead of pretending an email went
+// out, because "silently not invited" is the failure mode that kills adoption.
+// ---------------------------------------------------------------------------
+const WEB_BASE = process.env.PUBLIC_WEB_BASE || 'https://rocklab-athletics.web.app';
+
+function emailConfigured() {
+  const { RESEND_API_KEY, SMTP_HOST, SMTP_USER, SMTP_PASS } = process.env;
+  return !!(RESEND_API_KEY || (SMTP_HOST && SMTP_USER && SMTP_PASS));
+}
+
+function inviteLink(invitation) {
+  const email = encodeURIComponent(String((invitation && invitation.email) || ''));
+  const code = encodeURIComponent(String((invitation && invitation.code) || ''));
+  return `${WEB_BASE}/invite/?email=${email}&code=${code}`;
+}
+
+async function sendEmail({ to, subject, text, html }) {
+  const { RESEND_API_KEY, RESEND_FROM, SMTP_HOST, SMTP_USER, SMTP_PASS } = process.env;
+
+  if (RESEND_API_KEY) {
+    try {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: RESEND_FROM || 'RockLab Athletics <invites@rocklabathletics.com>',
+          to: [to],
+          subject,
+          text,
+          ...(html ? { html } : {}),
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        return { ok: false, provider: 'resend', error: String(body).slice(0, 300) };
+      }
+      return { ok: true, provider: 'resend' };
+    } catch (err) {
+      return { ok: false, provider: 'resend', error: String(err).slice(0, 300) };
+    }
+  }
+
+  if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
+    try {
+      const transporter = nodemailer.createTransport({
+        host: SMTP_HOST,
+        port: Number(process.env.SMTP_PORT || 587),
+        secure: false,
+        auth: { user: SMTP_USER, pass: SMTP_PASS },
+      });
+      await transporter.sendMail({
+        from: process.env.SMTP_FROM || SMTP_USER,
+        to,
+        subject,
+        text,
+        ...(html ? { html } : {}),
+      });
+      return { ok: true, provider: 'smtp' };
+    } catch (err) {
+      return { ok: false, provider: 'smtp', error: String(err).slice(0, 300) };
+    }
+  }
+
+  return { ok: false, provider: 'none', error: 'No email provider configured.' };
+}
+
+// Append-only audit trail. Written only from Cloud Functions via the Admin SDK,
+// so a client can neither forge an entry nor erase one. firestore.rules denies
+// all client writes to `auditLogs`, and nothing in this file ever updates or
+// deletes a log document once written.
+async function writeAudit({
+  schoolId = '', actorId = '', actorName = '', actorRole = '',
+  action, targetType = '', targetId = '', detail = '',
+}) {
+  try {
+    await admin.firestore().collection('auditLogs').add({
+      schoolId: schoolId || null,
+      actorId: actorId || null,
+      actorName: actorName || '',
+      actorRole: actorRole || '',
+      action: String(action || ''),
+      targetType: targetType || '',
+      targetId: targetId || '',
+      detail: String(detail || '').slice(0, 500),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (err) {
+    // Auditing must never break the operation it describes.
+    console.error('[audit] write failed', action, err);
+  }
+}
+
+
+// ---------------------------------------------------------------------------
 // 1. Sync the user's role from Firestore `users/{userId}.role` into their
 //    Firebase Auth custom claim, so security rules can trust the token.
 // ---------------------------------------------------------------------------
@@ -325,6 +430,13 @@ exports.assignTeamRole = functions.https.onCall(async (data, context) => {
 
   await admin.auth().setCustomUserClaims(targetUid, { role });
   console.log(`[assign] ${callerId} assigned ${targetUid} as ${role} on team ${teamId}`);
+  await writeAudit({
+    actorId: callerId,
+    action: 'role.assigned',
+    targetType: 'user',
+    targetId: targetUid,
+    detail: `${role} on team ${teamId}`,
+  });
   return { ok: true, teamId, targetUid, role };
 });
 
@@ -340,44 +452,65 @@ exports.onInvitationCreated = functions.firestore
     const schoolName = inv.schoolName || 'your school';
     const role = inv.role || 'coach';
 
-    const { SMTP_HOST, SMTP_USER, SMTP_PASS } = process.env;
-    if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
-      // Fail loudly in the record instead of silently pretending the invite was emailed.
-      console.warn(`[invite] SMTP not configured — invitation for ${email} was created but NOT emailed.`);
-      await snap.ref.set({
-        deliveryStatus: 'not_configured',
-        deliveryNote: 'SMTP is not configured; the invitation exists in-app only.',
-      }, { merge: true });
-      return null;
-    }
+    const link = inviteLink(inv);
+    // The link is stored regardless of email, so the AD always has a fallback
+    // channel: paste it into the school's existing email blast, a text, a flyer.
+    await snap.ref.set({ inviteUrl: link }, { merge: true });
 
-    const transporter = nodemailer.createTransport({
-      host: SMTP_HOST,
-      port: Number(process.env.SMTP_PORT || 587),
-      secure: false,
-      auth: { user: SMTP_USER, pass: SMTP_PASS },
+    const sent = await sendEmail({
+      to: email,
+      subject: `You've been invited to ${schoolName} on RockLab Athletics`,
+      text: [
+        `You've been invited as a ${role} for ${schoolName} on RockLab Athletics.`,
+        '',
+        'To accept:',
+        `1. Install RockLab Athletics: ${WEB_BASE}`,
+        '2. Sign up using this exact email address.',
+        '',
+        `Invitation link: ${link}`,
+        `Invitation code: ${inv.code || '(none)'}`,
+      ].join('\n'),
+      html: [
+        `<p>You've been invited as a <strong>${role}</strong> for <strong>${schoolName}</strong> on RockLab Athletics.</p>`,
+        `<p><a href="${link}">Open your invitation</a></p>`,
+        `<p>Sign up using this exact email address (${email}) to see it in the app.</p>`,
+        `<p style="color:#666;font-size:12px">Invitation code: ${inv.code || '(none)'}</p>`,
+      ].join(''),
     });
 
-    try {
-      await transporter.sendMail({
-        from: SMTP_USER,
-        to: email,
-        subject: `You've been invited to ${schoolName} on RockLab Athletics`,
-        text: [
-          `You've been invited as a ${role} for ${schoolName} on RockLab Athletics.`,
-          '',
-          'Download the app and sign up with this email address to accept the invitation.',
-        ].join('\n'),
-      });
-      await snap.ref.set({ deliveryStatus: 'sent' }, { merge: true });
-      console.log(`[invite] email sent to ${email}`);
-    } catch (err) {
-      console.error(`[invite] send failed for ${email}`, err);
+    if (sent.ok) {
+      await snap.ref.set({
+        deliveryStatus: 'sent',
+        deliveryProvider: sent.provider,
+        deliveredAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      console.log(`[invite] sent to ${email} via ${sent.provider}`);
+    } else if (sent.provider === 'none') {
+      // Not an error: the invitation is fully usable, it just needs a manual
+      // channel. Surfaced in the console so the AD knows to copy the link.
+      console.warn(`[invite] no email provider; ${email} must be invited via the shareable link.`);
+      await snap.ref.set({
+        deliveryStatus: 'not_configured',
+        deliveryNote: 'No email provider configured. Copy the invite link and send it directly.',
+      }, { merge: true });
+    } else {
+      console.error(`[invite] send failed for ${email}`, sent.error);
       await snap.ref.set({
         deliveryStatus: 'failed',
-        deliveryNote: String(err && err.message ? err.message : err).slice(0, 300),
+        deliveryNote: sent.error,
       }, { merge: true });
     }
+
+    await writeAudit({
+      schoolId: inv.schoolId || '',
+      actorId: inv.invitedBy || '',
+      actorName: inv.invitedByName || '',
+      action: 'invite.created',
+      targetType: 'invitation',
+      targetId: snap.id,
+      detail: `${email} as ${role}${inv.teamName ? ` (${inv.teamName})` : ''}`,
+    });
+
     return null;
   });
 
@@ -1811,8 +1944,9 @@ exports.bulkInviteParents = functions.https.onCall(async (data, context) => {
     if (!validEmail(email)) { invalid.push({ email: email, reason: 'invalid_email' }); continue; }
     if (already.has(email)) { skipped.push({ email: email, reason: 'already_invited' }); continue; }
 
+    const code = inviteCode();
     const ref = db.collection('invitations').doc();
-    await ref.set({
+    const inviteDoc = {
       email: email,
       role: 'parent',
       schoolId: schoolId,
@@ -1821,13 +1955,17 @@ exports.bulkInviteParents = functions.https.onCall(async (data, context) => {
       teamId: teamId,
       teamName: teamName,
       rosterEntryId: rosterEntryId,
-      code: inviteCode(),
+      code: code,
       status: 'pending',
       invitedBy: callerId,
       invitedByName: caller.name || '',
-      deliveryStatus: process.env.SMTP_HOST ? 'pending' : 'not_configured',
+      deliveryStatus: emailConfigured() ? 'pending' : 'not_configured',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    };
+    // Always store the link, even when email is configured: it is the fallback
+    // the AD can hand to a parent standing in front of them.
+    inviteDoc.inviteUrl = inviteLink(inviteDoc);
+    await ref.set(inviteDoc);
 
     if (rosterEntryId) {
       try {
@@ -1839,18 +1977,243 @@ exports.bulkInviteParents = functions.https.onCall(async (data, context) => {
     }
 
     already.add(email);
-    created.push({ email: email, invitationId: ref.id });
+    created.push({ email: email, invitationId: ref.id, inviteUrl: inviteDoc.inviteUrl });
   }
+
+  const configured = emailConfigured();
+  await writeAudit({
+    schoolId: schoolId,
+    actorId: callerId,
+    actorName: caller.name || '',
+    actorRole: caller.role || '',
+    action: 'invite.bulk_created',
+    targetType: 'team',
+    targetId: teamId,
+    detail: `${created.length} parent invitation(s) for ${teamName || teamId}${configured ? '' : ' (email not configured — links issued)'}`,
+  });
 
   return {
     created: created.length,
     skipped: skipped.length,
     invalid: invalid.length,
     details: { created: created, skipped: skipped, invalid: invalid },
-    emailConfigured: !!process.env.SMTP_HOST,
+    // Every created invitation's copy-ready link, so the console can hand them
+    // back even when no email provider is configured.
+    links: created,
+    emailConfigured: configured,
   };
 });
 
+
+// ---------------------------------------------------------------------------
+// Resend a single invitation. The AD/coach can retry without re-typing the
+// address, and always gets the shareable link back even if email is down.
+// ---------------------------------------------------------------------------
+exports.resendInvitation = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const invitationId = data && data.invitationId ? String(data.invitationId) : '';
+  if (!invitationId) {
+    throw new functions.https.HttpsError('invalid-argument', 'invitationId is required.');
+  }
+
+  const db = admin.firestore();
+  const ref = db.collection('invitations').doc(invitationId);
+  const snap = await ref.get();
+  if (!snap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Invitation not found.');
+  }
+
+  const inv = snap.data() || {};
+  const caller = await userProfile(db, context.auth.uid);
+  let teamRole = null;
+  if (inv.teamId) {
+    const memSnap = await db.collection('teams').doc(inv.teamId).collection('members').doc(context.auth.uid).get();
+    teamRole = memSnap.exists ? memSnap.get('role') : null;
+  }
+  if (caller.role !== 'ad' && teamRole !== 'coach' && teamRole !== 'staff') {
+    throw new functions.https.HttpsError('permission-denied', 'You cannot resend this invitation.');
+  }
+  if (inv.status && inv.status !== 'pending') {
+    throw new functions.https.HttpsError('failed-precondition', `Invitation is already ${inv.status}.`);
+  }
+
+  const link = inviteLink(inv);
+  const schoolSnap = inv.schoolId ? await db.collection('schools').doc(inv.schoolId).get() : null;
+  const schoolName = (schoolSnap && schoolSnap.exists && schoolSnap.get('name')) || inv.schoolName || 'your school';
+
+  const sent = await sendEmail({
+    to: inv.email,
+    subject: `You've been invited to ${schoolName} on RockLab Athletics`,
+    text: [
+      `You've been invited to ${schoolName} on RockLab Athletics.`,
+      '',
+      'To accept:',
+      `1. Install RockLab Athletics: ${WEB_BASE}`,
+      '2. Sign up using this exact email address.',
+      '',
+      `Invitation link: ${link}`,
+      `Invitation code: ${inv.code || '(none)'}`,
+    ].join('\n'),
+    html: [
+      `<p>You've been invited to <strong>${schoolName}</strong> on RockLab Athletics.</p>`,
+      `<p><a href="${link}">Open your invitation</a></p>`,
+      `<p>Sign up using this exact email address (${inv.email}) to see it in the app.</p>`,
+    ].join(''),
+  });
+
+  const deliveryStatus = sent.ok ? 'sent' : (sent.provider === 'none' ? 'not_configured' : 'failed');
+  await ref.set({
+    inviteUrl: link,
+    deliveryStatus: deliveryStatus,
+    deliveryProvider: sent.ok ? sent.provider : admin.firestore.FieldValue.delete(),
+    deliveryNote: sent.ok ? admin.firestore.FieldValue.delete() : sent.error,
+    lastSentAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  await writeAudit({
+    schoolId: inv.schoolId || caller.schoolId || '',
+    actorId: context.auth.uid,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'invite.resent',
+    targetType: 'invitation',
+    targetId: invitationId,
+    detail: `${inv.email} -> ${deliveryStatus}`,
+  });
+
+  return { ok: sent.ok, deliveryStatus: deliveryStatus, inviteUrl: link };
+});
+
+// ---------------------------------------------------------------------------
+// Record access to a protected record (medical info, forms, injury detail).
+//
+// Firestore cannot audit reads, so the client calls this whenever staff open a
+// protected record. Server-validated and append-only. Documented honestly in
+// docs/COMPLIANCE-READINESS.md: this is an application-level trail, not a
+// database-level guarantee, and it is deliberately staff-only.
+// ---------------------------------------------------------------------------
+exports.recordAccess = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const payload = data || {};
+  const targetType = payload.targetType ? String(payload.targetType) : '';
+  if (!targetType) {
+    throw new functions.https.HttpsError('invalid-argument', 'targetType is required.');
+  }
+  const action = ['view', 'download', 'print'].includes(payload.action) ? payload.action : 'view';
+
+  const db = admin.firestore();
+  const caller = await userProfile(db, context.auth.uid);
+  if (!caller.exists) {
+    throw new functions.https.HttpsError('permission-denied', 'No profile.');
+  }
+  if (!['ad', 'coach', 'staff'].includes(caller.role)) {
+    throw new functions.https.HttpsError('permission-denied', 'Staff only.');
+  }
+
+  await writeAudit({
+    schoolId: payload.schoolId || caller.schoolId || '',
+    actorId: context.auth.uid,
+    actorName: caller.name,
+    actorRole: caller.role,
+    action: `record.${action}`,
+    targetType: targetType,
+    targetId: payload.targetId ? String(payload.targetId) : '',
+    detail: payload.detail ? String(payload.detail) : '',
+  });
+
+  return { ok: true };
+});
+
+// ---------------------------------------------------------------------------
+// Export a school's data. FERPA requires records stay accessible and portable:
+// a school must be able to leave without paying a ransom for its own roster.
+// Returns one JSON document the console downloads as a file.
+// ---------------------------------------------------------------------------
+exports.exportSchoolData = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+
+  const db = admin.firestore();
+  const caller = await userProfile(db, context.auth.uid);
+  const schoolId = (data && data.schoolId ? String(data.schoolId) : '') || caller.schoolId || '';
+  if (!schoolId) {
+    throw new functions.https.HttpsError('failed-precondition', 'No school on this account.');
+  }
+  if (caller.role !== 'ad' || caller.schoolId !== schoolId) {
+    throw new functions.https.HttpsError('permission-denied', "Only this school's AD can export.");
+  }
+
+  const schoolSnap = await db.collection('schools').doc(schoolId).get();
+  const teamsSnap = await db.collection('teams').where('schoolId', '==', schoolId).get();
+  const eventsSnap = await db.collection('events').where('schoolId', '==', schoolId).get();
+  const invitesSnap = await db.collection('invitations').where('schoolId', '==', schoolId).get();
+
+  const teams = [];
+  for (const teamDoc of teamsSnap.docs) {
+    const rosterSnap = await teamDoc.ref.collection('roster').get();
+    teams.push({
+      id: teamDoc.id,
+      sportName: teamDoc.get('sportName') || '',
+      level: teamDoc.get('level') || '',
+      season: teamDoc.get('season') || '',
+      roster: rosterSnap.docs.map((r) => ({
+        name: r.get('name') || '',
+        jersey: r.get('jersey') || '',
+        position: r.get('position') || '',
+        parentEmail: r.get('parentEmail') || '',
+      })),
+    });
+  }
+
+  const result = {
+    formatVersion: 1,
+    exportedAt: new Date().toISOString(),
+    exportedBy: context.auth.uid,
+    school: {
+      id: schoolId,
+      name: schoolSnap.exists ? (schoolSnap.get('name') || '') : '',
+    },
+    teams: teams,
+    events: eventsSnap.docs.map((e) => ({
+      teamId: e.get('teamId') || '',
+      title: e.get('title') || '',
+      type: e.get('type') || '',
+      startTime: e.get('startTime') ? e.get('startTime').toDate().toISOString() : null,
+      location: e.get('location') || '',
+    })),
+    invitations: invitesSnap.docs.map((i) => ({
+      email: i.get('email') || '',
+      role: i.get('role') || '',
+      teamName: i.get('teamName') || '',
+      status: i.get('status') || '',
+      deliveryStatus: i.get('deliveryStatus') || '',
+    })),
+    counts: {
+      teams: teamsSnap.size,
+      athletes: teams.reduce((n, t) => n + t.roster.length, 0),
+      events: eventsSnap.size,
+      invitations: invitesSnap.size,
+    },
+  };
+
+  await writeAudit({
+    schoolId: schoolId,
+    actorId: context.auth.uid,
+    actorName: caller.name,
+    actorRole: caller.role,
+    action: 'school.export',
+    targetType: 'school',
+    targetId: schoolId,
+    detail: `${result.counts.teams} teams, ${result.counts.athletes} athletes, ${result.counts.events} events`,
+  });
+
+  return result;
+});
 
 // ---------------------------------------------------------------------------
 // Entitlements & plans. Enforced server-side — the client read is for UI only.

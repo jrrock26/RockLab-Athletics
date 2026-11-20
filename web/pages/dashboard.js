@@ -9,6 +9,29 @@ export default function Dashboard() {
   const { loading, user, profile } = useAuth();
   const [teams, setTeams] = useState([]);
   const [entitlement, setEntitlement] = useState(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
+
+  async function exportData() {
+    setExporting(true);
+    setExportError('');
+    try {
+      const res = await httpsCallable(functions, 'exportSchoolData')({
+        schoolId: profile.schoolId,
+      });
+      const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `rocklab-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setExportError(err.message);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   useEffect(() => {
     if (!profile?.schoolId) return;
@@ -47,7 +70,12 @@ export default function Dashboard() {
       <nav className="row">
         <Link className="card link-card" href="/import">Import roster &amp; invite parents</Link>
         <Link className="card link-card" href="/reports">Reports</Link>
+        <Link className="card link-card" href="/audit">Audit log</Link>
+        <button className="card link-card" onClick={exportData} disabled={exporting}>
+          {exporting ? 'Preparing export…' : 'Export school data'}
+        </button>
       </nav>
+      {exportError && <p className="error">{exportError}</p>}
 
       <section className="card">
         <h2>Teams</h2>

@@ -25,6 +25,18 @@ export default function Import() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState('');
+
+  async function copy(text, marker) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      // Clipboard API needs a secure context; fall back to a prompt.
+      window.prompt('Copy this link', text);
+    }
+    setCopied(marker);
+    setTimeout(() => setCopied(''), 1500);
+  }
 
   useEffect(() => {
     if (!profile?.schoolId) return;
@@ -84,12 +96,64 @@ export default function Import() {
         </button>
         {error && <p className="error">{error}</p>}
         {result && (
-          <p className="ok">
-            {result.created} invitation(s) created
-            {result.skipped ? `, ${result.skipped} already invited` : ''}
-            {result.invalid ? `, ${result.invalid} invalid` : ''}.
-            {result.emailConfigured === false && ' Email delivery is not configured yet.'}
-          </p>
+          <>
+            <p className="ok">
+              {result.created} invitation(s) created
+              {result.skipped ? `, ${result.skipped} already invited` : ''}
+              {result.invalid ? `, ${result.invalid} invalid` : ''}.
+            </p>
+
+            {result.emailConfigured === false && (
+              <p className="muted small">
+                <strong>Email delivery isn&apos;t configured.</strong> The invitations
+                still work — copy the links below and send them however your school
+                already reaches parents. Nothing was lost.
+              </p>
+            )}
+
+            {result.links?.length > 0 && (
+              <>
+                <div className="row">
+                  <button
+                    onClick={() =>
+                      copy(
+                        result.links.map((l) => `${l.email}\t${l.inviteUrl}`).join('\n'),
+                        'all'
+                      )
+                    }
+                  >
+                    {copied === 'all' ? 'Copied all' : 'Copy all links'}
+                  </button>
+                </div>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Parent email</th>
+                      <th>Invite link</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.links.map((l) => (
+                      <tr key={l.invitationId}>
+                        <td className="small">{l.email}</td>
+                        <td className="small">
+                          <a href={l.inviteUrl} target="_blank" rel="noreferrer">
+                            {l.inviteUrl}
+                          </a>
+                        </td>
+                        <td>
+                          <button onClick={() => copy(l.inviteUrl, l.invitationId)}>
+                            {copied === l.invitationId ? 'Copied' : 'Copy'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </>
         )}
       </div>
     </main>
