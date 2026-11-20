@@ -90,3 +90,62 @@ enum AttendanceStatus: String, Codable, CaseIterable, Identifiable {
         }
     }
 }
+
+/// A guardian's "how is my athlete getting home" declaration for one event.
+///
+/// Choosing another parent from the team list IS the consent — there is no
+/// separate authorised-adult registry. Carpooling between parents on the same
+/// team is normal, so the picker is the whole authorisation.
+struct ReleasePlan: Identifiable, Equatable {
+    /// The roster entry id.
+    var id: String
+    var athleteName: String
+    /// bus | me | other_parent | not_attending
+    var homeWith: String
+    var pickupUserId: String
+    var pickupName: String
+    var declaredByName: String
+    var declaredAtMs: Double
+
+    var isDeclared: Bool { !homeWith.isEmpty }
+
+    var summary: String {
+        switch homeWith {
+        case "bus": return "Riding the bus home"
+        case "me": return "Picked up by \(declaredByName.isEmpty ? "guardian" : declaredByName)"
+        case "other_parent":
+            return "Riding home with \(pickupName.isEmpty ? "another parent" : pickupName)"
+        case "not_attending": return "Not attending"
+        default: return "No plan yet"
+        }
+    }
+
+    init(id: String,
+         athleteName: String,
+         homeWith: String,
+         pickupUserId: String = "",
+         pickupName: String = "",
+         declaredByName: String = "",
+         declaredAtMs: Double = 0) {
+        self.id = id
+        self.athleteName = athleteName
+        self.homeWith = homeWith
+        self.pickupUserId = pickupUserId
+        self.pickupName = pickupName
+        self.declaredByName = declaredByName
+        self.declaredAtMs = declaredAtMs
+    }
+
+    init?(id: String, data: [String: Any]) {
+        let home = data["homeWith"] as? String ?? ""
+        guard !home.isEmpty else { return nil }
+        self.id = id
+        self.athleteName = data["athleteName"] as? String ?? ""
+        self.homeWith = home
+        self.pickupUserId = data["pickupUserId"] as? String ?? ""
+        self.pickupName = data["pickupName"] as? String ?? ""
+        self.declaredByName = data["declaredByName"] as? String ?? ""
+        self.declaredAtMs = data["declaredAtMs"] as? Double ?? 0
+    }
+}
+

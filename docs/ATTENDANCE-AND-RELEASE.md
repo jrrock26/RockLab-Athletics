@@ -50,6 +50,18 @@ should see *Travel & pickup*, not *Attendance*.
 - **Saved list plus per-game selection.** Guardians maintain an authorised-adult
   list (name, relationship, phone); for a given game they select from it. Ad-hoc
   text messages must not be the system of record.
+
+  **Revised per product owner (2026-11-20):** no separate registry. Parents on the
+  same team routinely carpool, so the guardian simply picks **another parent from
+  the team list**, and that selection *is* the consent. The app stores
+  `declaredByUserId` + a timestamp as the consent record. Simpler for parents and
+  it matches existing behaviour; the trade-off is that consent is per game rather
+  than standing, which is arguably safer anyway.
+
+  Implementation note: the picker is built from the roster's `parentName` values,
+  not the team member list. Team membership documents are not readable by parents
+  (that rule protects every member's email), and the roster is already the team's
+  parent directory.
 - **Every handoff is an immutable record**: athlete, event, released to, by whom,
   when, and which plan version was in force. This is what protects a coach.
 - **Staff-only visibility.** The manifest contains guardian phone numbers and
@@ -77,13 +89,14 @@ events/{eventId}/releases/{rosterEntryId}
   planVersionAtRelease, note
 ```
 
-Guardian-maintained list, school-scoped and athlete-scoped:
+No separate authorised-adult collection. The pickup target is stored as a name on
+the plan itself (`pickupName`), chosen from the roster's parent names. That keeps
+the consent explicit and per-game, and avoids a standing permission that a parent
+forgets they granted.
 
-```
-teams/{teamId}/authorizedAdults/{adultId}
-  name, relationship, phone, addedByUserId, addedAt, active
-  authorizedForRosterEntryIds: [ ... ]   // explicit per athlete
-```
+Status: **Phase 1 implemented** as described above (guardian sets a plan per
+athlete per event; staff see a manifest with "No plan" flags). The
+handoff-confirmation record and the offline queue below are not built yet.
 
 ## 5. Enforcement, not just UI
 
@@ -125,8 +138,8 @@ worth solving once, properly.
 
 | Phase | Scope | Why this order |
 | --- | --- | --- |
-| **1** | Per-athlete travel/release plan for events; coach manifest with *no plan* flags | Delivers the core safety value with no third-party authorisation complexity |
-| **2** | Authorised-adult list + per-game selection + coach confirmation with immutable release record | The full handoff chain |
+| **1** ✅ | Per-athlete travel/release plan for events; guardian picks bus / self / another parent from the team list; coach manifest with *no plan* flags | Delivers the core safety value with no third-party registry |
+| **2** | Coach handoff confirmation with an immutable release record | The full chain: who physically released the athlete, to whom, when |
 | **3** | Offline manifest + queued sync with device timestamps | Needed before a real Friday night |
 | **4** | Reconciliation counts (bus manifest vs pickups), guardian change notifications, 18+ self-release under district policy | Operational polish |
 
@@ -137,16 +150,14 @@ Phase 1 alone is useful; phases 1–3 are what make it trustworthy in the field.
 1. **Who may authorise a pickup — guardian only, or may an AD/staff member record a
    verbal authorisation?** Legally the guardian is the authority; practically,
    coaches get phone calls. I would implement guardian-only plus an audited AD
-   override, but this is your policy call.
-2. **Is there a saved "authorised adults" list, or per-game entry only?** A saved
-   list is far better operationally; per-game entry is safer against stale
-   authorisations.
-3. **May students drive themselves?** Many districts forbid it for underclassmen
+   override, but this is your policy call. (Phase 1 currently lets AD/coach write a
+   plan as well; that is the override path and should be audited explicitly.)
+2. **May students drive themselves?** Many districts forbid it for underclassmen
    and allow it for seniors with a signed form. This changes the `travelHome`
    options.
-4. **Does this apply to every event (practices too) or games and trips only?**
+3. **Does this apply to every event (practices too) or games and trips only?**
    Practices usually just need attendance, not release.
-5. **Retention**: how long does a release record need to be kept? This is an
+4. **Retention**: how long does a release record need to be kept? This is an
    insurance/legal question, not a technical one.
 
 ## 9. Non-goals

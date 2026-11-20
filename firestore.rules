@@ -48,6 +48,18 @@ service cloud.firestore {
         && (request.auth.uid == playerUid || linked.hasAny([playerUid]));
     }
 
+    /// The guardian of a specific athlete — linked to them, but NOT the athlete
+    /// themselves. A minor cannot authorise their own release.
+    function isGuardianOf(teamId, entryId) {
+      let entry = rosterEntryData(teamId, entryId);
+      let playerUid = entry != null && 'userId' in entry ? entry.userId : null;
+      let u = userData();
+      let linked = u != null && 'linkedPlayerIds' in u ? u.linkedPlayerIds : [];
+      return playerUid != null
+        && linked.hasAny([playerUid])
+        && request.auth.uid != playerUid;
+    }
+
     function isMemberRole(t) {
       return memberRole(t) in ['coach','staff','player','parent'];
     }
@@ -201,6 +213,23 @@ service cloud.firestore {
       match /attendance/{entryId} {
         allow read: if signedIn() && (isAd() || isCoachOf(eventTeam(eventId)) || staffHasPerm(eventTeam(eventId), 'attendance'));
         allow write: if signedIn() && (isAd() || isCoachOf(eventTeam(eventId)) || staffHasPerm(eventTeam(eventId), 'attendance'));
+      }
+
+      // Travel & pickup. A guardian declares how their own athlete is getting
+      // home; choosing another parent from the team list IS the consent, so no
+      // separate authorised-adult registry exists. Staff can read the manifest.
+      match /releasePlans/{entryId} {
+        allow read: if signedIn() && (
+          isAd()
+          || isCoachOf(eventTeam(eventId))
+          || staffHasPerm(eventTeam(eventId), 'attendance')
+          || isGuardianOf(eventTeam(eventId), entryId)
+        );
+        allow write: if signedIn() && (
+          isGuardianOf(eventTeam(eventId), entryId)
+          || isAd()
+          || isCoachOf(eventTeam(eventId))
+        );
       }
     }
 

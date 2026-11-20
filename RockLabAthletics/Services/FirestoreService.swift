@@ -1384,6 +1384,40 @@ struct FirestoreService {
         return snapshot.documents.compactMap { TeamMembership(id: $0.documentID, data: $0.data()) }
     }
 
+    // MARK: - Travel & pickup
+
+    func fetchReleasePlans(eventId: String) async throws -> [ReleasePlan] {
+        let snap = try await db.collection("events").document(eventId)
+            .collection("releasePlans").getDocuments()
+        return snap.documents.compactMap { ReleasePlan(id: $0.documentID, data: $0.data()) }
+    }
+
+    /// Declares how an athlete is getting home. Recording `declaredByUserId` and a
+    /// timestamp is what makes this the guardian's consent, including when they
+    /// name another parent.
+    func saveReleasePlan(eventId: String,
+                         rosterEntryId: String,
+                         athleteName: String,
+                         homeWith: String,
+                         pickupUserId: String = "",
+                         pickupName: String = "",
+                         declaredByUserId: String,
+                         declaredByName: String) async throws {
+        try await db.collection("events").document(eventId)
+            .collection("releasePlans").document(rosterEntryId)
+            .setData([
+                "eventId": eventId,
+                "rosterEntryId": rosterEntryId,
+                "athleteName": athleteName,
+                "homeWith": homeWith,
+                "pickupUserId": pickupUserId,
+                "pickupName": pickupName,
+                "declaredByUserId": declaredByUserId,
+                "declaredByName": declaredByName,
+                "declaredAtMs": Date().timeIntervalSince1970 * 1000,
+            ], merge: true)
+    }
+
     func fetchMembership(teamId: String, userId: String) async throws -> TeamMembership? {
         let snapshot = try await db.collection("teams").document(teamId).collection("members").document(userId).getDocument()
         guard let data = snapshot.data() else { return nil }
