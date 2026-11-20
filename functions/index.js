@@ -1,6 +1,7 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 
 admin.initializeApp();
 
@@ -1588,6 +1589,18 @@ exports.deleteMyAccount = functions.https.onCall(async (data, context) => {
     await admin.storage().bucket().file(`users/${uid}/photo.jpg`).delete();
   } catch (e) { /* no photo */ }
 
+  // 4b. Delete every object this user owns in Storage (avatars, uploads, exports),
+  //     not just the one profile photo. App Store requires complete deletion.
+  try {
+    const [objects] = await admin.storage().bucket().getFiles({ prefix: `users/${uid}/` });
+    if (objects.length) {
+      await Promise.all(objects.map((f) => f.delete().catch(() => {})));
+      console.log(`[deleteAccount] removed ${objects.length} storage objects for ${uid}`);
+    }
+  } catch (e) {
+    console.warn('[deleteAccount] storage sweep failed', e && e.message);
+  }
+
   // 5. Delete the profile document.
   await db.collection('users').doc(uid).delete();
 
@@ -1937,8 +1950,8 @@ exports.createCheckoutSession = functions.https.onCall(async (data, context) => 
   if (!priceId) {
     throw new functions.https.HttpsError('failed-precondition', 'No price configured for that plan.');
   }
-  const successUrl = (data && data.successUrl) || 'https://rocklabathletics.web.app/billing/success';
-  const cancelUrl = (data && data.cancelUrl) || 'https://rocklabathletics.web.app/billing/cancel';
+  const successUrl = (data && data.successUrl) || 'https://rocklab-athletics.web.app/billing/?status=success';
+  const cancelUrl = (data && data.cancelUrl) || 'https://rocklab-athletics.web.app/billing/?status=cancel';
 
   const params = new URLSearchParams();
   params.append('mode', 'subscription');
@@ -1967,13 +1980,60 @@ exports.createCheckoutSession = functions.https.onCall(async (data, context) => 
 });
 
 // Stripe -> Firestore plan sync.
+//
+// Signature verification follows Stripe's documented scheme: the
+// `stripe-signature` header looks like `t=<timestamp>,v1=<hmac>` and the HMAC is
+// SHA-256 over `${timestamp}.${rawBody}` keyed by the webhook signing secret.
+// We compare against every v1 value using a timing-safe comparison.
+//
+// If the secret is not configured we FAIL CLOSED (503). Accepting unsigned
+// requests would let anyone POST a fake `checkout.session.completed` and grant
+// themselves a paid plan.
+function verifyStripeSignature(rawBody, header, secret) {
+  if (!header || !rawBody) return false;
+  let timestamp = null;
+  const v1s = [];
+  for (const part of String(header).split(',')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    if (k === 't') timestamp = v;
+    else if (k === 'v1') v1s.push(v);
+  }
+  if (!timestamp || v1s.length === 0) return false;
+  const expected = crypto
+    .createHmac('sha256', secret)
+    .update(`${timestamp}.${rawBody}`)
+    .digest('hex');
+  const expectedBuf = Buffer.from(expected, 'utf8');
+  return v1s.some((v) => {
+    const b = Buffer.from(v, 'utf8');
+    return b.length === expectedBuf.length && crypto.timingSafeEqual(b, expectedBuf);
+  });
+}
+
 exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
-  if (secret && req.headers['stripe-signature'] !== secret) {
+  if (!secret) {
+    console.error('[stripe] STRIPE_WEBHOOK_SECRET is not configured; refusing webhook');
+    res.status(503).send('webhook not configured');
+    return;
+  }
+  // Firebase provides req.rawBody for exactly this use case.
+  const rawBody = req.rawBody ? req.rawBody.toString('utf8') : '';
+  if (!verifyStripeSignature(rawBody, req.headers['stripe-signature'], secret)) {
     res.status(400).send('bad signature');
     return;
   }
-  const event = req.body || {};
+
+  let event = {};
+  try {
+    event = JSON.parse(rawBody || '{}');
+  } catch (e) {
+    res.status(400).send('bad payload');
+    return;
+  }
   const db = admin.firestore();
 
   try {
