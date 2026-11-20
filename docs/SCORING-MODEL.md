@@ -103,14 +103,48 @@ gameStatisticianRequests/{gameId}
 Deliberately scoped to one game, not a season: a parent volunteer should not
 inherit standing access to every future game.
 
-## 6. Status and priority
+## 6. Career-stat rules and record-chase cadence
+
+**Varsity only.** School records and career stats are varsity-only by convention;
+freshman and JV results do not count. `verifyGameStats` still verifies a
+non-varsity game (the coach keeps the audit trail), but no `careerStatLines` are
+written and the audit note says so. The team's `level` is recorded on every
+ledger row so this can be revisited per school later.
+
+**One scorer per game, chosen by the coach.** Multiple people may offer to score:
+
+1. Coach opens a request on a game (simple or advanced mode).
+2. Any team member taps *I'll do it* → they are added to `signups`. This grants
+   nothing.
+3. The coach opens *Pick* and selects one person. The server deletes **every**
+   existing grant for that game and creates exactly one, so two people can never
+   hold scoring rights at once. Re-picking revokes the previous choice.
+
+There is no self-service claim path: the old `claimGameStatistician` endpoint was
+removed, so selection cannot be bypassed.
+
+**Record-chase announcements.** `scheduledRecordChases` runs daily (and
+`announceRecordChases` can be triggered manually):
+
+- Expresses the gap in **games**, not just points:
+  `gamesAway = ceil(remaining / per-game average)`.
+- Sends a **baseline** notice once per record per athlete.
+- Sends **one pre-game notice per upcoming game** (next 72 hours) while
+  `gamesAway <= 3`, worded as "needs 4 to tie the school record or 5 to break it".
+- De-duplicates in `recordChaseAnnouncements` (server-write only), keyed per
+  game/stat/athlete, so repeated runs never spam.
+
+Still to build: MaxPreps export (deliberately deferred).
+
+## 7. Status and priority
 
 Implemented:
 
-- **Statistician request/claim** — a coach opens a request for one game; a parent
-  or student on the team claims it. The grant is per game
-  (`games/{gameId}/scorers/{uid}`), never a staff role, so helping once does not
-  confer season-long access. Audited on request, claim, release and cancel.
+- **Statistician sign-up and single selection** — several people may offer to
+  score; the coach picks exactly one and every other grant is revoked. The grant
+  is per game (`games/{gameId}/scorers/{uid}`), never a staff role, so helping
+  once does not confer season-long access. Audited on request, sign-up,
+  assignment, release and cancel.
 - **Volleyball sets** — dedicated set-by-set scorer; the match score is sets won
   and the game goes final at three.
 - **Judged for cheer/dance** — the misleading live score is gone; only the result

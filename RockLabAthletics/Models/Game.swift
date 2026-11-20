@@ -80,6 +80,14 @@ struct GameStatisticianRequest: Identifiable {
     var status: String
     /// simple | advanced — what the coach allowed the volunteer to do.
     var mode: String
+    /// Everyone who offered to score. The coach picks exactly one.
+    var signups: [GameScorerSignup]
+
+    struct GameScorerSignup: Identifiable, Hashable {
+        var userId: String
+        var name: String
+        var id: String { userId }
+    }
     var filledBy: String
     var filledByName: String
 
@@ -92,6 +100,10 @@ struct GameStatisticianRequest: Identifiable {
         self.isHome = data["isHome"] as? Bool ?? true
         self.status = data["status"] as? String ?? "open"
         self.mode = data["mode"] as? String ?? "simple"
+        self.signups = ((data["signups"] as? [[String: Any]]) ?? []).compactMap { raw in
+            guard let userId = raw["userId"] as? String else { return nil }
+            return GameScorerSignup(userId: userId, name: raw["name"] as? String ?? "")
+        }
         self.filledBy = data["filledBy"] as? String ?? ""
         self.filledByName = data["filledByName"] as? String ?? ""
     }

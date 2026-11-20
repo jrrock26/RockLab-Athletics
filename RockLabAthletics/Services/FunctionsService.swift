@@ -222,18 +222,27 @@ struct FunctionsService {
         return (result.data as? [String: Any]) ?? [:]
     }
 
-    /// Asks the team for a volunteer to run one game's scoring.
-    func requestGameStatistician(gameId: String) async throws -> [String: Any] {
-        let result = try await functions.httpsCallable("requestGameStatistician").call([
-            "gameId": gameId,
+    /// Offers to score a game. Several people may sign up; the coach picks one.
+    func signUpForGame(requestId: String) async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("signUpForGame").call([
+            "requestId": requestId,
         ])
         return (result.data as? [String: Any]) ?? [:]
     }
 
-    /// Claims an open request. Grants scoring rights for that game only.
-    func claimGameStatistician(requestId: String) async throws -> [String: Any] {
-        let result = try await functions.httpsCallable("claimGameStatistician").call([
+    /// Coach/AD selection of exactly one scorer for a game. Revokes any others.
+    func assignGameStatistician(requestId: String, userId: String) async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("assignGameStatistician").call([
             "requestId": requestId,
+            "userId": userId,
+        ])
+        return (result.data as? [String: Any]) ?? [:]
+    }
+
+    /// Asks the team for a volunteer to run one game's scoring.
+    func requestGameStatistician(gameId: String) async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("requestGameStatistician").call([
+            "gameId": gameId,
         ])
         return (result.data as? [String: Any]) ?? [:]
     }

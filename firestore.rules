@@ -234,6 +234,15 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Record-chase announcements already sent. Server-written only, so the
+    // daily job can de-duplicate and nobody can suppress or forge a notice.
+    match /recordChaseAnnouncements/{docId} {
+      allow read: if signedIn() && role() in ['ad','coach','staff']
+        && 'schoolId' in resource.data
+        && resource.data.schoolId == userData().schoolId;
+      allow write: if false;
+    }
+
     // School records are part of the public story of a program.
     match /schoolRecords/{recordId} {
       allow read: if signedIn();

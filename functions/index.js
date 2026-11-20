@@ -1744,7 +1744,10 @@ exports.requestGameStatistician = functions.https.onCall(async (data, context) =
   return { requestId: ref.id, existed: false };
 });
 
-exports.claimGameStatistician = functions.https.onCall(async (data, context) => {
+// Multiple people may offer to score. The coach picks exactly one; picking
+// someone replaces any previous choice and revokes every other grant for the
+// game, so two people can never hold scoring rights at once.
+exports.signUpForGame = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
   }
@@ -1761,7 +1764,7 @@ exports.claimGameStatistician = functions.https.onCall(async (data, context) => 
   }
   const req = reqSnap.data() || {};
   if (req.status !== 'open') {
-    throw new functions.https.HttpsError('failed-precondition', 'Someone has already taken this game.');
+    throw new functions.https.HttpsError('failed-precondition', 'The coach has already picked a scorer.');
   }
 
   const callerId = context.auth.uid;
@@ -1769,25 +1772,20 @@ exports.claimGameStatistician = functions.https.onCall(async (data, context) => 
   const memSnap = await db.collection('teams').doc(req.teamId).collection('members').doc(callerId).get();
   if (!memSnap.exists && caller.role !== 'ad') {
     throw new functions.https.HttpsError('permission-denied',
-      'Follow or join the team before claiming a game.');
+      'Follow or join the team before signing up.');
   }
 
-  // The grant is per game, never a staff role. The mode decides whether this
-  // volunteer can touch per-player stats at all.
-  await db.collection('games').doc(req.gameId).collection('scorers').doc(callerId).set({
-    userId: callerId,
-    name: caller.name || '',
-    email: caller.email || '',
-    requestId: requestId,
-    mode: req.mode === 'advanced' ? 'advanced' : 'simple',
-    grantedAt: admin.firestore.FieldValue.serverTimestamp(),
-  }, { merge: true });
+  const signups = Array.isArray(req.signups) ? req.signups : [];
+  if (signups.some((s) => s && s.userId === callerId)) {
+    return { ok: true, alreadySignedUp: true, count: signups.length };
+  }
 
   await ref.set({
-    status: 'filled',
-    filledBy: callerId,
-    filledByName: caller.name || '',
-    filledAt: admin.firestore.FieldValue.serverTimestamp(),
+    signups: admin.firestore.FieldValue.arrayUnion({
+      userId: callerId,
+      name: caller.name || '',
+      at: new Date().toISOString(),
+    }),
   }, { merge: true });
 
   await writeAudit({
@@ -1795,13 +1793,74 @@ exports.claimGameStatistician = functions.https.onCall(async (data, context) => 
     actorId: callerId,
     actorName: caller.name,
     actorRole: caller.role || '',
-    action: 'scorer.claimed',
+    action: 'scorer.signed_up',
     targetType: 'game',
     targetId: req.gameId || '',
     detail: `vs ${req.opponent || ''}`,
   });
 
-  return { ok: true, gameId: req.gameId || '' };
+  return { ok: true, alreadySignedUp: false, count: signups.length + 1 };
+});
+
+exports.assignGameStatistician = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const requestId = data && data.requestId ? String(data.requestId) : '';
+  const userId = data && data.userId ? String(data.userId) : '';
+  if (!requestId || !userId) {
+    throw new functions.https.HttpsError('invalid-argument', 'requestId and userId are required.');
+  }
+
+  const db = admin.firestore();
+  const ref = db.collection('gameStatisticianRequests').doc(requestId);
+  const reqSnap = await ref.get();
+  if (!reqSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Request not found.');
+  }
+  const req = reqSnap.data() || {};
+
+  const caller = await userProfile(db, context.auth.uid);
+  const memSnap = await db.collection('teams').doc(req.teamId).collection('members').doc(context.auth.uid).get();
+  const isCoach = memSnap.exists && memSnap.get('role') === 'coach';
+  if (!(caller.role === 'ad' || isCoach)) {
+    throw new functions.https.HttpsError('permission-denied', 'Only an AD or coach can pick the scorer.');
+  }
+
+  // Exclusive assignment: clear every grant for this game, then create exactly one.
+  const gameRef = db.collection('games').doc(req.gameId);
+  const existingGrants = await gameRef.collection('scorers').get();
+  await Promise.all(existingGrants.docs.map((d) => d.ref.delete()));
+
+  const chosen = await userProfile(db, userId);
+  await gameRef.collection('scorers').doc(userId).set({
+    userId: userId,
+    name: chosen.name || '',
+    email: chosen.email || '',
+    requestId: requestId,
+    mode: req.mode === 'advanced' ? 'advanced' : 'simple',
+    grantedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  await ref.set({
+    status: 'filled',
+    filledBy: userId,
+    filledByName: chosen.name || '',
+    filledAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  await writeAudit({
+    schoolId: caller.schoolId || '',
+    actorId: context.auth.uid,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'scorer.assigned',
+    targetType: 'game',
+    targetId: req.gameId || '',
+    detail: `${chosen.name || userId} · vs ${req.opponent || ''} (revoked ${existingGrants.size} other grant(s))`,
+  });
+
+  return { ok: true, userId: userId };
 });
 
 exports.releaseGameStatistician = functions.https.onCall(async (data, context) => {
@@ -1974,9 +2033,16 @@ exports.verifyGameStats = functions.https.onCall(async (data, context) => {
 
   const sportId = teamSnap.exists ? (teamSnap.get('sportId') || '') : '';
   const season = teamSnap.exists ? (teamSnap.get('season') || '') : '';
+  const level = teamSnap.exists ? (teamSnap.get('level') || '') : '';
+
+  // Career stats and school records are varsity-only by convention: freshman and
+  // JV results do not count toward school records. The game still verifies, so
+  // the coach gets the audit trail, but nothing reaches the career ledger.
+  const isVarsity = /^varsity$/i.test(String(level).trim());
 
   let written = 0;
   for (const doc of statsSnap.docs) {
+    if (!isVarsity) break;
     const raw = doc.data() || {};
     const stats = {};
     for (const [key, value] of Object.entries(raw)) {
@@ -1989,6 +2055,7 @@ exports.verifyGameStats = functions.https.onCall(async (data, context) => {
       schoolId: schoolId,
       sportId: sportId,
       season: season,
+      level: level,
       teamId: teamId,
       gameId: gameId,
       rosterEntryId: doc.id,
@@ -2019,10 +2086,12 @@ exports.verifyGameStats = functions.https.onCall(async (data, context) => {
     action: 'stats.verified',
     targetType: 'game',
     targetId: gameId,
-    detail: `${written} athlete stat line(s) confirmed`,
+    detail: isVarsity
+      ? `${written} athlete stat line(s) confirmed`
+      : `verified, but ${level || 'non-varsity'} does not count toward career stats`,
   });
 
-  return { ok: true, athletes: written };
+  return { ok: true, athletes: written, careerEligible: isVarsity, level: level };
 });
 
 // Reopen a verified game so corrections can be made. Deleting the ledger rows is
@@ -2251,12 +2320,19 @@ exports.recordProximity = functions.https.onCall(async (data, context) => {
 
   // athleteKey -> { name, sportId, totals: { statKey: total } }
   const athletes = new Map();
+  // athleteKey -> Set(gameId), so we can express the chase in games, not just points.
+  const gamesByAthlete = new Map();
   for (const doc of linesSnap.docs) {
     const line = doc.data() || {};
     if (!line.verified) continue;
     if (sportFilter && line.sportId !== sportFilter) continue;
     const key = line.athleteKey || '';
     if (!key) continue;
+    if (line.gameId) {
+      const set = gamesByAthlete.get(key) || new Set();
+      set.add(line.gameId);
+      gamesByAthlete.set(key, set);
+    }
     const entry = athletes.get(key) || {
       athleteKey: key,
       athleteName: line.athleteName || '',
@@ -2290,11 +2366,17 @@ exports.recordProximity = functions.https.onCall(async (data, context) => {
           total: total,
         });
       } else if (remaining <= threshold) {
+        const gamesPlayed = (gamesByAthlete.get(athlete.athleteKey) || new Set()).size;
+        const average = gamesPlayed > 0 ? total / gamesPlayed : 0;
         chasing.push({
           athleteKey: athlete.athleteKey,
           athleteName: athlete.athleteName,
           total: total,
           remaining: remaining,
+          toTie: remaining,
+          toBreak: remaining + 1,
+          average: Math.round(average * 10) / 10,
+          gamesAway: average > 0 ? Math.ceil(remaining / average) : null,
         });
       }
     }
@@ -2313,6 +2395,157 @@ exports.recordProximity = functions.https.onCall(async (data, context) => {
 
   return { schoolId: schoolId, records: out, athletesTracked: athletes.size };
 });
+
+// ---------------------------------------------------------------------------
+// Record-chase announcements.
+//
+// Cadence, as specified: one baseline notice early, then a single pre-game
+// notice for each upcoming game while the player is within a few games of the
+// record. Once they close the gap the wording narrows to "needs 4 to tie".
+// Every notice is de-duplicated, so a player is never spammed.
+// ---------------------------------------------------------------------------
+function sanitizeDocId(value) {
+  return String(value || '').replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 400);
+}
+
+async function runRecordChaseAnnouncements(db, schoolId, lookaheadHours, gamesAwayMax) {
+  const horizon = Date.now() + lookaheadHours * 3600 * 1000;
+  const [recordsSnap, linesSnap] = await Promise.all([
+    db.collection('schoolRecords').where('schoolId', '==', schoolId).get(),
+    db.collection('careerStatLines').where('schoolId', '==', schoolId).get(),
+  ]);
+
+  // athleteKey -> { key, name, teamId, totals, games:Set }
+  const athletes = new Map();
+  for (const doc of linesSnap.docs) {
+    const line = doc.data() || {};
+    if (!line.verified) continue;
+    const key = line.athleteKey || '';
+    if (!key) continue;
+    const entry = athletes.get(key) || {
+      key: key,
+      name: line.athleteName || '',
+      teamId: line.teamId || '',
+      totals: {},
+      games: new Set(),
+    };
+    if (line.athleteName) entry.name = line.athleteName;
+    if (line.teamId) entry.teamId = line.teamId;   // most recent team wins
+    if (line.gameId) entry.games.add(line.gameId);
+    for (const [statKey, value] of Object.entries(line.stats || {})) {
+      const n = Number(value);
+      if (Number.isFinite(n)) entry.totals[statKey] = (entry.totals[statKey] || 0) + n;
+    }
+    athletes.set(key, entry);
+  }
+
+  const announced = [];
+  for (const recordDoc of recordsSnap.docs) {
+    const record = recordDoc.data() || {};
+    const recordValue = Number(record.value) || 0;
+    if (recordValue <= 0) continue;
+
+    for (const athlete of athletes.values()) {
+      const total = athlete.totals[record.statKey] || 0;
+      if (total <= 0) continue;
+      const remaining = recordValue - total;
+      if (remaining <= 0) continue;                      // already broken
+      const gamesPlayed = athlete.games.size || 0;
+      const average = gamesPlayed > 0 ? total / gamesPlayed : 0;
+      if (average <= 0) continue;
+      const gamesAway = Math.ceil(remaining / average);
+      if (gamesAway > gamesAwayMax) continue;
+      if (!athlete.teamId) continue;
+
+      const body = `${athlete.name} needs ${remaining} ${record.statKey} to tie the school record or ${remaining + 1} to break it.`;
+
+      // 1) Baseline, once per record per athlete.
+      const baselineId = sanitizeDocId(
+        `baseline__${schoolId}__${record.season || 'current'}__${record.statKey}__${athlete.key}`);
+      const baselineSnap = await db.collection('recordChaseAnnouncements').doc(baselineId).get();
+      if (!baselineSnap.exists) {
+        await notifyTeam(athlete.teamId, 'School record watch', body, true, {
+          type: 'recordChase', teamId: athlete.teamId, statKey: record.statKey,
+        });
+        await db.collection('recordChaseAnnouncements').doc(baselineId).set({
+          schoolId: schoolId, teamId: athlete.teamId, gameId: '', kind: 'baseline',
+          statKey: record.statKey, athleteKey: athlete.key, athleteName: athlete.name,
+          remaining: remaining, recordValue: recordValue,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        announced.push({ kind: 'baseline', statKey: record.statKey, athleteName: athlete.name, remaining });
+      }
+
+      // 2) One pre-game notice per upcoming game.
+      const gamesSnap = await db.collection('games').where('teamId', '==', athlete.teamId).limit(50).get();
+      const upcoming = gamesSnap.docs
+        .map((d) => {
+          const g = d.data() || {};
+          return { id: d.id, date: Number(g.date) || 0, status: g.status || 'upcoming', opponent: g.opponent || '' };
+        })
+        .filter((g) => g.status !== 'final' && g.date >= Date.now() && g.date <= horizon)
+        .sort((a, b) => a.date - b.date)
+        .slice(0, 3);
+
+      for (const game of upcoming) {
+        const docId = sanitizeDocId(`game__${game.id}__${record.statKey}__${athlete.key}`);
+        const seen = await db.collection('recordChaseAnnouncements').doc(docId).get();
+        if (seen.exists) continue;
+        await notifyTeam(athlete.teamId, `Record watch · vs ${game.opponent}`, body, true, {
+          type: 'recordChase', teamId: athlete.teamId, gameId: game.id, statKey: record.statKey,
+        });
+        await db.collection('recordChaseAnnouncements').doc(docId).set({
+          schoolId: schoolId, teamId: athlete.teamId, gameId: game.id, kind: 'pregame',
+          statKey: record.statKey, athleteKey: athlete.key, athleteName: athlete.name,
+          remaining: remaining, recordValue: recordValue,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        announced.push({ kind: 'pregame', gameId: game.id, statKey: record.statKey, athleteName: athlete.name, remaining });
+      }
+    }
+  }
+  return announced;
+}
+
+exports.announceRecordChases = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const payload = data || {};
+  const db = admin.firestore();
+  const caller = await userProfile(db, context.auth.uid);
+  const schoolId = (payload.schoolId ? String(payload.schoolId) : '') || caller.schoolId || '';
+  if (!schoolId) {
+    throw new functions.https.HttpsError('failed-precondition', 'No school on this account.');
+  }
+  if (!['ad', 'coach', 'staff'].includes(caller.role) || caller.schoolId !== schoolId) {
+    throw new functions.https.HttpsError('permission-denied', 'Staff only.');
+  }
+  const lookahead = Math.min(Math.max(Number(payload.lookaheadHours) || 72, 1), 168);
+  const maxGamesAway = Math.min(Math.max(Number(payload.gamesAwayMax) || 3, 1), 10);
+  const announced = await runRecordChaseAnnouncements(db, schoolId, lookahead, maxGamesAway);
+  return { ok: true, announcedCount: announced.length, announced: announced };
+});
+
+// Runs daily so the pre-game notices land without anyone remembering to press a
+// button. De-duplication makes it safe to run as often as you like.
+exports.scheduledRecordChases = functions.pubsub
+  .schedule('every 24 hours')
+  .onRun(async () => {
+    const db = admin.firestore();
+    const schools = await db.collection('schools').get();
+    let total = 0;
+    for (const school of schools.docs) {
+      try {
+        const list = await runRecordChaseAnnouncements(db, school.id, 72, 3);
+        total += list.length;
+      } catch (err) {
+        console.error('[recordChase] failed for school', school.id, err);
+      }
+    }
+    console.log(`[recordChase] announced ${total} notice(s) across ${schools.size} school(s)`);
+    return null;
+  });
 
 // Safety net: if a head coach is missing their membership (e.g. a team created
 // before the flow above), this repairs it so no team is left without its coach.

@@ -29,7 +29,9 @@ struct GamesView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("\(req.isHome ? "vs" : "@") \(req.opponent)")
                                     .font(.subheadline.weight(.semibold))
-                                Text("Needs a statistician")
+                                Text(req.signups.isEmpty
+                                     ? "Needs a statistician"
+                                     : "\(req.signups.count) signed up — coach picks")
                                     .font(.caption)
                                     .foregroundStyle(.orange)
                             }
@@ -41,11 +43,25 @@ struct GamesView: View {
                                 .font(.caption2.bold())
                                 .buttonStyle(.borderless)
                                 .disabled(!scorerBusy.isEmpty)
+                                if !req.signups.isEmpty {
+                                    Menu("Pick") {
+                                        ForEach(req.signups) { signup in
+                                            Button(signup.name.isEmpty ? signup.userId : signup.name) {
+                                                Task { await assign(req, userId: signup.userId) }
+                                            }
+                                        }
+                                    }
+                                    .font(.caption2.bold())
+                                }
                             }
                             if scorerBusy == req.id {
                                 ProgressView()
+                            } else if req.signups.contains(where: { $0.userId == (auth.user?.id ?? "") }) {
+                                Text("Signed up")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.green)
                             } else {
-                                Button("I'll run it") { Task { await claim(req) } }
+                                Button("I'll do it") { Task { await signUp(req) } }
                                     .font(.caption.bold())
                                     .buttonStyle(.borderless)
                             }
@@ -152,11 +168,25 @@ struct GamesView: View {
         scorerBusy = ""
     }
 
-    private func claim(_ request: GameStatisticianRequest) async {
+    private func signUp(_ request: GameStatisticianRequest) async {
         scorerBusy = request.id
         scorerError = ""
         do {
-            _ = try await FunctionsService.shared.claimGameStatistician(requestId: request.id)
+            _ = try await FunctionsService.shared.signUpForGame(requestId: request.id)
+            await loadScorerRequests()
+        } catch {
+            scorerError = error.localizedDescription
+        }
+        scorerBusy = ""
+    }
+
+    /// Coach/AD picks one scorer. The server revokes every other grant.
+    private func assign(_ request: GameStatisticianRequest, userId: String) async {
+        scorerBusy = request.id
+        scorerError = ""
+        do {
+            _ = try await FunctionsService.shared.assignGameStatistician(
+                requestId: request.id, userId: userId)
             await loadScorerRequests()
         } catch {
             scorerError = error.localizedDescription
