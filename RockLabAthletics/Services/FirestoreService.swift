@@ -267,6 +267,28 @@ struct FirestoreService {
         ], merge: true)
     }
 
+    /// Wrestling dual meet: persist the bout list and derive the team score from
+    /// the points each bout awarded. Bouts are the source of truth, not the total.
+    func saveWrestlingBouts(gameId: String, bouts: [WrestlingBout], status: GameStatus) async throws {
+        var ours = 0
+        var theirs = 0
+        for bout in bouts {
+            if bout.winner == "us" { ours += bout.points } else { theirs += bout.points }
+        }
+        try await db.collection("games").document(gameId).setData([
+            "bouts": bouts.map { $0.asDictionary },
+            "teamScore": ours,
+            "opponentScore": theirs,
+            "status": status.rawValue,
+        ], merge: true)
+    }
+
+    func fetchWrestlingBouts(gameId: String) async throws -> [WrestlingBout] {
+        let snap = try await db.collection("games").document(gameId).getDocument()
+        let raw = (snap.data()?["bouts"] as? [[String: Any]]) ?? []
+        return raw.compactMap { WrestlingBout(data: $0) }
+    }
+
     /// Client-side school search (fine for a single-school directory; use a
     /// dedicated search index like Algolia/Typesense at production scale).
     func searchSchools(query: String) async throws -> [School] {

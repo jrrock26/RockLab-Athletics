@@ -142,8 +142,9 @@ Advanced stats are available wherever the sport has stat definitions:
 
 | Screen | Sports | Advanced stats |
 | --- | --- | --- |
-| `LiveScoringView` | football, basketball, baseball, softball, soccer, lacrosse, field/ice hockey, water polo, tennis, wrestling, swimming, track, cross country, bowling | full per-player set from `SportDefinitions` |
-| `SetsScoringView` | volleyball | kills, aces, blocks, digs, assists, serve receptions — added this pass |
+| `LiveScoringView` | football, basketball, baseball, softball, soccer, lacrosse, field/ice hockey, water polo, tennis, swimming, track, cross country, bowling | full per-player set from `SportDefinitions` |
+| `SetsScoringView` | volleyball | kills, aces, blocks, digs, assists, serve receptions |
+| `DualMeetScoringView` | wrestling | bouts by weight class award team points (decision 3, major 4, tech fall 5, fall/forfeit/default/DQ 6); a counted win also credits wins plus pins / tech falls / major decisions / decisions |
 | `GolfScoringView` | golf | per-hole strokes (existing) + putts and fairways via swipe → *Putts/Fairways* — added this pass |
 | `JudgedScoringView` | cheer, dance | none by design (judged placement) |
 
@@ -181,6 +182,8 @@ Implemented:
 Still to build, in order:
 
 1. **Tennis** (`matches`) — singles/doubles lines, team score = matches won.
-2. **Wrestling** (`dualMeet`) — weight classes, points by result type.
-3. **Swimming / track / gymnastics** (`meetPlaces`) — events and placings.
-4. **Missing sports**: track & field, cross country, competitive cheer, esports.
+2. **Swimming / track / gymnastics** (`meetPlaces`) — events and placings.
+3. **Missing sports**: competitive cheer, esports.
+
+Done: wrestling (`DualMeetScoringView`) — bouts by weight class, points by result
+type, and the counted-win stats feed the career ledger.

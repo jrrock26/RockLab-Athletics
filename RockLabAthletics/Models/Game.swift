@@ -109,3 +109,91 @@ struct GameStatisticianRequest: Identifiable {
     }
 }
 
+
+/// A single bout in a wrestling dual meet.
+///
+/// A dual is scored by weight class, not by a running total: each bout awards
+/// points to the winning team based on *how* it was won (decision 3, major 4,
+/// technical fall 5, fall/forfeit/default/DQ 6). The team score is the sum.
+struct WrestlingBout: Identifiable, Codable, Hashable {
+    var id: String
+    /// Weight class label, e.g. "138".
+    var weight: String
+    /// "us" or "them".
+    var winner: String
+    /// decision | major | tech_fall | fall | forfeit | default | dq
+    var result: String
+    var points: Int
+    var rosterEntryId: String
+    var wrestlerName: String
+
+    init(id: String = UUID().uuidString,
+         weight: String,
+         winner: String,
+         result: String,
+         rosterEntryId: String = "",
+         wrestlerName: String = "") {
+        self.id = id
+        self.weight = weight
+        self.winner = winner
+        self.result = result
+        self.points = WrestlingBout.points(for: result)
+        self.rosterEntryId = rosterEntryId
+        self.wrestlerName = wrestlerName
+    }
+
+    static func points(for result: String) -> Int {
+        switch result {
+        case "major": return 4
+        case "tech_fall": return 5
+        case "fall", "forfeit", "default", "dq": return 6
+        default: return 3    // decision
+        }
+    }
+
+    /// The career stat this result credits, for a bout our wrestler won.
+    var statKey: String? {
+        switch result {
+        case "fall": return "pins"
+        case "tech_fall": return "tech_falls"
+        case "major": return "major_decisions"
+        case "decision": return "decisions"
+        default: return nil   // forfeit / default / DQ are not wrestled wins
+        }
+    }
+
+    var isCountedWin: Bool { statKey != nil }
+
+    var resultLabel: String {
+        switch result {
+        case "major": return "Major dec"
+        case "tech_fall": return "Tech fall"
+        case "fall": return "Fall"
+        case "forfeit": return "Forfeit"
+        case "default": return "Default"
+        case "dq": return "DQ"
+        default: return "Decision"
+        }
+    }
+
+    init?(data: [String: Any]) {
+        guard let weight = data["weight"] as? String,
+              let winner = data["winner"] as? String,
+              let result = data["result"] as? String else { return nil }
+        self.id = data["id"] as? String ?? UUID().uuidString
+        self.weight = weight
+        self.winner = winner
+        self.result = result
+        self.points = data["points"] as? Int ?? WrestlingBout.points(for: result)
+        self.rosterEntryId = data["rosterEntryId"] as? String ?? ""
+        self.wrestlerName = data["wrestlerName"] as? String ?? ""
+    }
+
+    var asDictionary: [String: Any] {
+        [
+            "id": id, "weight": weight, "winner": winner, "result": result,
+            "points": points, "rosterEntryId": rosterEntryId, "wrestlerName": wrestlerName,
+        ]
+    }
+}
+
