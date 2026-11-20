@@ -65,7 +65,71 @@ struct Game: Identifiable, Codable {
     }
 }
 
-/// A coach's open call for a volunteer to run one game's scoring.
+/// A single line in a tennis team match.
+///
+/// A team match is decided by lines, not by a running score: each singles or
+/// doubles line won is worth one team point, and the sets won in that line credit
+/// the players' season stats.
+struct TennisLine: Identifiable, Codable, Hashable {
+    var id: String
+    /// "singles" or "doubles".
+    var type: String
+    /// Court number within the type, 1-based.
+    var slot: Int
+    var playerIds: [String]
+    var playerNames: String
+    /// "us" or "them".
+    var winner: String
+    var ourSets: Int
+    var theirSets: Int
+
+    init(id: String = UUID().uuidString,
+         type: String,
+         slot: Int,
+         playerIds: [String] = [],
+         playerNames: String = "",
+         winner: String = "us",
+         ourSets: Int = 2,
+         theirSets: Int = 0) {
+        self.id = id
+        self.type = type
+        self.slot = slot
+        self.playerIds = playerIds
+        self.playerNames = playerNames
+        self.winner = winner
+        self.ourSets = ourSets
+        self.theirSets = theirSets
+    }
+
+    var typeLabel: String { type == "doubles" ? "Doubles" : "Singles" }
+
+    /// The stat crediting a won line.
+    var statKey: String { type == "doubles" ? "doubles_wins" : "singles_wins" }
+
+    var scoreLabel: String { "\(ourSets)–\(theirSets)" }
+
+    init?(data: [String: Any]) {
+        guard let type = data["type"] as? String,
+              let winner = data["winner"] as? String else { return nil }
+        self.id = data["id"] as? String ?? UUID().uuidString
+        self.type = type
+        self.slot = data["slot"] as? Int ?? 1
+        self.playerIds = data["playerIds"] as? [String] ?? []
+        self.playerNames = data["playerNames"] as? String ?? ""
+        self.winner = winner
+        self.ourSets = data["ourSets"] as? Int ?? 0
+        self.theirSets = data["theirSets"] as? Int ?? 0
+    }
+
+    var asDictionary: [String: Any] {
+        [
+            "id": id, "type": type, "slot": slot, "playerIds": playerIds,
+            "playerNames": playerNames, "winner": winner,
+            "ourSets": ourSets, "theirSets": theirSets,
+        ]
+    }
+}
+
 ///
 /// Claiming creates a per-game grant (games/{gameId}/scorers/{uid}) rather than
 /// a staff role, so a parent who helps once does not keep scoring rights all

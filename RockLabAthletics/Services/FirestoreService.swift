@@ -289,6 +289,24 @@ struct FirestoreService {
         return raw.compactMap { WrestlingBout(data: $0) }
     }
 
+    /// Tennis: persist the lines and derive the team score from lines won.
+    func saveTennisLines(gameId: String, lines: [TennisLine], status: GameStatus) async throws {
+        let ours = lines.filter { $0.winner == "us" }.count
+        let theirs = lines.filter { $0.winner != "us" }.count
+        try await db.collection("games").document(gameId).setData([
+            "lines": lines.map { $0.asDictionary },
+            "teamScore": ours,
+            "opponentScore": theirs,
+            "status": status.rawValue,
+        ], merge: true)
+    }
+
+    func fetchTennisLines(gameId: String) async throws -> [TennisLine] {
+        let snap = try await db.collection("games").document(gameId).getDocument()
+        let raw = (snap.data()?["lines"] as? [[String: Any]]) ?? []
+        return raw.compactMap { TennisLine(data: $0) }
+    }
+
     /// Client-side school search (fine for a single-school directory; use a
     /// dedicated search index like Algolia/Typesense at production scale).
     func searchSchools(query: String) async throws -> [School] {

@@ -20,6 +20,8 @@ struct ScoringView: View {
             SetsScoringView(game: game, teamId: teamId, sportId: sportId)
         case .dualMeet:
             DualMeetScoringView(game: game, teamId: teamId, sportId: sportId)
+        case .matches:
+            TennisScoringView(game: game, teamId: teamId, sportId: sportId)
         case .judged:
             JudgedScoringView(game: game, teamId: teamId, sportId: sportId, vm: vm)
         default:
@@ -488,6 +490,294 @@ private struct AddBoutSheet: View {
             rosterEntryId: winner == "us" ? rosterEntryId : "",
             wrestlerName: winner == "us" ? name : "")
         onAdd(bout)
+        dismiss()
+    }
+}
+
+
+// MARK: - Tennis team match
+
+/// A tennis team match is decided by lines: each singles or doubles line won is
+/// one team point. The line list is the source of truth and the team score is
+/// derived from it, so the two can never disagree.
+struct TennisScoringView: View {
+    @Environment(AuthViewModel.self) private var auth
+    let game: Game
+    let teamId: String
+    let sportId: String
+
+    @State private var lines: [TennisLine] = []
+    @State private var vm = StatsViewModel()
+    @State private var access = TeamAccess()
+    @State private var scoringMode = "simple"
+    @State private var isGameScorer = false
+    @State private var showingAdd = false
+    @State private var errorMessage = ""
+    @State private var busy = false
+
+    private var canScore: Bool {
+        access.canManageTeam || access.hasPerm(.statistician) || isGameScorer
+    }
+    private var ourScore: Int { lines.filter { $0.winner == "us" }.count }
+    private var theirScore: Int { lines.filter { $0.winner != "us" }.count }
+
+    /// Slots still available, per type — a court cannot be scored twice.
+    private var openSlots: [(String, Int)] {
+        var open: [(String, Int)] = []
+        for type in ["singles", "doubles"] {
+            let used = Set(lines.filter { $0.type == type }.map(\.slot))
+            for slot in 1...5 where !used.contains(slot) { open.append((type, slot)) }
+        }
+        return open
+    }
+
+    private var sortedLines: [TennisLine] {
+        lines.sorted {
+            if $0.type != $1.type { return $0.type < $1.type }
+            return $0.slot < $1.slot
+        }
+    }
+
+    var body: some View {
+        List {
+            Section("Team score") {
+                HStack {
+                    Text("Us").font(.headline)
+                    Spacer()
+                    Text("\(ourScore)").font(.title2.bold()).monospacedDigit()
+                }
+                HStack {
+                    Text(game.opponent).font(.headline)
+                    Spacer()
+                    Text("\(theirScore)").font(.title2.bold()).monospacedDigit()
+                }
+            }
+
+            Section("Lines") {
+                if lines.isEmpty {
+                    Text("No lines yet.").foregroundStyle(.secondary)
+                }
+                ForEach(sortedLines) { line in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(line.typeLabel) \(line.slot)")
+                                .font(.subheadline.bold())
+                            Text(line.winner == "us"
+                                 ? (line.playerNames.isEmpty ? "Us" : line.playerNames)
+                                 : game.opponent)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(line.scoreLabel)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        Text(line.winner == "us" ? "W" : "L")
+                            .font(.subheadline.bold())
+                            .foregroundStyle(line.winner == "us" ? .green : .red)
+                    }
+                }
+                .onDelete { indexSet in
+                    let doomed = indexSet.map { sortedLines[$0] }
+                    Task { for line in doomed { await remove(line) } }
+                }
+                .deleteDisabled(!canScore || busy)
+            }
+
+            if canScore && !openSlots.isEmpty {
+                Section {
+                    Button("Add line") { showingAdd = true }
+                        .disabled(busy)
+                    if isGameScorer && scoringMode == "simple" {
+                        Text("Simple scoring — match result only. The coach can add player detail afterwards.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            if !errorMessage.isEmpty {
+                Section { Text(errorMessage).foregroundStyle(.red).font(.footnote) }
+            }
+        }
+        .navigationTitle("Team match")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showingAdd) {
+            AddTennisLineSheet(openSlots: openSlots, roster: vm.roster, opponent: game.opponent) { line in
+                Task { await add(line) }
+            }
+        }
+        .task {
+            lines = (try? await FirestoreService.shared.fetchTennisLines(gameId: game.id)) ?? []
+            access = await FirestoreService.shared.teamAccess(
+                teamId: teamId, userId: auth.user?.id, isAd: auth.user?.role == .ad)
+            await vm.beginGame(game, teamId: teamId)
+            if let uid = auth.user?.id {
+                let grant = await FirestoreService.shared.scoringGrant(gameId: game.id, userId: uid)
+                isGameScorer = grant.isScorer
+                scoringMode = grant.mode
+            }
+        }
+    }
+
+
+    private func add(_ line: TennisLine) async {
+        busy = true
+        errorMessage = ""
+        let updated = lines + [line]
+        do {
+            try await FirestoreService.shared.saveTennisLines(
+                gameId: game.id, lines: updated, status: .live)
+            lines = updated
+            await applyStats(for: line, delta: 1)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        busy = false
+    }
+
+    /// Removing a line withdraws its team point and its stat credit.
+    private func remove(_ line: TennisLine) async {
+        busy = true
+        errorMessage = ""
+        let updated = lines.filter { $0.id != line.id }
+        do {
+            try await FirestoreService.shared.saveTennisLines(
+                gameId: game.id, lines: updated, status: .live)
+            lines = updated
+            await applyStats(for: line, delta: -1)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        busy = false
+    }
+
+    /// A won line credits singles/doubles wins plus the sets won in that line.
+    private func applyStats(for line: TennisLine, delta: Int) async {
+        guard line.winner == "us", !line.playerIds.isEmpty else { return }
+        for id in line.playerIds {
+            let name = vm.roster.first { $0.id == id }?.playerName ?? line.playerNames
+            await vm.incrementStat(gameId: game.id, rosterEntryId: id, playerName: name,
+                                   statKey: line.statKey, delta: delta)
+            if line.ourSets > 0 {
+                await vm.incrementStat(gameId: game.id, rosterEntryId: id, playerName: name,
+                                       statKey: "sets_won", delta: delta * line.ourSets)
+            }
+        }
+    }
+}
+
+
+/// Records one line: court, who played, the result, and the set score.
+private struct AddTennisLineSheet: View {
+    let openSlots: [(String, Int)]
+    let roster: [RosterEntry]
+    let opponent: String
+    var onAdd: (TennisLine) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var type = "singles"
+    @State private var slot = 1
+    @State private var winner = "us"
+    @State private var ourSets = 2
+    @State private var theirSets = 0
+    @State private var firstId = ""
+    @State private var secondId = ""
+
+    private var slotsForType: [Int] {
+        openSlots.filter { $0.0 == type }.map(\.1).sorted()
+    }
+    private var typeOpen: Bool { !slotsForType.isEmpty }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Line") {
+                    Picker("Type", selection: $type) {
+                        Text("Singles").tag("singles")
+                        Text("Doubles").tag("doubles")
+                    }
+                    .pickerStyle(.segmented)
+
+                    if typeOpen {
+                        Picker("Court", selection: $slot) {
+                            ForEach(slotsForType, id: \.self) { number in
+                                Text("\(type == "doubles" ? "Doubles" : "Singles") \(number)").tag(number)
+                            }
+                        }
+                    } else {
+                        Text("All \(type) courts are already scored.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Players") {
+                    Picker(type == "doubles" ? "Player 1" : "Player", selection: $firstId) {
+                        Text("Not listed").tag("")
+                        ForEach(roster) { entry in
+                            Text(entry.playerName).tag(entry.id)
+                        }
+                    }
+                    if type == "doubles" {
+                        Picker("Player 2", selection: $secondId) {
+                            Text("Not listed").tag("")
+                            ForEach(roster.filter { $0.id != firstId }) { entry in
+                                Text(entry.playerName).tag(entry.id)
+                            }
+                        }
+                    }
+                }
+
+                Section("Result") {
+                    Picker("Winner", selection: $winner) {
+                        Text("Us").tag("us")
+                        Text(opponent).tag("them")
+                    }
+                    Stepper("Our sets: \(ourSets)", value: $ourSets, in: 0...3)
+                    Stepper("Their sets: \(theirSets)", value: $theirSets, in: 0...3)
+                }
+
+                Section {
+                    Text("A won line is one team point and credits \(type == "doubles" ? "doubles" : "singles") wins plus \(ourSets) set(s).")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Add line")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") { save() }
+                        .disabled(!typeOpen)
+                }
+            }
+            .onAppear { slot = slotsForType.first ?? 1 }
+            .onChange(of: type) { _, _ in
+                slot = slotsForType.first ?? 1
+                if type == "singles" { secondId = "" }
+            }
+        }
+    }
+
+    private func save() {
+        var ids: [String] = []
+        if !firstId.isEmpty { ids.append(firstId) }
+        if type == "doubles", !secondId.isEmpty { ids.append(secondId) }
+        let names = ids.compactMap { id in roster.first { $0.id == id }?.playerName }
+            .joined(separator: " / ")
+        let line = TennisLine(
+            type: type,
+            slot: slot,
+            playerIds: winner == "us" ? ids : [],
+            playerNames: winner == "us" ? names : "",
+            winner: winner,
+            ourSets: ourSets,
+            theirSets: theirSets)
+        onAdd(line)
         dismiss()
     }
 }
