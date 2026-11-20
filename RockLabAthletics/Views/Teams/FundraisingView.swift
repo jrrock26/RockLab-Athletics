@@ -3,21 +3,25 @@ import SwiftUI
 struct FundraisingView: View {
     let teamId: String
     let sportId: String
+    @Environment(AuthViewModel.self) private var auth
     @State private var vm = LogisticsViewModel()
     @State private var showingAdd = false
+    @State private var access = TeamAccess()
 
     var body: some View {
         List {
             if vm.fundraisers.isEmpty {
                 Section {
-                    Text("No fundraisers yet. Tap + to start one.")
+                    Text(access.canManageTeam || access.hasPerm(.fundraising)
+                         ? "No fundraisers yet. Tap + to start one."
+                         : "No fundraisers yet.")
                         .foregroundStyle(.secondary)
                 }
             } else {
                 Section("Campaigns") {
                     ForEach(vm.fundraisers) { fundraiser in
                         NavigationLink {
-                            FundraiserDetailView(fundraiser: fundraiser, vm: vm)
+                            FundraiserDetailView(fundraiser: fundraiser, vm: vm, teamId: teamId)
                         } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -41,14 +45,20 @@ struct FundraisingView: View {
             BrandedHeader(imageName: SportBackground.image(for: sportId))
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showingAdd = true } label: { Image(systemName: "plus") }
+            if access.canManageTeam || access.hasPerm(.fundraising) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showingAdd = true } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("New fundraiser")
+                }
             }
         }
         .sheet(isPresented: $showingAdd) {
             AddFundraiserSheet(vm: vm, teamId: teamId)
         }
-        .task { await vm.loadFundraisers(teamId: teamId) }
+        .task {
+            await vm.loadFundraisers(teamId: teamId)
+            access = await FirestoreService.shared.teamAccess(teamId: teamId, userId: auth.user?.id, isAd: auth.user?.role == .ad)
+        }
     }
 }
 

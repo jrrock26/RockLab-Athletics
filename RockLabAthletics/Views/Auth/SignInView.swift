@@ -7,6 +7,7 @@ struct SignInView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var isWorking = false
+    @State private var showingForgotPassword = false
 
     var body: some View {
         VStack(spacing: 12) {
@@ -47,11 +48,17 @@ struct SignInView: View {
             .buttonStyle(.borderedProminent)
             .disabled(email.isEmpty || password.isEmpty || isWorking)
 
+            Button("Forgot password?") { showingForgotPassword = true }
+                .font(.footnote)
+
             Button("Don't have an account? Sign up", action: onSignUp)
                 .font(.footnote)
         }
         .padding(24)
         .frame(maxWidth: 420)
+        .sheet(isPresented: $showingForgotPassword) {
+            ForgotPasswordView(prefilledEmail: email)
+        }
     }
 
     private func signIn() async {

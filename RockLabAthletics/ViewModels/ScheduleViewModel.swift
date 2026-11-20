@@ -23,9 +23,13 @@ final class ScheduleViewModel {
 
     // MARK: Teams & events
 
-    func loadTeams(schoolId: String) async {
+    func loadTeams(schoolId: String, userTeamIds: [String]? = nil) async {
         do {
-            teams = try await FirestoreService.shared.fetchTeams(schoolId: schoolId)
+            var all = try await FirestoreService.shared.fetchTeams(schoolId: schoolId)
+            if let ids = userTeamIds {
+                all = all.filter { ids.contains($0.id) }
+            }
+            teams = all
             if selectedTeamId.isEmpty, let first = teams.first {
                 selectedTeamId = first.id
             }
@@ -34,10 +38,12 @@ final class ScheduleViewModel {
         }
     }
 
-    func loadEvents(teamId: String) async {
+    func loadEvents(teamId: String, gamesOnly: Bool = false) async {
         selectedTeamId = teamId
         do {
-            events = try await FirestoreService.shared.fetchEvents(teamId: teamId)
+            events = gamesOnly
+                ? try await FirestoreService.shared.fetchGameEvents(teamId: teamId)
+                : try await FirestoreService.shared.fetchEvents(teamId: teamId)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -72,11 +78,20 @@ final class ScheduleViewModel {
 
     // MARK: Event detail (RSVP + attendance)
 
-    func loadEventDetail(teamId: String, eventId: String, userId: String) async {
+    func loadEventDetail(teamId: String, eventId: String, userId: String, access: TeamAccess) async {
         do {
-            roster = try await FirestoreService.shared.fetchRoster(teamId: teamId)
-            attendance = try await FirestoreService.shared.fetchAttendance(eventId: eventId)
-            myRSVP = try await FirestoreService.shared.fetchRSVP(eventId: eventId, userId: userId) ?? .pending
+            if access.hasPerm(.attendance) {
+                roster = try await FirestoreService.shared.fetchRoster(teamId: teamId)
+                attendance = try await FirestoreService.shared.fetchAttendance(eventId: eventId)
+            } else {
+                roster = []
+                attendance = [:]
+            }
+            if access.canSeeAllEvents {
+                myRSVP = try await FirestoreService.shared.fetchRSVP(eventId: eventId, userId: userId) ?? .pending
+            } else {
+                myRSVP = .pending
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

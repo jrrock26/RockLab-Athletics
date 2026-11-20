@@ -3,30 +3,75 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 70;
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2D91008F309A66FE00B6069A /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = E2F3A4B5C6D7E2F3A4B5C6D7 /* FirebaseAuth */; };
+		2D910090309A66FE00B6069A /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = F3A4B5C6D7E8F3A4B5C6D7E8 /* FirebaseFirestore */; };
+		2D910091309A66FE00B6069A /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = A1C2E3F4A5B6C7D8E9F0A1B2 /* FirebaseMessaging */; };
+		2D910092309A66FE00B6069A /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = B2C3D4E5F6A7B8C9D0E1F2A3 /* FirebaseFunctions */; };
+		2D910093309A66FE00B6069A /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = C3D4E5F6A7B8C9D0E1F2A3B4 /* FirebaseStorage */; };
+		AA11BB22CC33DD44EE55FF01 /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = AA11BB22CC33DD44EE55FF03 /* FirebaseAnalytics */; };
+		AA11BB22CC33DD44EE55FF02 /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = AA11BB22CC33DD44EE55FF04 /* FirebaseCrashlytics */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		BB11CC22DD33EE44FF55000B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 101010101010101010101010 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6F6F6F6F6F6F6F6F6F6F6F6F;
+			remoteInfo = RockLabAthletics;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		1A1A1A1A1A1A1A1A1A1A1A1A /* RockLabAthletics.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RockLabAthletics.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BB11CC22DD33EE44FF550002 /* RockLabAthleticsTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RockLabAthleticsTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedRootGroup section */
-		2B2B2B2B2B2B2B2B2B2B2B2B /* RockLabAthletics */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			explicitFileTypes = {
-			};
-			explicitFolders = (
+/* Begin PBXResourcesBuildPhase section */
+		BB11CC22DD33EE44FF550006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
-			path = RockLabAthletics;
-			sourceTree = "<group>";
+			runOnlyForDeploymentPostprocessing = 0;
 		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		BB11CC22DD33EE44FF550004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		2B2B2B2B2B2B2B2B2B2B2B2B /* RockLabAthletics */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = RockLabAthletics; sourceTree = "<group>"; };
+		BB11CC22DD33EE44FF550003 /* RockLabAthleticsTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = RockLabAthleticsTests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		3C3C3C3C3C3C3C3C3C3C3C3C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2D910093309A66FE00B6069A /* FirebaseStorage in Frameworks */,
+				2D910092309A66FE00B6069A /* FirebaseFunctions in Frameworks */,
+				2D910091309A66FE00B6069A /* FirebaseMessaging in Frameworks */,
+				2D910090309A66FE00B6069A /* FirebaseFirestore in Frameworks */,
+				2D91008F309A66FE00B6069A /* FirebaseAuth in Frameworks */,
+				AA11BB22CC33DD44EE55FF01 /* FirebaseAnalytics in Frameworks */,
+				AA11BB22CC33DD44EE55FF02 /* FirebaseCrashlytics in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BB11CC22DD33EE44FF550005 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -40,6 +85,7 @@
 			isa = PBXGroup;
 			children = (
 				2B2B2B2B2B2B2B2B2B2B2B2B /* RockLabAthletics */,
+				BB11CC22DD33EE44FF550003 /* RockLabAthleticsTests */,
 				5E5E5E5E5E5E5E5E5E5E5E5E /* Products */,
 			);
 			sourceTree = "<group>";
@@ -48,6 +94,7 @@
 			isa = PBXGroup;
 			children = (
 				1A1A1A1A1A1A1A1A1A1A1A1A /* RockLabAthletics.app */,
+				BB11CC22DD33EE44FF550002 /* RockLabAthleticsTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -62,6 +109,7 @@
 				434343434343434343434343 /* Sources */,
 				3C3C3C3C3C3C3C3C3C3C3C3C /* Frameworks */,
 				545454545454545454545454 /* Resources */,
+				AA11BB22CC33DD44EE55FF05 /* Crashlytics Run Script */,
 			);
 			buildRules = (
 			);
@@ -76,10 +124,36 @@
 				F3A4B5C6D7E8F3A4B5C6D7E8 /* FirebaseFirestore */,
 				A1C2E3F4A5B6C7D8E9F0A1B2 /* FirebaseMessaging */,
 				B2C3D4E5F6A7B8C9D0E1F2A3 /* FirebaseFunctions */,
+				C3D4E5F6A7B8C9D0E1F2A3B4 /* FirebaseStorage */,
+				AA11BB22CC33DD44EE55FF03 /* FirebaseAnalytics */,
+				AA11BB22CC33DD44EE55FF04 /* FirebaseCrashlytics */,
 			);
 			productName = RockLabAthletics;
 			productReference = 1A1A1A1A1A1A1A1A1A1A1A1A /* RockLabAthletics.app */;
 			productType = "com.apple.product-type.application";
+		};
+		BB11CC22DD33EE44FF550001 /* RockLabAthleticsTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BB11CC22DD33EE44FF550007 /* Build configuration list for PBXNativeTarget "RockLabAthleticsTests" */;
+			buildPhases = (
+				BB11CC22DD33EE44FF550004 /* Sources */,
+				BB11CC22DD33EE44FF550005 /* Frameworks */,
+				BB11CC22DD33EE44FF550006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BB11CC22DD33EE44FF55000A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				BB11CC22DD33EE44FF550003 /* RockLabAthleticsTests */,
+			);
+			name = RockLabAthleticsTests;
+			packageProductDependencies = (
+			);
+			productName = RockLabAthleticsTests;
+			productReference = BB11CC22DD33EE44FF550002 /* RockLabAthleticsTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -94,6 +168,10 @@
 					6F6F6F6F6F6F6F6F6F6F6F6F = {
 						CreatedOnToolsVersion = 16.0;
 					};
+					BB11CC22DD33EE44FF550001 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = 6F6F6F6F6F6F6F6F6F6F6F6F;
+					};
 				};
 			};
 			buildConfigurationList = 212121212121212121212121 /* Build configuration list for PBXProject "RockLabAthletics" */;
@@ -106,15 +184,15 @@
 			);
 			mainGroup = 4D4D4D4D4D4D4D4D4D4D4D4D;
 			minimizedProjectReferenceProxies = 1;
-			preferredProjectObjectVersion = 77;
+			packageReferences = (
+				D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+			);
 			productRefGroup = 5E5E5E5E5E5E5E5E5E5E5E5E /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				6F6F6F6F6F6F6F6F6F6F6F6F /* RockLabAthletics */,
-			);
-			packageReferences = (
-				D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				BB11CC22DD33EE44FF550001 /* RockLabAthleticsTests */,
 			);
 		};
 /* End PBXProject section */
@@ -138,6 +216,14 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		BB11CC22DD33EE44FF55000A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 6F6F6F6F6F6F6F6F6F6F6F6F /* RockLabAthletics */;
+			targetProxy = BB11CC22DD33EE44FF55000B /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		656565656565656565656565 /* Debug */ = {
@@ -198,13 +284,15 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_STYLE = Automatic;
 				CODE_SIGN_ENTITLEMENTS = RockLabAthletics.entitlements;
-				DEVELOPMENT_TEAM = 2G78XY4X97;
+				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2G78XY4X97;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "RockLab Athletics";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Record highlight videos for player showcases.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Record audio with highlight videos.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -215,6 +303,8 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				OTHER_LDFLAGS = "-ObjC";
 				PRODUCT_BUNDLE_IDENTIFIER = RockLabAthletics;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -228,13 +318,15 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_STYLE = Automatic;
 				CODE_SIGN_ENTITLEMENTS = RockLabAthletics.entitlements;
-				DEVELOPMENT_TEAM = 2G78XY4X97;
+				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2G78XY4X97;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "RockLab Athletics";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Record highlight videos for player showcases.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Record audio with highlight videos.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -245,6 +337,8 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				OTHER_LDFLAGS = "-ObjC";
 				PRODUCT_BUNDLE_IDENTIFIER = RockLabAthletics;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -253,7 +347,67 @@
 			};
 			name = Release;
 		};
+		BB11CC22DD33EE44FF550008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2G78XY4X97;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = RockLabAthleticsTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RockLabAthletics.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/RockLabAthletics";
+			};
+			name = Debug;
+		};
+		BB11CC22DD33EE44FF550009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 2G78XY4X97;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = RockLabAthleticsTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RockLabAthletics.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/RockLabAthletics";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		AA11BB22CC33DD44EE55FF05 /* Crashlytics Run Script */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${TARGET_NAME}",
+				"$(SRCROOT)/$(BUILT_PRODUCTS_DIR)/$(INFOPLIST_PATH)",
+			);
+			name = "Crashlytics Run Script";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin XCConfigurationList section */
 		212121212121212121212121 /* Build configuration list for PBXProject "RockLabAthletics" */ = {
@@ -274,6 +428,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		BB11CC22DD33EE44FF550007 /* Build configuration list for PBXNativeTarget "RockLabAthleticsTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BB11CC22DD33EE44FF550008 /* Debug */,
+				BB11CC22DD33EE44FF550009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -288,6 +451,21 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		A1C2E3F4A5B6C7D8E9F0A1B2 /* FirebaseMessaging */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseMessaging;
+		};
+		B2C3D4E5F6A7B8C9D0E1F2A3 /* FirebaseFunctions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseFunctions;
+		};
+		C3D4E5F6A7B8C9D0E1F2A3B4 /* FirebaseStorage */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseStorage;
+		};
 		E2F3A4B5C6D7E2F3A4B5C6D7 /* FirebaseAuth */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
@@ -298,15 +476,15 @@
 			package = D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseFirestore;
 		};
-		A1C2E3F4A5B6C7D8E9F0A1B2 /* FirebaseMessaging */ = {
+		AA11BB22CC33DD44EE55FF03 /* FirebaseAnalytics */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseMessaging;
+			productName = FirebaseAnalytics;
 		};
-		B2C3D4E5F6A7B8C9D0E1F2A3 /* FirebaseFunctions */ = {
+		AA11BB22CC33DD44EE55FF04 /* FirebaseCrashlytics */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = D1E2F3A4B5C6D1E2F3A4B5C6 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseFunctions;
+			productName = FirebaseCrashlytics;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -1,39 +1,44 @@
 import Foundation
 import Observation
 
-/// Drives the recruiting showcase (bio, career stats, highlights).
+/// Drives the recruiting showcase (bio, career stats, highlight reels).
 @Observable
 final class ShowcaseViewModel {
     var showcase: Showcase?
-    var highlights: [Highlight] = []
     var careerStats: [String: Int] = [:]
+    /// Published reels that include a clip tagged to this player.
+    var reels: [HighlightReel] = []
     var errorMessage: String?
 
-    // Highlight form
-    var newHighlightTitle = ""
-    var newHighlightURL = ""
-    var newHighlightDescription = ""
-
-    func load(rosterEntry: RosterEntry, teamId: String) async {
+    func load(rosterEntry: RosterEntry, teamId: String, sportId: String, canEdit: Bool) async {
         do {
             if let existing = try await FirestoreService.shared.fetchShowcase(rosterEntryId: rosterEntry.id) {
                 showcase = existing
-            } else {
+            } else if canEdit {
+                // Only the athlete or a linked guardian may create the profile.
                 try await FirestoreService.shared.createShowcase(
                     rosterEntryId: rosterEntry.id, teamId: teamId,
                     playerName: rosterEntry.playerName, position: rosterEntry.position)
                 showcase = try await FirestoreService.shared.fetchShowcase(rosterEntryId: rosterEntry.id)
             }
-            highlights = try await FirestoreService.shared.fetchHighlights(showcaseId: rosterEntry.id)
-            careerStats = try await FirestoreService.shared.fetchCareerStats(teamId: teamId, rosterEntryId: rosterEntry.id)
+            let stats = SportDefinitions.definition(for: sportId).stats
+            careerStats = try await FirestoreService.shared.fetchCareerStats(teamId: teamId, rosterEntryId: rosterEntry.id, stats: stats)
+            let published = (try? await HighlightService.shared.fetchReels(teamId: teamId, publishedOnly: true)) ?? []
+            reels = published.filter { reel in
+                reel.clips.contains { $0.playerId == rosterEntry.id }
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    func updateShowcase(position: String, height: String, weight: String, graduationYear: String, gpa: String, bio: String) async {
+    /// Clips in a reel that belong to this player.
+    func clips(for reel: HighlightReel, entryId: String) -> [ReelClip] {
+        reel.clips.filter { $0.playerId == entryId }
+    }
+
+    func updateShowcase(height: String, weight: String, graduationYear: String, gpa: String, bio: String) async {
         guard var showcase else { return }
-        showcase.position = position
         showcase.height = height
         showcase.weight = weight
         showcase.graduationYear = graduationYear
@@ -46,28 +51,5 @@ final class ShowcaseViewModel {
             errorMessage = error.localizedDescription
         }
     }
-
-    func addHighlight(showcaseId: String) async {
-        let title = newHighlightTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty else { return }
-        do {
-            let id = try await FirestoreService.shared.addHighlight(
-                showcaseId: showcaseId, title: title, url: newHighlightURL, description: newHighlightDescription)
-            highlights.insert(Highlight(id: id, title: title, url: newHighlightURL, description: newHighlightDescription, createdAt: Date()), at: 0)
-            newHighlightTitle = ""
-            newHighlightURL = ""
-            newHighlightDescription = ""
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    func removeHighlight(showcaseId: String, highlightId: String) async {
-        do {
-            try await FirestoreService.shared.removeHighlight(showcaseId: showcaseId, highlightId: highlightId)
-            highlights.removeAll { $0.id == highlightId }
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
 }
+

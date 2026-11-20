@@ -6,6 +6,9 @@ import Observation
 final class OnboardingViewModel {
     var schoolName = ""
     var mascot = ""
+    var zipCode = ""
+    var district = ""
+    var logoData: Data?
     var selectedSportIds: Set<String> = []
     var coachEmails: [String] = []
     var newCoachEmail = ""
@@ -37,9 +40,15 @@ final class OnboardingViewModel {
             let schoolId = try await FirestoreService.shared.createSchool(
                 name: schoolName,
                 mascot: mascot,
+                zipCode: zipCode,
+                district: district,
                 adUserId: adUserId,
                 sports: selectedSports
             )
+            if let logoData {
+                let logoURL = try await StorageService.shared.uploadImage(logoData, path: "schools/\(schoolId)/logo.jpg")
+                try await FirestoreService.shared.updateSchoolLogo(schoolId: schoolId, logoURL: logoURL)
+            }
             try await FirestoreService.shared.updateUserRoleAndSchool(
                 id: adUserId,
                 role: .ad,

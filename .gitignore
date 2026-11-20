@@ -18,6 +18,25 @@ xcuserdata/
 .build/
 .swiftpm/
 
+# Node / Next.js (web console + Cloud Functions)
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+
+# Firebase CLI
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+.ui-debug.log
+
+# Test / coverage artifacts
+coverage/
+*.xcresult
+
 # CocoaPods / Carthage
 Pods/
 Carthage/
@@ -26,6 +45,9 @@ Carthage/
 *.p8
 .env
 .env.*
+# ...but the templates must be tracked, or setup instructions are lost
+!**/.env.example
+!**/.env.sample
 Secrets/
 service-account*.json
 

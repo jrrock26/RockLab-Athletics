@@ -1,15 +1,27 @@
 import SwiftUI
 
 struct LiveScoringView: View {
+    @Environment(AuthViewModel.self) private var auth
     let game: Game
     let teamId: String
+    let sportId: String
     let vm: StatsViewModel
     @State private var selectedPlayer: RosterEntry?
+    @State private var access = TeamAccess()
+    @State private var clockRemaining = 0
+    @State private var clockRunning = false
+    private let clockTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    private var definition: SportDefinition { SportDefinitions.definition(for: sportId) }
+
+    private var canScore: Bool {
+        access.canManageTeam || access.hasPerm(.statistician)
+    }
 
     var body: some View {
         let current = vm.selectedGame ?? game
         List {
-            Section("Score") {
+            Section("Score (\(definition.scoreUnit))") {
                 scoreRow(title: "Us", score: current.teamScore) { delta in
                     Task { await vm.updateScore(gameId: current.id, delta: delta, isOpponent: false) }
                 }
@@ -26,25 +38,54 @@ struct LiveScoringView: View {
                 }
                 .pickerStyle(.segmented)
             }
+            .disabled(!canScore)
 
-            Section("Player stats") {
-                if vm.roster.isEmpty {
-                    Text("No players on the roster yet.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(vm.roster) { entry in
-                        Button {
-                            selectedPlayer = entry
-                        } label: {
-                            HStack {
-                                Text(entry.playerName)
-                                Spacer()
-                                Text(statSummary(entry.id))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+            if let clock = SportDefinitions.clock(for: sportId) {
+                Section("Clock") {
+                    Picker("Period", selection: Binding(
+                        get: { current.period },
+                        set: { newPeriod in Task { await changePeriod(newPeriod, clock: clock) } }
+                    )) {
+                        ForEach(Array(clock.periods.enumerated()), id: \.offset) { index, name in
+                            Text(name).tag(index)
                         }
-                        .foregroundStyle(.primary)
+                    }
+                    .pickerStyle(.segmented)
+
+                    HStack {
+                        Text(clockTimeString(clockRemaining))
+                            .font(.system(size: 34, weight: .bold, design: .monospaced))
+                        Spacer()
+                        Button(clockRunning ? "Pause" : "Start") { toggleClock() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(clockRemaining == 0 && !clockRunning)
+                        Button("Reset") { resetClock(clock) }
+                            .buttonStyle(.bordered)
+                    }
+                }
+                .disabled(!canScore)
+            }
+
+            if access.canSeeAllEvents {
+                Section("Player stats") {
+                    if vm.roster.isEmpty {
+                        Text("No players on the roster yet.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(vm.roster) { entry in
+                            Button {
+                                selectedPlayer = entry
+                            } label: {
+                                HStack {
+                                    Text(entry.playerName)
+                                    Spacer()
+                                    Text(statSummary(entry.id))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .foregroundStyle(.primary)
+                        }
                     }
                 }
             }
@@ -52,32 +93,91 @@ struct LiveScoringView: View {
         .navigationTitle("vs \(current.opponent)")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $selectedPlayer) { entry in
-            StatEntrySheet(vm: vm, gameId: current.id, entry: entry)
+            StatEntrySheet(vm: vm, gameId: current.id, entry: entry, canEdit: canScore, stats: definition.stats)
         }
-        .task { await vm.beginGame(game, teamId: teamId) }
+        .task {
+            await vm.beginGame(game, teamId: teamId)
+            vm.watchGame(gameId: game.id)
+            access = await FirestoreService.shared.teamAccess(teamId: teamId, userId: auth.user?.id, isAd: auth.user?.role == .ad)
+        }
+        .onAppear {
+            if let clock = SportDefinitions.clock(for: sportId) {
+                let base = vm.selectedGame?.clockSeconds ?? game.clockSeconds
+                clockRemaining = base == 0 ? clock.minutesPerPeriod * 60 : base
+            }
+        }
+        .onReceive(clockTimer) { _ in
+            guard clockRunning else { return }
+            if clockRemaining > 0 {
+                clockRemaining -= 1
+            } else {
+                clockRunning = false
+            }
+        }
+        .onDisappear { vm.stopWatchingGame() }
     }
 
     private func scoreRow(title: String, score: Int, onChange: @escaping (Int) -> Void) -> some View {
-        HStack {
-            Text(title)
-                .frame(width: 110, alignment: .leading)
-                .lineLimit(1)
-            Spacer()
-            Text("\(score)")
-                .font(.title3.bold())
-            ForEach([-1, 1, 2, 3], id: \.self) { delta in
-                Button(delta > 0 ? "+\(delta)" : "\(delta)") {
-                    onChange(delta)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title).font(.headline)
+                Spacer()
+                Text("\(score)").font(.title3.bold())
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    Button("-1") {
+                        onChange(-1)
+                    }
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.circle)
+                    ForEach(definition.scoreButtons, id: \.self) { delta in
+                        Button("+\(delta)") {
+                            onChange(delta)
+                        }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.circle)
+                    }
                 }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.circle)
             }
         }
     }
 
     private func statSummary(_ entryId: String) -> String {
         let s = vm.stats[entryId] ?? [:]
-        return "\(s["points"] ?? 0) Pts · \(s["rebounds"] ?? 0) Reb"
+        let top = definition.stats.prefix(2)
+        return top.map { "\(s[$0.key] ?? 0) \($0.name)" }.joined(separator: " · ")
+    }
+
+    private func clockTimeString(_ seconds: Int) -> String {
+        String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private func toggleClock() {
+        if clockRunning {
+            clockRunning = false
+            persistClock()
+        } else if clockRemaining > 0 {
+            clockRunning = true
+        }
+    }
+
+    private func resetClock(_ clock: ClockConfig) {
+        clockRunning = false
+        clockRemaining = clock.minutesPerPeriod * 60
+        persistClock()
+    }
+
+    private func changePeriod(_ period: Int, clock: ClockConfig) {
+        clockRunning = false
+        clockRemaining = clock.minutesPerPeriod * 60
+        let g = vm.selectedGame ?? game
+        Task { await vm.updateClock(gameId: g.id, period: period, clockSeconds: clockRemaining) }
+    }
+
+    private func persistClock() {
+        let g = vm.selectedGame ?? game
+        Task { await vm.updateClock(gameId: g.id, period: g.period, clockSeconds: clockRemaining) }
     }
 }
 
@@ -86,31 +186,37 @@ struct StatEntrySheet: View {
     @Bindable var vm: StatsViewModel
     let gameId: String
     let entry: RosterEntry
+    let canEdit: Bool
+    let stats: [SportStat]
 
     var body: some View {
         NavigationStack {
             Form {
                 Section(entry.playerName) {
-                    ForEach(BasketballStat.allCases) { stat in
-                        let value = vm.stats[entry.id]?[stat.rawValue] ?? 0
+                    ForEach(stats) { stat in
+                        let value = vm.stats[entry.id]?[stat.key] ?? 0
                         HStack {
-                            Text(stat.displayName)
+                            Text(stat.name)
                             Spacer()
-                            Button {
-                                Task { await vm.incrementStat(gameId: gameId, rosterEntryId: entry.id, playerName: entry.playerName, stat: stat, delta: -1) }
-                            } label: {
-                                Image(systemName: "minus.circle")
+                            if canEdit {
+                                Button {
+                                    Task { await vm.incrementStat(gameId: gameId, rosterEntryId: entry.id, playerName: entry.playerName, statKey: stat.key, delta: -1) }
+                                } label: {
+                                    Image(systemName: "minus.circle")
+                                }
+                                .buttonStyle(.borderless)
                             }
-                            .buttonStyle(.borderless)
                             Text("\(value)")
                                 .font(.body.bold())
                                 .frame(minWidth: 32)
-                            Button {
-                                Task { await vm.incrementStat(gameId: gameId, rosterEntryId: entry.id, playerName: entry.playerName, stat: stat, delta: 1) }
-                            } label: {
-                                Image(systemName: "plus.circle")
+                            if canEdit {
+                                Button {
+                                    Task { await vm.incrementStat(gameId: gameId, rosterEntryId: entry.id, playerName: entry.playerName, statKey: stat.key, delta: 1) }
+                                } label: {
+                                    Image(systemName: "plus.circle")
+                                }
+                                .buttonStyle(.borderless)
                             }
-                            .buttonStyle(.borderless)
                         }
                     }
                 }

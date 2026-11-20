@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         FirebaseApp.configure()
+        AnalyticsService.configure()
         Messaging.messaging().delegate = self
         UNUserNotificationCenter.current().delegate = self
         requestNotificationPermission()
@@ -29,7 +30,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     }
 
     func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
-        guard let token = fcmToken, let uid = Auth.auth().currentUser?.uid else { return }
+        Self.storeCurrentFCMToken()
+    }
+
+    /// Stores the current FCM token on the signed-in user's document so they
+    /// receive push notifications (live games, broadcasts, announcements, etc.).
+    static func storeCurrentFCMToken() {
+        guard let token = Messaging.messaging().fcmToken,
+              let uid = Auth.auth().currentUser?.uid else { return }
         Firestore.firestore().collection("users").document(uid).setData(["fcmToken": token], merge: true) { _ in }
     }
 
@@ -39,6 +47,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler([.banner, .sound, .badge])
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        if let deepLink = DeepLink.parse(userInfo: response.notification.request.content.userInfo) {
+            DispatchQueue.main.async {
+                DeepLinkRouter.shared.pending = deepLink
+            }
+        }
+        completionHandler()
     }
 
     private func requestNotificationPermission() {

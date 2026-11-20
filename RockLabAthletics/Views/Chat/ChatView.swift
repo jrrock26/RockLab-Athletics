@@ -22,12 +22,15 @@ struct ChatView: View {
                                 }
                             }
                             .onChange(of: vm.selectedTeamId) { _, newValue in
-                                Task { await vm.loadChats(teamId: newValue) }
+                                Task {
+                                    let access = await FirestoreService.shared.teamAccess(teamId: newValue, userId: auth.user?.id, isAd: auth.user?.role == .ad)
+                                    await vm.loadChats(teamId: newValue, access: access)
+                                }
                             }
                         }
 
                         Section("Channels") {
-                            ForEach(vm.chats) { chat in
+                            ForEach(vm.visibleChats) { chat in
                                 NavigationLink {
                                     ChatDetailView(chat: chat, vm: vm)
                                 } label: {
@@ -41,9 +44,10 @@ struct ChatView: View {
             .navigationTitle("Communication")
             .task {
                 if let schoolId = auth.user?.schoolId {
-                    await vm.loadTeams(schoolId: schoolId)
+                    await vm.loadTeams(schoolId: schoolId, userTeamIds: auth.user?.role == .ad ? nil : auth.user?.teamIds)
                     if !vm.selectedTeamId.isEmpty {
-                        await vm.loadChats(teamId: vm.selectedTeamId)
+                        let access = await FirestoreService.shared.teamAccess(teamId: vm.selectedTeamId, userId: auth.user?.id, isAd: auth.user?.role == .ad)
+                        await vm.loadChats(teamId: vm.selectedTeamId, access: access)
                     }
                 }
             }

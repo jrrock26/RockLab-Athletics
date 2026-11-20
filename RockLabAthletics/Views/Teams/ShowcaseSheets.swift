@@ -1,11 +1,12 @@
 import SwiftUI
+import AVKit
+import PhotosUI
 
 struct EditShowcaseSheet: View {
     @Environment(\.dismiss) private var dismiss
     let vm: ShowcaseViewModel
     let entry: RosterEntry
 
-    @State private var position = ""
     @State private var height = ""
     @State private var weight = ""
     @State private var graduationYear = ""
@@ -15,12 +16,18 @@ struct EditShowcaseSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Athlete info") {
-                    TextField("Position", text: $position)
+                Section {
+                    LabeledContent("Jersey", value: entry.jerseyNumber.isEmpty ? "—" : "#\(entry.jerseyNumber)")
+                    LabeledContent("Position", value: entry.position.isEmpty ? "—" : entry.position)
                     TextField("Height", text: $height)
                     TextField("Weight", text: $weight)
                     TextField("Graduation year", text: $graduationYear)
                     TextField("GPA", text: $gpa)
+                } header: {
+                    Text("Athlete info")
+                } footer: {
+                    Text("Jersey number and position are managed by your coach and can't be changed here.")
+                        .font(.caption)
                 }
                 Section("Bio") {
                     TextEditor(text: $bio)
@@ -34,7 +41,7 @@ struct EditShowcaseSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         Task {
-                            await vm.updateShowcase(position: position, height: height, weight: weight,
+                            await vm.updateShowcase(height: height, weight: weight,
                                                     graduationYear: graduationYear, gpa: gpa, bio: bio)
                             dismiss()
                         }
@@ -43,46 +50,11 @@ struct EditShowcaseSheet: View {
             }
             .onAppear {
                 if let s = vm.showcase {
-                    position = s.position
                     height = s.height
                     weight = s.weight
                     graduationYear = s.graduationYear
                     gpa = s.gpa
                     bio = s.bio
-                }
-            }
-        }
-    }
-}
-
-struct AddHighlightSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Bindable var vm: ShowcaseViewModel
-    let showcaseId: String
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Highlight") {
-                    TextField("Title", text: $vm.newHighlightTitle)
-                    TextField("Video URL", text: $vm.newHighlightURL)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-                    TextField("Description", text: $vm.newHighlightDescription)
-                }
-            }
-            .navigationTitle("Add Highlight")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
-                        Task {
-                            await vm.addHighlight(showcaseId: showcaseId)
-                            dismiss()
-                        }
-                    }
-                    .disabled(vm.newHighlightTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }

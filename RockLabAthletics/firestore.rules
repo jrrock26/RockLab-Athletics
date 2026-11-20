@@ -1,0 +1,3 @@
+      // Owned by the athlete and their linked parent/guardian — never staff.
+      allow create: if signedIn() && isRosterAssignee(request.resource.data.teamId, request.resource.data.rosterEntryId);
+      allow update: if signedIn() && isRosterAssignee(resource.data.teamId, resource.data.rosterEntryId);

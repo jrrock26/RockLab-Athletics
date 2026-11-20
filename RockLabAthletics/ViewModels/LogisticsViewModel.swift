@@ -8,6 +8,7 @@ final class LogisticsViewModel {
     var fundraisers: [Fundraiser] = []
     var roster: [RosterEntry] = []
     var donations: [Donation] = []
+    var progress: [String: FundraiserProgress] = [:]
     var selectedTrip: Trip?
     var errorMessage: String?
 
@@ -125,6 +126,17 @@ final class LogisticsViewModel {
     func loadDonations(fundraiserId: String) async {
         do {
             donations = try await FirestoreService.shared.fetchDonations(fundraiserId: fundraiserId)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func loadFundraiserDetail(fundraiserId: String, teamId: String) async {
+        do {
+            roster = try await FirestoreService.shared.fetchRoster(teamId: teamId)
+            donations = try await FirestoreService.shared.fetchDonations(fundraiserId: fundraiserId)
+            let prog = try await FirestoreService.shared.fetchFundraiserProgress(fundraiserId: fundraiserId)
+            progress = Dictionary(uniqueKeysWithValues: prog.map { ($0.rosterEntryId, $0) })
         } catch {
             errorMessage = error.localizedDescription
         }

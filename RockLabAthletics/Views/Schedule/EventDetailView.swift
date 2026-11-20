@@ -4,6 +4,7 @@ struct EventDetailView: View {
     @Environment(AuthViewModel.self) private var auth
     let event: Event
     let vm: ScheduleViewModel
+    @State private var access = TeamAccess()
 
     var body: some View {
         List {
@@ -18,44 +19,48 @@ struct EventDetailView: View {
                 }
             }
 
-            Section("My RSVP") {
-                HStack(spacing: 12) {
-                    ForEach([RSVPStatus.attending, RSVPStatus.notAttending]) { status in
-                        Button {
-                            Task {
-                                await vm.setMyRSVP(eventId: event.id, userId: auth.user?.id ?? "", status: status)
+            if access.canSeeAllEvents {
+                Section("My RSVP") {
+                    HStack(spacing: 12) {
+                        ForEach([RSVPStatus.attending, RSVPStatus.notAttending]) { status in
+                            Button {
+                                Task {
+                                    await vm.setMyRSVP(eventId: event.id, userId: auth.user?.id ?? "", status: status)
+                                }
+                            } label: {
+                                Text(status.displayName)
+                                    .frame(maxWidth: .infinity)
                             }
-                        } label: {
-                            Text(status.displayName)
-                                .frame(maxWidth: .infinity)
+                            .buttonStyle(.borderedProminent)
+                            .tint(status == vm.myRSVP ? Color.accentColor : Color.gray)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(status == vm.myRSVP ? Color.accentColor : Color.gray)
                     }
                 }
             }
 
-            Section("Attendance") {
-                if vm.roster.isEmpty {
-                    Text("No players on the roster yet.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(vm.roster) { entry in
-                        HStack {
-                            Text(entry.playerName)
-                            Spacer()
-                            Menu {
-                                ForEach(AttendanceStatus.allCases) { status in
-                                    Button(status.displayName) {
-                                        Task {
-                                            await vm.setAttendance(eventId: event.id, rosterEntryId: entry.id, status: status)
+            if access.hasPerm(.attendance) {
+                Section("Attendance") {
+                    if vm.roster.isEmpty {
+                        Text("No players on the roster yet.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(vm.roster) { entry in
+                            HStack {
+                                Text(entry.playerName)
+                                Spacer()
+                                Menu {
+                                    ForEach(AttendanceStatus.allCases) { status in
+                                        Button(status.displayName) {
+                                            Task {
+                                                await vm.setAttendance(eventId: event.id, rosterEntryId: entry.id, status: status)
+                                            }
                                         }
                                     }
+                                } label: {
+                                    Text((vm.attendance[entry.id] ?? .pending).displayName)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
-                            } label: {
-                                Text((vm.attendance[entry.id] ?? .pending).displayName)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -65,7 +70,8 @@ struct EventDetailView: View {
         .navigationTitle(event.title)
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            await vm.loadEventDetail(teamId: event.teamId, eventId: event.id, userId: auth.user?.id ?? "")
+            access = await FirestoreService.shared.teamAccess(teamId: event.teamId, userId: auth.user?.id, isAd: auth.user?.role == .ad)
+            await vm.loadEventDetail(teamId: event.teamId, eventId: event.id, userId: auth.user?.id ?? "", access: access)
         }
     }
 }

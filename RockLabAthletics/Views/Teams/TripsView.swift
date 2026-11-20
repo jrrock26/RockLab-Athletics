@@ -3,14 +3,16 @@ import SwiftUI
 struct TripsView: View {
     let teamId: String
     let sportId: String
+    @Environment(AuthViewModel.self) private var auth
     @State private var vm = LogisticsViewModel()
     @State private var showingAdd = false
+    @State private var access = TeamAccess()
 
     var body: some View {
         List {
             if vm.trips.isEmpty {
                 Section {
-                    Text("No trips yet. Tap + to plan one.")
+                    Text(access.canManageTeam ? "No trips yet. Tap + to plan one." : "No trips scheduled.")
                         .foregroundStyle(.secondary)
                 }
             } else {
@@ -32,6 +34,7 @@ struct TripsView: View {
                             Task { await vm.deleteTrip(tripId: vm.trips[index].id) }
                         }
                     }
+                    .deleteDisabled(!access.canManageTeam)
                 }
             }
         }
@@ -41,14 +44,20 @@ struct TripsView: View {
             BrandedHeader(imageName: SportBackground.image(for: sportId))
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showingAdd = true } label: { Image(systemName: "plus") }
+            if access.canManageTeam {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showingAdd = true } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("New trip")
+                }
             }
         }
         .sheet(isPresented: $showingAdd) {
             AddTripSheet(vm: vm, teamId: teamId)
         }
-        .task { await vm.loadTrips(teamId: teamId) }
+        .task {
+            await vm.loadTrips(teamId: teamId)
+            access = await FirestoreService.shared.teamAccess(teamId: teamId, userId: auth.user?.id, isAd: auth.user?.role == .ad)
+        }
     }
 }
 

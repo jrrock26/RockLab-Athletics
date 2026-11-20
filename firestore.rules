@@ -17,7 +17,6 @@ service cloud.firestore {
     function isCoachOf(t) { return memberRole(t) == 'coach'; }
     function isStaffOf(t) { return memberRole(t) == 'staff'; }
     function isTeamMember(t) { return memberRole(t) in ['coach','staff','player','parent']; }
-    function isFollowerOf(t) { return memberRole(t) == 'follower'; }
     function canManageTeam(t) { return isAd() || isCoachOf(t); }
     function staffHasPerm(t, p) {
       let m = membership(t);
@@ -28,17 +27,46 @@ service cloud.firestore {
     function gameTeam(id) { return get(/databases/$(database)/documents/games/$(id)).data.teamId; }
     function fundTeam(id) { return get(/databases/$(database)/documents/fundraisers/$(id)).data.teamId; }
     function chatDoc(id) { return get(/databases/$(database)/documents/chats/$(id)).data; }
+    function conversationDoc(id) { return get(/databases/$(database)/documents/conversations/$(id)).data; }
+    function rosterEntryData(teamId, entryId) {
+      return get(/databases/$(database)/documents/teams/$(teamId)/roster/$(entryId)).data;
+    }
+    function isRosterAssignee(teamId, entryId) {
+      let entry = rosterEntryData(teamId, entryId);
+      let playerUid = entry != null && 'userId' in entry ? entry.userId : null;
+      let u = userData();
+      let linked = u != null && 'linkedPlayerIds' in u ? u.linkedPlayerIds : [];
+      return playerUid != null
+        && (request.auth.uid == playerUid || linked.hasAny([playerUid]));
+    }
+
+    function isMemberRole(t) {
+      return memberRole(t) in ['coach','staff','player','parent'];
+    }
 
     function chatReadAllowed(type, t) {
       return isAd()
-        || type == 'commBoard'
-        || (type in ['team','parent'] && isTeamMember(t))
+        || (type == 'commBoard' && (isMemberRole(t) || memberRole(t) == 'follower'))
+        || (type == 'team' && memberRole(t) in ['coach','staff','player'])
+        || (type == 'parent' && memberRole(t) in ['coach','player','parent'])
         || (type == 'staff' && (isAd() || isCoachOf(t) || staffHasPerm(t, 'staffChat')));
+    }
+
+    // Followers only see public comm-board categories (live game / gameday / fundraiser).
+    function messageReadAllowed(type, t) {
+      return type == 'commBoard'
+        ? (isAd()
+            || isMemberRole(t)
+            || (memberRole(t) == 'follower'
+                && 'category' in resource.data
+                && resource.data.category in ['liveGame', 'gameday', 'fundraiser']))
+        : chatReadAllowed(type, t);
     }
     function chatWriteAllowed(type, t) {
       return isAd()
-        || (type == 'commBoard' && (isAd() || isCoachOf(t) || isStaffOf(t)))
-        || (type in ['team','parent'] && isTeamMember(t))
+        || (type == 'commBoard' && (canManageTeam(t) || staffHasPerm(t, 'commBoardPost')))
+        || (type == 'team' && memberRole(t) in ['coach','staff','player'])
+        || (type == 'parent' && memberRole(t) in ['coach','player','parent'])
         || (type == 'staff' && (isAd() || isCoachOf(t) || staffHasPerm(t, 'staffChat')));
     }
 
@@ -57,29 +85,95 @@ service cloud.firestore {
 
     match /teams/{teamId} {
       allow read: if signedIn();
-      allow create: if signedIn() && role() in ['ad','coach'];
+      allow create: if signedIn() && isAd();
       allow update: if canManageTeam(teamId);
       allow delete: if isAd();
 
       match /members/{memberId} {
         allow read: if signedIn() && (uid() == memberId || isAd() || isCoachOf(teamId));
-        allow write: if canManageTeam(teamId);
+        // Anyone may add themselves as a follower (follow a team).
+        allow create: if canManageTeam(teamId)
+          || (uid() == memberId && request.resource.data.role == 'follower');
+        allow update, delete: if canManageTeam(teamId);
+      }
+
+      // Highlight studio — game film sources and produced highlight reels.
+      // Viewers (including followers) can read; authors can write. Anyone
+      // signed in may bump only the view counter by exactly one.
+      match /videos/{videoId} {
+        allow read: if signedIn() && (isAd() || isTeamMember(teamId) || memberRole(teamId) == 'follower');
+        allow write: if canManageTeam(teamId) || isStaffOf(teamId);
+      }
+
+      match /reels/{reelId} {
+        allow read: if signedIn() && (isAd() || isTeamMember(teamId) || memberRole(teamId) == 'follower');
+        allow create, delete: if canManageTeam(teamId) || isStaffOf(teamId);
+        allow update: if canManageTeam(teamId) || isStaffOf(teamId)
+          || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['views'])
+              && request.resource.data.views == resource.data.views + 1);
       }
 
       match /roster/{entryId} {
         allow read: if signedIn() && (isAd() || isTeamMember(teamId));
         allow write: if canManageTeam(teamId);
+        // Injury history is staff-only; writes go through Cloud Functions.
+        match /injuryReports/{reportId} {
+          allow read: if signedIn() && (isAd() || isCoachOf(teamId) || isStaffOf(teamId));
+          allow write: if false;
+        }
 
         match /forms/{formId} {
           allow read: if signedIn() && (isAd() || isTeamMember(teamId));
-          allow write: if signedIn() && (canManageTeam(teamId) || isTeamMember(teamId));
+          allow write: if signedIn() && (
+            canManageTeam(teamId)
+            || staffHasPerm(teamId, 'forms')
+            || (isRosterAssignee(teamId, entryId) && request.resource.data.status == 'submitted')
+          );
         }
+      }
+
+      match /forms/{formId} {
+        allow read: if signedIn() && (isAd() || isTeamMember(teamId));
+        allow create: if canManageTeam(teamId) || staffHasPerm(teamId, 'forms');
+        allow update, delete: if canManageTeam(teamId) || staffHasPerm(teamId, 'forms');
+
+        match /submissions/{entryId} {
+          allow read: if signedIn() && (isAd() || isTeamMember(teamId));
+          allow write: if signedIn() && (
+            canManageTeam(teamId)
+            || staffHasPerm(teamId, 'forms')
+            || (isRosterAssignee(teamId, entryId) && request.resource.data.status == 'submitted')
+          );
+        }
+      }
+
+      match /volunteerShifts/{shiftId} {
+        allow read: if signedIn() && (isAd() || isTeamMember(teamId) || memberRole(teamId) == 'follower');
+        allow create: if canManageTeam(teamId) || staffHasPerm(teamId, 'concessions');
+        allow update, delete: if canManageTeam(teamId) || staffHasPerm(teamId, 'concessions');
+
+        match /signups/{userId} {
+          allow read: if signedIn() && (isAd() || isTeamMember(teamId) || memberRole(teamId) == 'follower');
+          // Sign-ups are created only through the atomic `volunteerSignUp` Cloud Function.
+          allow create: if false;
+          allow delete: if signedIn() && (request.auth.uid == userId || canManageTeam(teamId) || staffHasPerm(teamId, 'concessions'));
+          allow update: if false;
+        }
+      }
+
+      match /media/{mediaId} {
+        allow read: if signedIn();
+        allow create: if canManageTeam(teamId) || isStaffOf(teamId);
+        allow delete: if canManageTeam(teamId) || isStaffOf(teamId);
+        allow update: if false;
       }
     }
 
     match /events/{eventId} {
+      // Followers see the team calendar except practice details (item F).
       allow read: if signedIn() && (isAd() || isTeamMember(resource.data.teamId)
-        || (isFollowerOf(resource.data.teamId) && resource.data.type == 'game'));
+        || (memberRole(resource.data.teamId) == 'follower'
+            && resource.data.type in ['game', 'meeting', 'meal', 'travel']));
       allow create, update, delete: if canManageTeam(request.resource.data.teamId);
 
       match /rsvps/{rsvpUserId} {
@@ -106,14 +200,38 @@ service cloud.firestore {
 
     match /chats/{chatId} {
       allow read: if signedIn() && chatReadAllowed(resource.data.type, resource.data.teamId);
-      allow create: if signedIn() && role() in ['ad','coach','staff'];
+      allow create: if signedIn() && canManageTeam(request.resource.data.teamId);
       allow update, delete: if false;
 
       match /messages/{messageId} {
-        allow read: if signedIn() && chatReadAllowed(chatDoc(chatId).type, chatDoc(chatId).teamId);
+        allow read: if signedIn() && messageReadAllowed(chatDoc(chatId).type, chatDoc(chatId).teamId);
         allow create: if signedIn() && chatWriteAllowed(chatDoc(chatId).type, chatDoc(chatId).teamId);
+        // Moderation: an AD or the team's coach may hide a message, and only
+        // those fields. Content is never destroyed — the audit trail stays.
+        allow update: if signedIn()
+          && (isAd() || isCoachOf(chatDoc(chatId).teamId))
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['hidden', 'moderatedBy', 'moderatedAt']);
+        allow delete: if false;
+      }
+    }
+
+    match /conversations/{conversationId} {
+      allow read: if signedIn() && request.auth.uid in resource.data.participantIds;
+      allow create: if signedIn() && request.auth.uid in request.resource.data.participantIds;
+      allow update, delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if signedIn() && request.auth.uid in conversationDoc(conversationId).participantIds;
+        allow create: if signedIn() && request.auth.uid in conversationDoc(conversationId).participantIds;
         allow update, delete: if false;
       }
+    }
+
+    match /broadcasts/{broadcastId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && canManageTeam(request.resource.data.teamId);
+      allow update, delete: if canManageTeam(resource.data.teamId);
     }
 
     match /trips/{tripId} {
@@ -131,24 +249,46 @@ service cloud.firestore {
         allow create: if signedIn();
         allow update, delete: if false;
       }
+
+      match /progress/{entryId} {
+        allow read: if signedIn();
+        allow write: if signedIn() && (
+          isAd() || isCoachOf(fundTeam(fundraiserId))
+          || staffHasPerm(fundTeam(fundraiserId), 'fundraising')
+          || isRosterAssignee(fundTeam(fundraiserId), entryId)
+        );
+      }
     }
 
     match /showcases/{showcaseId} {
       allow read: if signedIn();
-      allow create, update: if signedIn() && (isAd() || role() in ['coach','staff','player']);
+      // Owned by the athlete and their linked parent/guardian — never staff.
+      allow create: if signedIn() && isRosterAssignee(request.resource.data.teamId, request.resource.data.rosterEntryId);
+      allow update: if signedIn() && isRosterAssignee(resource.data.teamId, resource.data.rosterEntryId);
       allow delete: if false;
 
       match /highlights/{highlightId} {
         allow read: if signedIn();
-        allow create, update: if signedIn() && (isAd() || role() in ['coach','staff','player']);
-        allow delete: if signedIn() && (isAd() || role() in ['coach','staff']);
+        allow write: if false;
       }
+    }
+
+    // Moderation queue. Written only by the reportContent Cloud Function.
+    match /reports/{reportId} {
+      allow read: if signedIn() && isAd();
+      allow write: if false;
+    }
+
+    // Audit trail of deleted accounts (no PII). Server-write only.
+    match /deletedAccounts/{uid} {
+      allow read: if false;
+      allow write: if false;
     }
 
     match /invitations/{invitationId} {
       allow read: if signedIn();
-      allow create: if signedIn() && role() in ['ad','coach','staff'];
-      allow update, delete: if signedIn() && role() in ['ad','coach','staff'];
+      allow create: if signedIn() && (isAd() || ('teamId' in request.resource.data && isCoachOf(request.resource.data.teamId)));
+      allow update, delete: if signedIn() && (isAd() || ('teamId' in resource.data && isCoachOf(resource.data.teamId)));
     }
   }
 }

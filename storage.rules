@@ -1,0 +1,79 @@
+rules_version = '2';
+
+// RockLab Athletics storage rules.
+// Paths:
+//   users/{uid}/photo.jpg              profile photo
+//   schools/{schoolId}/logo.jpg        school logo
+//   teams/{teamId}/media/{file}        team photos
+//   teams/{teamId}/videos/{file}       game film / highlight sources
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedIn() { return request.auth != null; }
+
+    function role() {
+      return request.auth.token.role;
+    }
+
+    function membership(teamId) {
+      return exists(/databases/(default)/documents/teams/$(teamId)/members/$(request.auth.uid))
+        ? get(/databases/(default)/documents/teams/$(teamId)/members/$(request.auth.uid)).data
+        : null;
+    }
+
+    function memberRole(teamId) {
+      return membership(teamId) == null ? null : membership(teamId).role;
+    }
+
+    function isTeamMember(teamId) {
+      return memberRole(teamId) in ['coach', 'staff', 'player', 'parent'];
+    }
+
+    function isFollower(teamId) { return memberRole(teamId) == 'follower'; }
+    function isAd() { return role() == 'ad'; }
+    function isCoachOf(teamId) { return memberRole(teamId) == 'coach'; }
+
+    function isSchoolAd(schoolId) {
+      return signedIn() && exists(/databases/(default)/documents/schools/$(schoolId))
+        && get(/databases/(default)/documents/schools/$(schoolId)).data.adUserId == request.auth.uid;
+    }
+
+    // Profile photos: only the owner writes; anyone signed in can read.
+    match /users/{uid}/{fileName} {
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.uid == uid
+        && request.resource.size < 10 * 1024 * 1024;
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
+
+    // School logos: the AD of that school (or a platform AD).
+    match /schools/{schoolId}/{fileName} {
+      allow read: if signedIn();
+      allow write: if signedIn() && (isAd() || isSchoolAd(schoolId))
+        && request.resource.size < 10 * 1024 * 1024;
+    }
+
+    // Team photos: members can view, staff/coaches can manage.
+    match /teams/{teamId}/media/{fileName} {
+      allow read: if signedIn() && (isAd() || isTeamMember(teamId) || isFollower(teamId));
+      allow write: if signedIn()
+        && (isAd() || isCoachOf(teamId) || memberRole(teamId) == 'staff')
+        && request.resource.size < 25 * 1024 * 1024;
+      allow delete: if signedIn() && (isAd() || isCoachOf(teamId) || memberRole(teamId) == 'staff');
+    }
+
+    // Game film: same audience, larger cap (600 MB matches the app's limit).
+    match /teams/{teamId}/videos/{fileName} {
+      allow read: if signedIn() && (isAd() || isTeamMember(teamId) || isFollower(teamId));
+      allow write: if signedIn()
+        && (isAd() || isCoachOf(teamId) || memberRole(teamId) == 'staff')
+        && request.resource.size < 600 * 1024 * 1024;
+      allow delete: if signedIn() && (isAd() || isCoachOf(teamId) || memberRole(teamId) == 'staff');
+    }
+
+    // Everything else is closed.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -22,6 +22,15 @@ enum FormStatus: String, Codable {
     case submitted
     case approved
     case expired
+
+    var displayName: String {
+        switch self {
+        case .missing: return "Missing"
+        case .submitted: return "Submitted"
+        case .approved: return "Approved"
+        case .expired: return "Expired"
+        }
+    }
 }
 
 /// A single form record for a player.
@@ -32,6 +41,10 @@ struct PlayerForm: Identifiable, Codable {
     var type: FormType
     var status: FormStatus
     var expiresAt: Date?
+    var dueDate: Date?
+    var signedByName: String
+    var signedAt: Date?
+    var submittedBy: String
 
     init(
         id: String,
@@ -39,7 +52,11 @@ struct PlayerForm: Identifiable, Codable {
         rosterEntryId: String,
         type: FormType,
         status: FormStatus,
-        expiresAt: Date? = nil
+        expiresAt: Date? = nil,
+        dueDate: Date? = nil,
+        signedByName: String = "",
+        signedAt: Date? = nil,
+        submittedBy: String = ""
     ) {
         self.id = id
         self.teamId = teamId
@@ -47,6 +64,10 @@ struct PlayerForm: Identifiable, Codable {
         self.type = type
         self.status = status
         self.expiresAt = expiresAt
+        self.dueDate = dueDate
+        self.signedByName = signedByName
+        self.signedAt = signedAt
+        self.submittedBy = submittedBy
     }
 
     init?(id: String, data: [String: Any]) {
@@ -58,56 +79,85 @@ struct PlayerForm: Identifiable, Codable {
         self.rosterEntryId = rosterEntryId
         self.type = type
         self.status = FormStatus(rawValue: data["status"] as? String ?? "") ?? .missing
-        if let exp = data["expiresAt"] as? Double {
-            self.expiresAt = Date(timeIntervalSince1970: exp)
-        } else {
-            self.expiresAt = nil
-        }
+        self.expiresAt = (data["expiresAt"] as? Double).map { Date(timeIntervalSince1970: $0) }
+        self.dueDate = (data["dueDate"] as? Double).map { Date(timeIntervalSince1970: $0) }
+        self.signedByName = data["signedByName"] as? String ?? ""
+        self.signedAt = (data["signedAt"] as? Double).map { Date(timeIntervalSince1970: $0) }
+        self.submittedBy = data["submittedBy"] as? String ?? ""
+    }
+
+    var isOverdue: Bool {
+        guard status == .missing || status == .submitted, let dueDate else { return false }
+        return dueDate < Date()
     }
 }
 
 /// Whether a player is cleared to play.
 enum EligibilityStatus: Equatable {
     case eligible
-    case ineligible(missing: [FormType], expired: [FormType])
+    case injured
+    case ineligible(missingForms: [String])
 
     var isEligible: Bool {
         if case .eligible = self { return true }
         return false
     }
-}
 
-/// The safety-first rule engine: a player is eligible only when all required
-/// forms are approved and the physical hasn't expired.
-enum EligibilityEngine {
-    static func requiredForms() -> [FormType] {
-        [.physical, .codeOfConduct, .concussionWaiver]
+    var label: String {
+        switch self {
+        case .eligible: return "Eligible"
+        case .injured: return "Injured"
+        case .ineligible: return "Ineligible"
+        }
     }
 
-    static func evaluate(forms: [PlayerForm], now: Date = Date()) -> EligibilityStatus {
-        var missing: [FormType] = []
-        var expired: [FormType] = []
+    var missingForms: [String] {
+        if case .ineligible(let forms) = self { return forms }
+        return []
+    }
+}
 
-        for type in requiredForms() {
-            guard let form = forms.first(where: { $0.type == type }) else {
-                missing.append(type)
+/// Eligibility is driven ONLY by forms the AD/coach has actually issued
+/// (published) for the team. If nothing has been issued, every player is
+/// eligible. A player is also not eligible to play while injured.
+enum EligibilityEngine {
+
+    static func evaluate(publishedForms: [TeamForm],
+                         submissions: [String: FormSubmission],
+                         injury: InjuryStatus,
+                         now: Date = Date()) -> EligibilityStatus {
+        var missing: [String] = []
+
+        for form in publishedForms where form.published {
+            guard let submission = submissions[form.id] else {
+                missing.append(form.title)
                 continue
             }
-            switch form.status {
-            case .approved:
-                if type == .physical, let exp = form.expiresAt, exp < now {
-                    expired.append(type)
-                }
-            case .expired:
-                expired.append(type)
-            case .missing, .submitted:
-                missing.append(type)
+            if submission.status == .expired {
+                missing.append(form.title)
+                continue
+            }
+            if submission.status == .missing {
+                missing.append(form.title)
+                continue
+            }
+            // A parent co-signature is part of completing the form.
+            if form.requiresParentSignature && submission.parentSignedByName.isEmpty {
+                missing.append(form.title)
+                continue
+            }
+            // Overdue and not signed.
+            if let due = form.dueDate, due < now, submission.signedAt == nil {
+                missing.append(form.title)
             }
         }
 
-        if missing.isEmpty && expired.isEmpty {
-            return .eligible
+        if !missing.isEmpty {
+            return .ineligible(missingForms: missing)
         }
-        return .ineligible(missing: missing, expired: expired)
+        if injury == .injured {
+            return .injured
+        }
+        return .eligible
     }
 }

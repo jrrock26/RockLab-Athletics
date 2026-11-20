@@ -7,14 +7,16 @@ struct SignUpView: View {
     @State private var name = ""
     @State private var email = ""
     @State private var password = ""
-    @State private var inviteCode = ""
+    @State private var zipCode = ""
+    @State private var phone = ""
+    @State private var role: UserRole = .follower
     @State private var isWorking = false
 
     var body: some View {
         VStack(spacing: 12) {
             Text("Create your account")
                 .font(.title2.bold())
-            Text("Set up RockLab Athletics for your school")
+            Text("Follow your school first, then apply to teams.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
@@ -35,11 +37,30 @@ struct SignUpView: View {
                 .padding()
                 .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
 
-            TextField("Invite code (optional)", text: $inviteCode)
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
+            TextField("Zip code (optional)", text: $zipCode)
+                .keyboardType(.numberPad)
                 .padding()
                 .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+
+            TextField("Phone number (for emergency contact)", text: $phone)
+                .keyboardType(.phonePad)
+                .textContentType(.telephoneNumber)
+                .padding()
+                .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+
+            HStack {
+                Text("I am a").foregroundStyle(.secondary)
+                Spacer()
+                Picker("", selection: $role) {
+                    ForEach(UserRole.allCases, id: \.self) { r in
+                        Text(r.displayName).tag(r)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(.primary)
+            }
+            .padding()
+            .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
 
             if let error = auth.errorMessage {
                 Text(error)
@@ -69,7 +90,7 @@ struct SignUpView: View {
 
     private func signUp() async {
         isWorking = true
-        await auth.signUp(email: email, password: password, name: name, inviteCode: inviteCode)
+        await auth.signUp(email: email, password: password, name: name, role: role, zipCode: zipCode, phone: phone)
         isWorking = false
     }
 }

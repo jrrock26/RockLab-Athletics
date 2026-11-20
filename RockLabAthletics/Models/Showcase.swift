@@ -42,29 +42,3 @@ struct Showcase: Identifiable, Codable {
         self.bio = data["bio"] as? String ?? ""
     }
 }
-
-/// A highlight clip on a showcase profile.
-struct Highlight: Identifiable, Codable {
-    let id: String
-    var title: String
-    var url: String
-    var description: String
-    var createdAt: Date
-
-    init(id: String, title: String, url: String, description: String, createdAt: Date) {
-        self.id = id
-        self.title = title
-        self.url = url
-        self.description = description
-        self.createdAt = createdAt
-    }
-
-    init?(id: String, data: [String: Any]) {
-        guard let title = data["title"] as? String else { return nil }
-        self.id = id
-        self.title = title
-        self.url = data["url"] as? String ?? ""
-        self.description = data["description"] as? String ?? ""
-        self.createdAt = Date(timeIntervalSince1970: (data["createdAt"] as? Double) ?? 0)
-    }
-}

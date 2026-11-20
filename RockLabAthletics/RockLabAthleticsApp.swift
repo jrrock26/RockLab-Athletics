@@ -9,6 +9,7 @@ struct RockLabAthleticsApp: App {
         WindowGroup {
             RootView()
                 .environment(auth)
+                .environment(DeepLinkRouter.shared)
         }
     }
 }

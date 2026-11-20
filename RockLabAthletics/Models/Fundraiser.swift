@@ -73,3 +73,32 @@ struct Donation: Identifiable, Codable {
         self.date = Date(timeIntervalSince1970: (data["date"] as? Double) ?? 0)
     }
 }
+
+/// A player's fundraising progress on a campaign (raised + submitted).
+struct FundraiserProgress: Identifiable, Codable {
+    let id: String          // rosterEntryId
+    var fundraiserId: String
+    var rosterEntryId: String
+    var playerName: String
+    var raised: Double
+    var submitted: Bool
+
+    init(id: String, fundraiserId: String, rosterEntryId: String, playerName: String, raised: Double, submitted: Bool) {
+        self.id = id
+        self.fundraiserId = fundraiserId
+        self.rosterEntryId = rosterEntryId
+        self.playerName = playerName
+        self.raised = raised
+        self.submitted = submitted
+    }
+
+    init?(id: String, data: [String: Any]) {
+        guard let fundraiserId = data["fundraiserId"] as? String else { return nil }
+        self.id = id
+        self.fundraiserId = fundraiserId
+        self.rosterEntryId = data["rosterEntryId"] as? String ?? id
+        self.playerName = data["playerName"] as? String ?? ""
+        self.raised = data["raised"] as? Double ?? 0
+        self.submitted = data["submitted"] as? Bool ?? false
+    }
+}

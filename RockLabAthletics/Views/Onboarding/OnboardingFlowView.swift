@@ -3,6 +3,7 @@ import SwiftUI
 /// Three-step AD onboarding: school profile → select sports → invite coaches.
 struct OnboardingFlowView: View {
     @Environment(AuthViewModel.self) private var auth
+    @Environment(\.dismiss) private var dismiss
     @State private var vm = OnboardingViewModel()
     @State private var step = 0
     @State private var isWorking = false
@@ -27,6 +28,17 @@ struct OnboardingFlowView: View {
             }
             .navigationTitle("Set up your school")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                if step > 0 {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button { step -= 1 } label: { Image(systemName: "chevron.left") }
+                        .accessibilityLabel("Back")
+                    }
+                }
+            }
         }
         .interactiveDismissDisabled()
     }

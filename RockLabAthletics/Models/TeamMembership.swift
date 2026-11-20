@@ -11,6 +11,8 @@ enum StaffPermission: String, Codable, CaseIterable, Identifiable {
     case concessions      // manage concessions / work shifts
     case attendance       // record attendance
     case staffChat        // access the staff chat
+    case commBoardPost    // post to the comm board
+    case emergencyContacts // view the team emergency-contact list
 
     var id: String { rawValue }
 
@@ -25,6 +27,8 @@ enum StaffPermission: String, Codable, CaseIterable, Identifiable {
         case .concessions: return "Manage concessions"
         case .attendance: return "Record attendance"
         case .staffChat: return "Staff chat access"
+        case .commBoardPost: return "Post to Comm Board"
+        case .emergencyContacts: return "View emergency contacts"
         }
     }
 }

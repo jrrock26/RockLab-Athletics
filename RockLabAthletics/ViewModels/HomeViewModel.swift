@@ -1,9 +1,10 @@
 import Foundation
 import Observation
 
-/// Loads the real counts shown on the Home dashboard.
+/// Loads the teams and counts shown on the Home dashboard.
 @Observable
 final class HomeViewModel {
+    var teams: [Team] = []
     var teamCount = 0
     var playerCount = 0
     var upcomingGameCount = 0
@@ -12,6 +13,7 @@ final class HomeViewModel {
     func load(schoolId: String) async {
         do {
             let teams = try await FirestoreService.shared.fetchTeams(schoolId: schoolId)
+            self.teams = teams
             teamCount = teams.count
             var players = 0
             var upcoming = 0

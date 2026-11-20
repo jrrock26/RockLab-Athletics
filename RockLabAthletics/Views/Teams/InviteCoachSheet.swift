@@ -8,7 +8,6 @@ struct InviteCoachSheet: View {
 
     @State private var email = ""
     @State private var role: UserRole = .coach
-    @State private var generatedCode = ""
     @State private var isWorking = false
     @State private var errorMessage: String?
 
@@ -35,16 +34,6 @@ struct InviteCoachSheet: View {
                         }
                     } else {
                         LabeledContent("Role", value: "Coach")
-                    }
-                }
-
-                if !generatedCode.isEmpty {
-                    Section("Invite code") {
-                        Text("Share this code with \(email). They enter it in Settings → Join a team.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        Text(generatedCode)
-                            .font(.title2.bold().monospaced())
                     }
                 }
 
@@ -78,7 +67,7 @@ struct InviteCoachSheet: View {
         isWorking = true
         defer { isWorking = false }
         do {
-            let code = try await FirestoreService.shared.createInvitation(
+            _ = try await FirestoreService.shared.createInvitation(
                 email: email,
                 role: role,
                 schoolId: schoolId,
@@ -87,8 +76,8 @@ struct InviteCoachSheet: View {
                 teamId: team.id,
                 teamName: "\(team.sportName) \(team.level)"
             )
-            generatedCode = code
             onCreated()
+            dismiss()
         } catch {
             errorMessage = error.localizedDescription
         }

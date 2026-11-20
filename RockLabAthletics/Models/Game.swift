@@ -14,8 +14,12 @@ struct Game: Identifiable, Codable {
     var status: GameStatus
     var teamScore: Int
     var opponentScore: Int
+    var isDistrictGame: Bool
+    var opponentTeamId: String?
+    var period: Int
+    var clockSeconds: Int
 
-    init(id: String, teamId: String, opponent: String, isHome: Bool, date: Date, status: GameStatus, teamScore: Int, opponentScore: Int) {
+    init(id: String, teamId: String, opponent: String, isHome: Bool, date: Date, status: GameStatus, teamScore: Int, opponentScore: Int, isDistrictGame: Bool = false, opponentTeamId: String? = nil, period: Int = 0, clockSeconds: Int = 0) {
         self.id = id
         self.teamId = teamId
         self.opponent = opponent
@@ -24,6 +28,10 @@ struct Game: Identifiable, Codable {
         self.status = status
         self.teamScore = teamScore
         self.opponentScore = opponentScore
+        self.isDistrictGame = isDistrictGame
+        self.opponentTeamId = opponentTeamId
+        self.period = period
+        self.clockSeconds = clockSeconds
     }
 
     init?(id: String, data: [String: Any]) {
@@ -38,32 +46,9 @@ struct Game: Identifiable, Codable {
         self.status = GameStatus(rawValue: data["status"] as? String ?? "") ?? .upcoming
         self.teamScore = data["teamScore"] as? Int ?? 0
         self.opponentScore = data["opponentScore"] as? Int ?? 0
-    }
-}
-
-/// Stat categories for basketball (the first sport with live scoring).
-enum BasketballStat: String, Codable, CaseIterable, Identifiable {
-    case points, rebounds, assists, steals, blocks
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .points: return "Points"
-        case .rebounds: return "Rebounds"
-        case .assists: return "Assists"
-        case .steals: return "Steals"
-        case .blocks: return "Blocks"
-        }
-    }
-
-    var shortName: String {
-        switch self {
-        case .points: return "Pts"
-        case .rebounds: return "Reb"
-        case .assists: return "Ast"
-        case .steals: return "Stl"
-        case .blocks: return "Blk"
-        }
+        self.isDistrictGame = data["isDistrictGame"] as? Bool ?? false
+        self.opponentTeamId = data["opponentTeamId"] as? String
+        self.period = data["period"] as? Int ?? 0
+        self.clockSeconds = data["clockSeconds"] as? Int ?? 0
     }
 }

@@ -11,16 +11,31 @@ struct FirestoreService {
 
     // MARK: - Users
 
-    func createUser(id: String, email: String, name: String, role: UserRole) async throws {
+    func createUser(id: String, email: String, name: String, role: UserRole, zipCode: String = "", phone: String = "") async throws {
         let data: [String: Any] = [
             "email": email,
             "displayName": name,
             "role": role.rawValue,
             "schoolId": NSNull(),
+            "zipCode": zipCode,
+            "phone": phone,
             "linkedPlayerIds": [],
             "createdAt": FieldValue.serverTimestamp()
         ]
         try await db.collection("users").document(id).setData(data)
+    }
+
+    /// Creates a minimal user doc without touching `role`, so it never clobbers
+    /// a role set by an in-flight sign-up. Used by the auth-listener fallback.
+    func ensureUser(id: String, email: String, name: String) async throws {
+        try await db.collection("users").document(id).setData([
+            "email": email,
+            "displayName": name
+        ], merge: true)
+    }
+
+    func updateUserPhoto(userId: String, photoURL: String) async throws {
+        try await db.collection("users").document(userId).setData(["photoURL": photoURL], merge: true)
     }
 
     func fetchUser(id: String) async throws -> AppUser? {
@@ -38,17 +53,41 @@ struct FirestoreService {
 
     // MARK: - Schools
 
-    func createSchool(name: String, mascot: String, adUserId: String, sports: [Sport]) async throws -> String {
+    func createSchool(name: String, mascot: String, zipCode: String, district: String, adUserId: String, sports: [Sport]) async throws -> String {
         let ref = db.collection("schools").document()
         let data: [String: Any] = [
             "name": name,
             "mascot": mascot,
+            "zipCode": zipCode,
+            "district": district,
+            "districtKey": district.lowercased().trimmingCharacters(in: .whitespacesAndNewlines),
             "adUserId": adUserId,
+            "logoURL": "",
             "activeSports": sports.map { $0.asDictionary },
             "createdAt": FieldValue.serverTimestamp()
         ]
         try await ref.setData(data)
         return ref.documentID
+    }
+
+    func updateSchoolLogo(schoolId: String, logoURL: String) async throws {
+        try await db.collection("schools").document(schoolId).setData(["logoURL": logoURL], merge: true)
+    }
+
+    func updateSchool(schoolId: String, name: String, mascot: String, zipCode: String, district: String) async throws {
+        try await db.collection("schools").document(schoolId).setData([
+            "name": name,
+            "mascot": mascot,
+            "zipCode": zipCode,
+            "district": district,
+            "districtKey": district.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        ], merge: true)
+    }
+
+    func fetchSchool(id: String) async throws -> School? {
+        let doc = try await db.collection("schools").document(id).getDocument()
+        guard let data = doc.data() else { return nil }
+        return School(id: id, data: data)
     }
 
     // MARK: - Invitations
@@ -88,6 +127,47 @@ struct FirestoreService {
         return snapshot.documents.compactMap { Invitation(id: $0.documentID, data: $0.data()) }
     }
 
+    func fetchInvitationsByEmail(email: String) async throws -> [Invitation] {
+        let snapshot = try await db.collection("invitations")
+            .whereField("email", isEqualTo: email)
+            .getDocuments()
+        return snapshot.documents.compactMap { Invitation(id: $0.documentID, data: $0.data()) }
+    }
+
+    func fetchSchools() async throws -> [School] {
+        let snapshot = try await db.collection("schools").getDocuments()
+        return snapshot.documents.compactMap { School(id: $0.documentID, data: $0.data()) }
+    }
+
+    /// Client-side school search (fine for a single-school directory; use a
+    /// dedicated search index like Algolia/Typesense at production scale).
+    func searchSchools(query: String) async throws -> [School] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let schools = try await fetchSchools()
+        guard !q.isEmpty else { return schools.sorted { $0.name < $1.name } }
+        return schools
+            .filter { $0.name.lowercased().contains(q.lowercased()) }
+            .sorted { $0.name < $1.name }
+    }
+
+    /// Associates a user with a school (lets them browse/follow that school's teams).
+    func followSchool(userId: String, schoolId: String) async throws {
+        try await db.collection("users").document(userId).setData(["schoolId": schoolId], merge: true)
+    }
+
+    /// Removes the user's association with their school (un-follow / leave school).
+    func leaveSchool(userId: String) async throws {
+        try await db.collection("users").document(userId).setData(["schoolId": FieldValue.delete()], merge: true)
+    }
+
+    func updateDisplayName(userId: String, name: String) async throws {
+        try await db.collection("users").document(userId).setData(["displayName": name], merge: true)
+    }
+
+    func updateUserPhone(userId: String, phone: String) async throws {
+        try await db.collection("users").document(userId).setData(["phone": phone], merge: true)
+    }
+
     // MARK: - Teams
 
     func createTeam(
@@ -99,21 +179,22 @@ struct FirestoreService {
         gender: String,
         headCoachId: String
     ) async throws -> Team {
-        let ref = db.collection("teams").document()
-        let joinCode = randomCode()
-        let data: [String: Any] = [
-            "schoolId": schoolId,
-            "sportId": sportId,
-            "sportName": sportName,
-            "level": level,
-            "season": season,
-            "gender": gender,
-            "headCoachId": headCoachId,
-            "joinCode": joinCode,
-            "createdAt": FieldValue.serverTimestamp()
-        ]
-        try await ref.setData(data)
-        return Team(id: ref.documentID, schoolId: schoolId, sportId: sportId, sportName: sportName,
+        // Creates the team *and* the head coach's membership so the new team
+        // has every feature from day one.
+        let result = try await FunctionsService.shared.createTeam(
+            schoolId: schoolId,
+            sportId: sportId,
+            sportName: sportName,
+            level: level,
+            season: season,
+            gender: gender,
+            headCoachId: headCoachId)
+        guard let teamId = result["teamId"] as? String else {
+            throw NSError(domain: "FirestoreService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Team creation failed."])
+        }
+        let joinCode = result["joinCode"] as? String ?? ""
+        return Team(id: teamId, schoolId: schoolId, sportId: sportId, sportName: sportName,
                     level: level, season: season, gender: gender, headCoachId: headCoachId, joinCode: joinCode)
     }
 
@@ -122,6 +203,41 @@ struct FirestoreService {
             .whereField("schoolId", isEqualTo: schoolId)
             .getDocuments()
         return snapshot.documents.compactMap { Team(id: $0.documentID, data: $0.data()) }
+    }
+
+    /// Teams a user is personally attached to — used for coaches, who only ever
+    /// see their own teams (never the whole school's list).
+    func fetchTeams(forUser userId: String, teamIds: [String] = []) async throws -> [Team] {
+        var result: [Team] = []
+        var seen = Set<String>()
+
+        let coached = try await db.collection("teams")
+            .whereField("headCoachId", isEqualTo: userId)
+            .getDocuments()
+        for doc in coached.documents {
+            if let team = Team(id: doc.documentID, data: doc.data()), !seen.contains(team.id) {
+                result.append(team)
+                seen.insert(team.id)
+            }
+        }
+
+        for teamId in teamIds where !seen.contains(teamId) {
+            if let team = try? await fetchTeam(teamId: teamId), !seen.contains(team.id) {
+                result.append(team)
+                seen.insert(team.id)
+            }
+        }
+
+        return result.sorted { $0.sportName < $1.sportName }
+    }
+
+    /// Teams started by coaches that have no school yet (AD adoption queue).
+    func fetchUnattachedTeams() async throws -> [Team] {
+        let snapshot = try await db.collection("teams")
+            .whereField("adoptionStatus", isEqualTo: Team.AdoptionStatus.unattached.rawValue)
+            .getDocuments()
+        return snapshot.documents.compactMap { Team(id: $0.documentID, data: $0.data()) }
+            .sorted { $0.sportName < $1.sportName }
     }
 
     // MARK: - Roster
@@ -149,9 +265,27 @@ struct FirestoreService {
         try await db.collection("teams").document(teamId).collection("roster").document(entryId).delete()
     }
 
+    func updateRosterEntry(teamId: String, entryId: String, playerName: String, jerseyNumber: String, position: String) async throws {
+        try await db.collection("teams").document(teamId).collection("roster").document(entryId).setData([
+            "playerName": playerName,
+            "jerseyNumber": jerseyNumber,
+            "position": position
+        ], merge: true)
+    }
+
     // MARK: - Forms
 
-    func submitForm(teamId: String, rosterEntryId: String, type: FormType, status: FormStatus, expiresAt: Date?) async throws {
+    func submitForm(
+        teamId: String,
+        rosterEntryId: String,
+        type: FormType,
+        status: FormStatus,
+        expiresAt: Date? = nil,
+        dueDate: Date? = nil,
+        signedByName: String? = nil,
+        signedAt: Date? = nil,
+        submittedBy: String? = nil
+    ) async throws {
         let col = db.collection("teams").document(teamId)
             .collection("roster").document(rosterEntryId)
             .collection("forms")
@@ -164,17 +298,130 @@ struct FirestoreService {
             "status": status.rawValue,
             "updatedAt": FieldValue.serverTimestamp()
         ]
-        if let expiresAt {
-            data["expiresAt"] = expiresAt.timeIntervalSince1970
-        } else {
-            data["expiresAt"] = NSNull()
-        }
+        data["expiresAt"] = expiresAt.map { $0.timeIntervalSince1970 } ?? NSNull()
+        data["dueDate"] = dueDate.map { $0.timeIntervalSince1970 } ?? NSNull()
+        if let signedByName { data["signedByName"] = signedByName }
+        if let signedAt { data["signedAt"] = signedAt.timeIntervalSince1970 }
+        if let submittedBy { data["submittedBy"] = submittedBy }
 
         if let doc = existing.documents.first {
             try await doc.reference.setData(data, merge: true)
         } else {
             try await col.document().setData(data)
         }
+    }
+
+    /// Sets (or clears) a due date without touching the form's status/signature.
+    func setFormDueDate(teamId: String, rosterEntryId: String, type: FormType, dueDate: Date?) async throws {
+        let col = db.collection("teams").document(teamId)
+            .collection("roster").document(rosterEntryId)
+            .collection("forms")
+        let existing = try await col.whereField("type", isEqualTo: type.rawValue).getDocuments()
+        let data: [String: Any] = [
+            "teamId": teamId,
+            "rosterEntryId": rosterEntryId,
+            "type": type.rawValue,
+            "dueDate": dueDate.map { $0.timeIntervalSince1970 } ?? NSNull(),
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+        if let doc = existing.documents.first {
+            try await doc.reference.setData(data, merge: true)
+        } else {
+            try await col.document().setData(data)
+        }
+    }
+
+    // MARK: - Team forms (templates)
+
+    func createTeamForm(teamId: String, title: String, description: String, body: String = "", dueDate: Date?, fields: [FormField] = [], requiresParentSignature: Bool = false) async throws -> String {
+        let ref = db.collection("teams").document(teamId).collection("forms").document()
+        let data: [String: Any] = [
+            "teamId": teamId,
+            "title": title,
+            "description": description,
+            "body": body,
+            "dueDate": dueDate.map { $0.timeIntervalSince1970 } ?? NSNull(),
+            "published": false,
+            "requiresParentSignature": requiresParentSignature,
+            "fields": fields.map { ["id": $0.id, "type": $0.type.rawValue, "label": $0.label, "required": $0.required] },
+            "createdAt": FieldValue.serverTimestamp()
+        ]
+        try await ref.setData(data)
+        return ref.documentID
+    }
+
+    func fetchTeamForms(teamId: String, publishedOnly: Bool = false) async throws -> [TeamForm] {
+        let base = db.collection("teams").document(teamId).collection("forms")
+        let query: Query = publishedOnly ? base.whereField("published", isEqualTo: true) : base
+        let snapshot = try await query.getDocuments()
+        return snapshot.documents.compactMap { TeamForm(id: $0.documentID, data: $0.data()) }
+    }
+
+    func setTeamFormPublished(teamId: String, formId: String, published: Bool) async throws {
+        try await db.collection("teams").document(teamId).collection("forms").document(formId)
+            .setData(["published": published], merge: true)
+    }
+
+    func deleteTeamForm(teamId: String, formId: String) async throws {
+        try await db.collection("teams").document(teamId).collection("forms").document(formId).delete()
+    }
+
+    /// Unpublishes every form for the team, which resets eligibility
+    /// (eligibility only applies to forms the coach/AD has issued).
+    func unpublishAllTeamForms(teamId: String) async throws {
+        let forms = try await fetchTeamForms(teamId: teamId)
+        let batch = db.batch()
+        for form in forms where form.published {
+            let ref = db.collection("teams").document(teamId).collection("forms").document(form.id)
+            batch.setData(["published": false], forDocument: ref, merge: true)
+        }
+        try await batch.commit()
+    }
+
+    // MARK: - Injury reports
+
+    func fetchInjuryReports(teamId: String, rosterEntryId: String) async throws -> [InjuryReport] {
+        let snapshot = try await db.collection("teams").document(teamId).collection("roster")
+            .document(rosterEntryId).collection("injuryReports").getDocuments()
+        return snapshot.documents.compactMap { InjuryReport(id: $0.documentID, data: $0.data()) }
+            .sorted { ($0.reportedAt ?? .distantPast) > ($1.reportedAt ?? .distantPast) }
+    }
+
+    func fetchFormSubmissions(teamId: String, formId: String) async throws -> [FormSubmission] {
+        let snapshot = try await db.collection("teams").document(teamId).collection("forms")
+            .document(formId).collection("submissions").getDocuments()
+        return snapshot.documents.compactMap { FormSubmission(id: $0.documentID, data: $0.data()) }
+    }
+
+    func fetchFormSubmission(teamId: String, formId: String, entryId: String) async throws -> FormSubmission? {
+        let doc = try await db.collection("teams").document(teamId).collection("forms")
+            .document(formId).collection("submissions").document(entryId).getDocument()
+        guard let data = doc.data() else { return nil }
+        return FormSubmission(id: entryId, data: data)
+    }
+
+    func submitTeamForm(teamId: String, formId: String, rosterEntryId: String, playerName: String, signerName: String, userId: String, responses: [String: String] = [:], requiresParentSignature: Bool = false, parentSignerName: String? = nil) async throws {
+        let ref = db.collection("teams").document(teamId).collection("forms")
+            .document(formId).collection("submissions").document(rosterEntryId)
+        try await ref.setData([
+            "formId": formId,
+            "rosterEntryId": rosterEntryId,
+            "playerName": playerName,
+            "status": FormStatus.submitted.rawValue,
+            "signedByName": signerName,
+            "signedAt": Date().timeIntervalSince1970,
+            "submittedBy": userId,
+            "responses": responses,
+            "requiresParentSignature": requiresParentSignature,
+            "parentSignedByName": parentSignerName ?? "",
+            "updatedAt": FieldValue.serverTimestamp()
+        ])
+    }
+
+    func reviewTeamFormSubmission(teamId: String, formId: String, rosterEntryId: String, status: FormStatus) async throws {
+        try await db.collection("teams").document(teamId).collection("forms")
+            .document(formId).collection("submissions").document(rosterEntryId)
+            .setData(["status": status.rawValue, "updatedAt": FieldValue.serverTimestamp()], merge: true)
     }
 
     func fetchForms(teamId: String, rosterEntryId: String) async throws -> [PlayerForm] {
@@ -226,6 +473,18 @@ struct FirestoreService {
             .sorted { $0.date < $1.date }
     }
 
+    /// Game-only event fetch for followers and non-members (the only event
+    /// type they are allowed to read).
+    func fetchGameEvents(teamId: String) async throws -> [Event] {
+        let snapshot = try await db.collection("events")
+            .whereField("teamId", isEqualTo: teamId)
+            .whereField("type", isEqualTo: EventType.game.rawValue)
+            .getDocuments()
+        return snapshot.documents
+            .compactMap { Event(id: $0.documentID, data: $0.data()) }
+            .sorted { $0.date < $1.date }
+    }
+
     func deleteEvent(eventId: String) async throws {
         try await db.collection("events").document(eventId).delete()
     }
@@ -271,8 +530,25 @@ struct FirestoreService {
 
     // MARK: - Chats
 
-    /// Ensures the three default channels (comm board, team chat, staff chat)
-    /// exist for a team and returns all of its channels.
+    /// Read-only fetch of a team's existing chat channels, restricted to the
+    /// given types (each queried separately so security rules never deny the
+    /// whole query for users who can't see every channel).
+    func fetchChats(teamId: String, types: [ChatType]) async throws -> [Chat] {
+        var result: [Chat] = []
+        for type in types {
+            let snapshot = try await db.collection("chats")
+                .whereField("teamId", isEqualTo: teamId)
+                .whereField("type", isEqualTo: type.rawValue)
+                .getDocuments()
+            result.append(contentsOf: snapshot.documents.compactMap { Chat(id: $0.documentID, data: $0.data()) })
+        }
+        return result
+    }
+
+    /// Ensures the four default channels (comm board, team, staff, parent)
+    /// exist for a team and returns all of its channels. Caller must be a manager.
+    /// Channel IDs are deterministic so this is idempotent with the server-side
+    /// `onTeamCreated` trigger that also seeds channels + welcome messages.
     func ensureDefaultChats(teamId: String) async throws -> [Chat] {
         var result: [Chat] = []
         for type in ChatType.allCases {
@@ -283,44 +559,61 @@ struct FirestoreService {
             if let doc = snapshot.documents.first, let chat = Chat(id: doc.documentID, data: doc.data()) {
                 result.append(chat)
             } else {
-                let ref = db.collection("chats").document()
+                let chatId = "\(teamId)_\(type.rawValue)"
                 let title = type.displayName
-                let data: [String: Any] = [
+                let ref = db.collection("chats").document(chatId)
+                try await ref.setData([
                     "teamId": teamId,
                     "type": type.rawValue,
                     "title": title,
                     "createdAt": FieldValue.serverTimestamp()
-                ]
-                try await ref.setData(data)
-                result.append(Chat(id: ref.documentID, teamId: teamId, type: type, title: title))
+                ])
+                try await seedWelcomeMessage(chatId: chatId, title: title)
+                result.append(Chat(id: chatId, teamId: teamId, type: type, title: title))
             }
         }
         return result
     }
 
-    func sendMessage(chatId: String, senderId: String, senderName: String, text: String) async throws {
+    /// Posts the system welcome message for a channel (idempotent, fixed id).
+    private func seedWelcomeMessage(chatId: String, title: String) async throws {
+        let ref = db.collection("chats").document(chatId).collection("messages").document("welcome")
+        try await ref.setData([
+            "chatId": chatId,
+            "senderId": "system",
+            "senderName": "RockLab Athletics",
+            "text": "Welcome to \(title)!",
+            "createdAt": Date().timeIntervalSince1970
+        ])
+    }
+
+    func sendMessage(chatId: String, senderId: String, senderName: String, senderPhotoURL: String = "", text: String, category: String = CommCategory.general.rawValue) async throws {
         let ref = db.collection("chats").document(chatId).collection("messages").document()
         try await ref.setData([
             "chatId": chatId,
             "senderId": senderId,
             "senderName": senderName,
+            "senderPhotoURL": senderPhotoURL,
             "text": text,
+            "category": category,
             "createdAt": Date().timeIntervalSince1970
         ])
     }
 
-    func listenToMessages(chatId: String, onChange: @escaping ([Message]) -> Void) -> ListenerRegistration {
-        db.collection("chats").document(chatId).collection("messages")
-            .order(by: "createdAt")
-            .addSnapshotListener { snapshot, _ in
-                let messages = (snapshot?.documents ?? []).compactMap { Message(id: $0.documentID, data: $0.data()) }
-                onChange(messages)
-            }
+    func listenToMessages(chatId: String, categories: [String]? = nil, onChange: @escaping ([Message]) -> Void) -> ListenerRegistration {
+        var query: Query = db.collection("chats").document(chatId).collection("messages")
+        if let categories {
+            query = query.whereField("category", in: categories)
+        }
+        return query.order(by: "createdAt").addSnapshotListener { snapshot, _ in
+            let messages = (snapshot?.documents ?? []).compactMap { Message(id: $0.documentID, data: $0.data()) }
+            onChange(messages)
+        }
     }
 
     // MARK: - Games & stats
 
-    func createGame(teamId: String, opponent: String, isHome: Bool, date: Date) async throws -> String {
+    func createGame(teamId: String, opponent: String, isHome: Bool, date: Date, isDistrictGame: Bool = false) async throws -> String {
         let ref = db.collection("games").document()
         let data: [String: Any] = [
             "teamId": teamId,
@@ -330,6 +623,9 @@ struct FirestoreService {
             "status": GameStatus.upcoming.rawValue,
             "teamScore": 0,
             "opponentScore": 0,
+            "isDistrictGame": isDistrictGame,
+            "period": 0,
+            "clockSeconds": 0,
             "createdAt": FieldValue.serverTimestamp()
         ]
         try await ref.setData(data)
@@ -345,6 +641,74 @@ struct FirestoreService {
             .sorted { $0.date < $1.date }
     }
 
+    /// Live listener for a single game (score/status updates in real time).
+    func listenToGame(gameId: String, onChange: @escaping (Game?) -> Void) -> ListenerRegistration {
+        db.collection("games").document(gameId).addSnapshotListener { snapshot, _ in
+            guard let data = snapshot?.data() else { onChange(nil); return }
+            onChange(Game(id: gameId, data: data))
+        }
+    }
+
+    /// Live listener for all of a team's games (for the live-now banner).
+    func listenToGames(teamId: String, onChange: @escaping ([Game]) -> Void) -> ListenerRegistration {
+        db.collection("games")
+            .whereField("teamId", isEqualTo: teamId)
+            .addSnapshotListener { snapshot, _ in
+                guard let snapshot else { return }
+                onChange(snapshot.documents.compactMap { Game(id: $0.documentID, data: $0.data()) })
+            }
+    }
+
+    /// Live listener for a team's broadcasts (for the live-now banner).
+    func listenToBroadcasts(teamId: String, onChange: @escaping ([Broadcast]) -> Void) -> ListenerRegistration {
+        db.collection("broadcasts")
+            .whereField("teamId", isEqualTo: teamId)
+            .addSnapshotListener { snapshot, _ in
+                guard let snapshot else { return }
+                onChange(snapshot.documents.compactMap { Broadcast(id: $0.documentID, data: $0.data()) })
+            }
+    }
+
+    /// A team's win/loss record from final games.
+    func fetchTeamRecord(teamId: String) async throws -> (wins: Int, losses: Int) {
+        let games = try await fetchGames(teamId: teamId)
+        var wins = 0
+        var losses = 0
+        for g in games where g.status == .final {
+            if g.teamScore > g.opponentScore { wins += 1 }
+            else if g.teamScore < g.opponentScore { losses += 1 }
+        }
+        return (wins, losses)
+    }
+
+    /// Teams (from other organizations) that share this school's district.
+    func fetchDistrictTeams(schoolId: String) async throws -> [DistrictTeam] {
+        guard let school = try await fetchSchool(id: schoolId), !school.districtKey.isEmpty else { return [] }
+        let schoolsSnap = try await db.collection("schools")
+            .whereField("districtKey", isEqualTo: school.districtKey)
+            .getDocuments()
+        var schoolNames: [String: String] = [:]
+        var ids: [String] = []
+        for doc in schoolsSnap.documents {
+            ids.append(doc.documentID)
+            schoolNames[doc.documentID] = doc.data()["name"] as? String ?? "School"
+        }
+        guard !ids.isEmpty else { return [] }
+        var result: [DistrictTeam] = []
+        for chunk in ids.chunked(into: 10) {
+            let teamsSnap = try await db.collection("teams").whereField("schoolId", in: chunk).getDocuments()
+            for doc in teamsSnap.documents {
+                guard let team = Team(id: doc.documentID, data: doc.data()), team.schoolId != schoolId else { continue }
+                result.append(DistrictTeam(
+                    id: team.id,
+                    teamName: "\(team.sportName) \(team.level)",
+                    schoolName: schoolNames[team.schoolId] ?? "School",
+                    schoolId: team.schoolId))
+            }
+        }
+        return result.sorted { $0.schoolName < $1.schoolName }
+    }
+
     func updateGameScore(gameId: String, teamScore: Int, opponentScore: Int, status: GameStatus) async throws {
         try await db.collection("games").document(gameId).setData([
             "teamScore": teamScore,
@@ -357,13 +721,33 @@ struct FirestoreService {
         try await db.collection("games").document(gameId).setData(["status": status.rawValue], merge: true)
     }
 
-    func incrementStat(gameId: String, rosterEntryId: String, playerName: String, stat: BasketballStat, delta: Int) async throws {
+    func updateGameClock(gameId: String, period: Int, clockSeconds: Int) async throws {
+        try await db.collection("games").document(gameId).setData(["period": period, "clockSeconds": clockSeconds], merge: true)
+    }
+
+    func setGolfHoles(gameId: String, rosterEntryId: String, playerName: String, holes: [Int]) async throws {
+        let ref = db.collection("games").document(gameId).collection("stats").document(rosterEntryId)
+        var data: [String: Any] = [
+            "gameId": gameId,
+            "rosterEntryId": rosterEntryId,
+            "playerName": playerName
+        ]
+        var total = 0
+        for (index, strokes) in holes.enumerated() {
+            data["h\(index + 1)"] = strokes
+            total += strokes
+        }
+        data["strokes"] = total
+        try await ref.setData(data, merge: true)
+    }
+
+    func incrementStat(gameId: String, rosterEntryId: String, playerName: String, stat: String, delta: Int) async throws {
         let ref = db.collection("games").document(gameId).collection("stats").document(rosterEntryId)
         try await ref.setData([
             "gameId": gameId,
             "rosterEntryId": rosterEntryId,
             "playerName": playerName,
-            stat.rawValue: FieldValue.increment(Int64(delta))
+            stat: FieldValue.increment(Int64(delta))
         ], merge: true)
     }
 
@@ -371,14 +755,67 @@ struct FirestoreService {
         let snapshot = try await db.collection("games").document(gameId).collection("stats").getDocuments()
         var result: [String: [String: Int]] = [:]
         for doc in snapshot.documents {
-            let data = doc.data()
             var stats: [String: Int] = [:]
-            for stat in BasketballStat.allCases {
-                stats[stat.rawValue] = (data[stat.rawValue] as? Int) ?? 0
+            for (key, value) in doc.data() {
+                if let int = value as? Int { stats[key] = int }
             }
             result[doc.documentID] = stats
         }
         return result
+    }
+
+    /// Per-player per-game averages for a team, derived from public game stats
+    /// (so it works for other organizations' teams too).
+    func fetchTeamStatLines(teamId: String, stats: [SportStat]) async throws -> [PlayerStatLine] {
+        let keys = stats.map { $0.key }
+        let primaryKey = keys.first
+        let games = try await fetchGames(teamId: teamId)
+        var totals: [String: [String: Int]] = [:]
+        var names: [String: String] = [:]
+        var gameCounts: [String: Int] = [:]
+        for game in games {
+            let snapshot = try await db.collection("games").document(game.id).collection("stats").getDocuments()
+            for doc in snapshot.documents {
+                let data = doc.data()
+                let entryId = doc.documentID
+                names[entryId] = data["playerName"] as? String ?? "Player"
+                gameCounts[entryId, default: 0] += 1
+                for key in keys {
+                    totals[entryId, default: [:]][key, default: 0] += (data[key] as? Int) ?? 0
+                }
+            }
+        }
+        return totals.map { entryId, statTotals in
+            let gp = max(gameCounts[entryId] ?? 1, 1)
+            var averages: [String: Double] = [:]
+            for key in keys { averages[key] = Double(statTotals[key] ?? 0) / Double(gp) }
+            return PlayerStatLine(id: entryId, playerName: names[entryId] ?? "Player",
+                                  gamesPlayed: gameCounts[entryId] ?? 0, averages: averages)
+        }
+        .sorted { ($0.averages[primaryKey ?? ""] ?? 0) > ($1.averages[primaryKey ?? ""] ?? 0) }
+    }
+
+    /// All athletic directors across all organizations, with their school name.
+    func fetchADDirectory() async throws -> [ADContact] {
+        let snapshot = try await db.collection("users").whereField("role", isEqualTo: "ad").getDocuments()
+        var result: [ADContact] = []
+        for doc in snapshot.documents {
+            let data = doc.data()
+            var schoolName = ""
+            var zipCode = ""
+            var district = ""
+            var districtKey = ""
+            if let schoolId = data["schoolId"] as? String, let school = try? await fetchSchool(id: schoolId) {
+                schoolName = school.name
+                zipCode = school.zipCode
+                district = school.district
+                districtKey = school.districtKey
+            }
+            let email = data["email"] as? String ?? ""
+            let name = (data["displayName"] as? String)?.isEmpty == false ? (data["displayName"] as! String) : email
+            result.append(ADContact(id: doc.documentID, name: name, email: email, schoolName: schoolName, zipCode: zipCode, district: district, districtKey: districtKey))
+        }
+        return result.sorted { $0.schoolName < $1.schoolName }
     }
 
     // MARK: - Trips
@@ -461,6 +898,132 @@ struct FirestoreService {
             .sorted { $0.date > $1.date }
     }
 
+    func fetchFundraiserProgress(fundraiserId: String) async throws -> [FundraiserProgress] {
+        let snapshot = try await db.collection("fundraisers").document(fundraiserId).collection("progress").getDocuments()
+        return snapshot.documents.compactMap { FundraiserProgress(id: $0.documentID, data: $0.data()) }
+    }
+
+    /// Upserts a player's raised amount and/or submitted flag on a campaign.
+    func upsertFundraiserProgress(fundraiserId: String, rosterEntryId: String, playerName: String, raised: Double?, submitted: Bool?) async throws {
+        let ref = db.collection("fundraisers").document(fundraiserId).collection("progress").document(rosterEntryId)
+        var data: [String: Any] = [
+            "fundraiserId": fundraiserId,
+            "rosterEntryId": rosterEntryId,
+            "playerName": playerName,
+        ]
+        if let raised { data["raised"] = raised }
+        if let submitted { data["submitted"] = submitted }
+        try await ref.setData(data, merge: true)
+    }
+
+    // MARK: - Volunteer shifts
+
+    func createVolunteerShift(teamId: String, title: String, start: Date, end: Date, slotsPerShift: Int, incrementMinutes: Int, playersCanVolunteer: Bool, note: String) async throws -> String {
+        let ref = db.collection("teams").document(teamId).collection("volunteerShifts").document()
+        try await ref.setData([
+            "teamId": teamId,
+            "title": title,
+            "start": start.timeIntervalSince1970,
+            "end": end.timeIntervalSince1970,
+            "slotsPerShift": slotsPerShift,
+            "incrementMinutes": incrementMinutes,
+            "playersCanVolunteer": playersCanVolunteer,
+            "note": note,
+            "createdAt": FieldValue.serverTimestamp()
+        ])
+        return ref.documentID
+    }
+
+    func fetchVolunteerShifts(teamId: String) async throws -> [VolunteerShift] {
+        let snapshot = try await db.collection("teams").document(teamId).collection("volunteerShifts").getDocuments()
+        return snapshot.documents.compactMap { VolunteerShift(id: $0.documentID, data: $0.data()) }
+            .sorted { $0.start < $1.start }
+    }
+
+    func deleteVolunteerShift(teamId: String, shiftId: String) async throws {
+        try await db.collection("teams").document(teamId).collection("volunteerShifts").document(shiftId).delete()
+    }
+
+    func fetchShiftSignups(teamId: String, shiftId: String) async throws -> [ShiftSignup] {
+        let snapshot = try await db.collection("teams").document(teamId).collection("volunteerShifts").document(shiftId)
+            .collection("signups").getDocuments()
+        return snapshot.documents.compactMap { ShiftSignup(id: $0.documentID, data: $0.data()) }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+
+    // MARK: - Team media
+
+    func addTeamMedia(teamId: String, imageURL: String, caption: String, addedByName: String) async throws {
+        let ref = db.collection("teams").document(teamId).collection("media").document()
+        try await ref.setData([
+            "teamId": teamId,
+            "imageURL": imageURL,
+            "caption": caption,
+            "addedByName": addedByName,
+            "createdAt": Date().timeIntervalSince1970
+        ])
+    }
+
+    func fetchTeamMedia(teamId: String) async throws -> [TeamMedia] {
+        let snapshot = try await db.collection("teams").document(teamId).collection("media").getDocuments()
+        return snapshot.documents
+            .compactMap { TeamMedia(id: $0.documentID, data: $0.data()) }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    // MARK: - Direct messages
+
+    func conversationId(_ a: String, _ b: String) -> String {
+        [a, b].sorted().joined(separator: "_")
+    }
+
+    func fetchOrCreateConversation(myUid: String, myName: String, otherUid: String, otherName: String) async throws -> Conversation {
+        let id = conversationId(myUid, otherUid)
+        let snapshot = try await db.collection("conversations")
+            .whereField("participantIds", arrayContains: myUid)
+            .getDocuments()
+        if let doc = snapshot.documents.first(where: { ($0.data()["participantIds"] as? [String])?.contains(otherUid) == true }),
+           let conv = Conversation(id: doc.documentID, data: doc.data()) {
+            return conv
+        }
+        let conv = Conversation(id: id, participantIds: [myUid, otherUid],
+                                participantNames: [myUid: myName, otherUid: otherName], createdAt: Date())
+        try await db.collection("conversations").document(id).setData([
+            "participantIds": [myUid, otherUid],
+            "participantNames": [myUid: myName, otherUid: otherName],
+            "createdAt": Date().timeIntervalSince1970
+        ])
+        return conv
+    }
+
+    func fetchMyConversations(userId: String) async throws -> [Conversation] {
+        let snapshot = try await db.collection("conversations")
+            .whereField("participantIds", arrayContains: userId)
+            .getDocuments()
+        return snapshot.documents.compactMap { Conversation(id: $0.documentID, data: $0.data()) }
+    }
+
+    func listenToDirectMessages(conversationId: String, onChange: @escaping ([DirectMessage]) -> Void) -> ListenerRegistration {
+        db.collection("conversations").document(conversationId).collection("messages")
+            .order(by: "createdAt")
+            .addSnapshotListener { snapshot, _ in
+                let messages = (snapshot?.documents ?? []).compactMap { DirectMessage(id: $0.documentID, data: $0.data()) }
+                onChange(messages)
+            }
+    }
+
+    func sendDirectMessage(conversationId: String, senderId: String, senderName: String, senderPhotoURL: String = "", text: String) async throws {
+        let ref = db.collection("conversations").document(conversationId).collection("messages").document()
+        try await ref.setData([
+            "conversationId": conversationId,
+            "senderId": senderId,
+            "senderName": senderName,
+            "senderPhotoURL": senderPhotoURL,
+            "text": text,
+            "createdAt": Date().timeIntervalSince1970
+        ])
+    }
+
     // MARK: - Showcases & highlights
 
     func fetchShowcase(rosterEntryId: String) async throws -> Showcase? {
@@ -498,37 +1061,48 @@ struct FirestoreService {
         ], merge: true)
     }
 
-    func addHighlight(showcaseId: String, title: String, url: String, description: String) async throws -> String {
-        let ref = db.collection("showcases").document(showcaseId).collection("highlights").document()
-        try await ref.setData([
+    // MARK: - Broadcasts
+
+    func createBroadcast(teamId: String, gameId: String?, title: String, url: String, createdByName: String) async throws -> String {
+        let ref = db.collection("broadcasts").document()
+        var data: [String: Any] = [
+            "teamId": teamId,
             "title": title,
             "url": url,
-            "description": description,
+            "isLive": false,
+            "createdByName": createdByName,
             "createdAt": Date().timeIntervalSince1970
-        ])
+        ]
+        if let gameId { data["gameId"] = gameId }
+        try await ref.setData(data)
         return ref.documentID
     }
 
-    func fetchHighlights(showcaseId: String) async throws -> [Highlight] {
-        let snapshot = try await db.collection("showcases").document(showcaseId).collection("highlights").getDocuments()
+    func fetchBroadcasts(teamId: String) async throws -> [Broadcast] {
+        let snapshot = try await db.collection("broadcasts").whereField("teamId", isEqualTo: teamId).getDocuments()
         return snapshot.documents
-            .compactMap { Highlight(id: $0.documentID, data: $0.data()) }
+            .compactMap { Broadcast(id: $0.documentID, data: $0.data()) }
             .sorted { $0.createdAt > $1.createdAt }
     }
 
-    func removeHighlight(showcaseId: String, highlightId: String) async throws {
-        try await db.collection("showcases").document(showcaseId).collection("highlights").document(highlightId).delete()
+    func setBroadcastLive(id: String, isLive: Bool) async throws {
+        try await db.collection("broadcasts").document(id).setData(["isLive": isLive], merge: true)
+    }
+
+    func removeBroadcast(id: String) async throws {
+        try await db.collection("broadcasts").document(id).delete()
     }
 
     /// Aggregates a player's stats across all games for a team (stat-to-profile sync).
-    func fetchCareerStats(teamId: String, rosterEntryId: String) async throws -> [String: Int] {
+    func fetchCareerStats(teamId: String, rosterEntryId: String, stats: [SportStat]) async throws -> [String: Int] {
+        let keys = stats.map { $0.key }
         let games = try await fetchGames(teamId: teamId)
         var totals: [String: Int] = [:]
         for game in games {
             let doc = try await db.collection("games").document(game.id).collection("stats").document(rosterEntryId).getDocument()
             guard let data = doc.data() else { continue }
-            for stat in BasketballStat.allCases {
-                totals[stat.rawValue] = (totals[stat.rawValue] ?? 0) + ((data[stat.rawValue] as? Int) ?? 0)
+            for key in keys {
+                totals[key] = (totals[key] ?? 0) + ((data[key] as? Int) ?? 0)
             }
         }
         return totals
@@ -653,5 +1227,40 @@ struct FirestoreService {
 
     func addTeamToUser(userId: String, teamId: String) async throws {
         try await db.collection("users").document(userId).setData(["teamIds": FieldValue.arrayUnion([teamId])], merge: true)
+    }
+
+    func followTeam(teamId: String, userId: String, name: String, email: String) async throws {
+        try await createMembership(teamId: teamId, userId: userId, role: .follower, name: name, email: email)
+        try await addTeamToUser(userId: userId, teamId: teamId)
+    }
+
+    /// Loads the effective access for a user against a single team.
+    func teamAccess(teamId: String, userId: String?, isAd: Bool) async -> TeamAccess {
+        var access = TeamAccess(isAd: isAd)
+        guard let userId, !userId.isEmpty else { return access }
+        access.membership = try? await fetchMembership(teamId: teamId, userId: userId)
+
+        // Self-heal: a head coach must always have coach membership, otherwise
+        // a newly created team would appear without roster/forms/injury access.
+        if access.membership == nil,
+           let team = try? await fetchTeam(teamId: teamId),
+           team.headCoachId == userId {
+            _ = try? await FunctionsService.shared.ensureTeamCoachMembership(teamId: teamId)
+            access.membership = try? await fetchMembership(teamId: teamId, userId: userId)
+        }
+        return access
+    }
+
+    /// Fetches all users who have followed this school, categorized by role.
+    func fetchSchoolFollowers(schoolId: String) async throws -> [[String: Any]] {
+        let snapshot = try await db.collection("users")
+            .whereField("schoolId", isEqualTo: schoolId)
+            .whereField("role", in: ["coach", "staff", "player", "parent", "follower"])
+            .getDocuments()
+        return snapshot.documents.map { doc in
+            var dict = doc.data()
+            dict["id"] = doc.documentID
+            return dict
+        }
     }
 }

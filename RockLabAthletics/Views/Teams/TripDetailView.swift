@@ -1,9 +1,11 @@
 import SwiftUI
 
 struct TripDetailView: View {
+    @Environment(AuthViewModel.self) private var auth
     let trip: Trip
     let teamId: String
     let vm: LogisticsViewModel
+    @State private var access = TeamAccess()
 
     var body: some View {
         let current = vm.selectedTrip ?? trip
@@ -34,12 +36,16 @@ struct TripDetailView: View {
                             }
                         }
                         .foregroundStyle(.primary)
+                        .disabled(!access.canManageTeam)
                     }
                 }
             }
         }
         .navigationTitle(current.title)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await vm.loadTripDetail(trip, teamId: teamId) }
+        .task {
+            await vm.loadTripDetail(trip, teamId: teamId)
+            access = await FirestoreService.shared.teamAccess(teamId: teamId, userId: auth.user?.id, isAd: auth.user?.role == .ad)
+        }
     }
 }

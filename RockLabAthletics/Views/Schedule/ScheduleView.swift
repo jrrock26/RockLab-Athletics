@@ -4,6 +4,7 @@ struct ScheduleView: View {
     @Environment(AuthViewModel.self) private var auth
     @State private var vm = ScheduleViewModel()
     @State private var showingAdd = false
+    @State private var access = TeamAccess()
 
     var body: some View {
         NavigationStack {
@@ -23,13 +24,16 @@ struct ScheduleView: View {
                                 }
                             }
                             .onChange(of: vm.selectedTeamId) { _, newValue in
-                                Task { await vm.loadEvents(teamId: newValue) }
+                                Task {
+                                    access = await FirestoreService.shared.teamAccess(teamId: newValue, userId: auth.user?.id, isAd: auth.user?.role == .ad)
+                                    await vm.loadEvents(teamId: newValue, gamesOnly: !access.canSeeAllEvents)
+                                }
                             }
                         }
 
                         if vm.events.isEmpty {
                             Section {
-                                Text("No events yet. Tap + to add one.")
+                                Text(access.canManageTeam ? "No events yet. Tap + to add one." : "No events scheduled.")
                                     .foregroundStyle(.secondary)
                             }
                         } else {
@@ -46,6 +50,7 @@ struct ScheduleView: View {
                                         Task { await vm.deleteEvent(eventId: vm.events[index].id) }
                                     }
                                 }
+                                .deleteDisabled(!access.canManageTeam)
                             }
                         }
                     }
@@ -53,9 +58,12 @@ struct ScheduleView: View {
             }
             .navigationTitle("Schedule")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showingAdd = true } label: { Image(systemName: "plus") }
-                        .disabled(vm.teams.isEmpty)
+                if access.canManageTeam {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { showingAdd = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("Add event")
+                            .disabled(vm.teams.isEmpty)
+                    }
                 }
             }
             .sheet(isPresented: $showingAdd) {
@@ -63,9 +71,10 @@ struct ScheduleView: View {
             }
             .task {
                 if let schoolId = auth.user?.schoolId {
-                    await vm.loadTeams(schoolId: schoolId)
+                    await vm.loadTeams(schoolId: schoolId, userTeamIds: auth.user?.role == .ad ? nil : auth.user?.teamIds)
                     if !vm.selectedTeamId.isEmpty {
-                        await vm.loadEvents(teamId: vm.selectedTeamId)
+                        access = await FirestoreService.shared.teamAccess(teamId: vm.selectedTeamId, userId: auth.user?.id, isAd: auth.user?.role == .ad)
+                        await vm.loadEvents(teamId: vm.selectedTeamId, gamesOnly: !access.canSeeAllEvents)
                     }
                 }
             }
