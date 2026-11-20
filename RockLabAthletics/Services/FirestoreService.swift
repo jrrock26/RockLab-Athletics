@@ -1384,8 +1384,28 @@ struct FirestoreService {
         return snapshot.documents.compactMap { TeamMembership(id: $0.documentID, data: $0.data()) }
     }
 
-    // MARK: - Travel & pickup
+    // MARK: - Resources
 
+    func fetchResources(schoolId: String) async throws -> [OrgResource] {
+        let snap = try await db.collection("resources")
+            .whereField("schoolId", isEqualTo: schoolId)
+            .getDocuments()
+        return snap.documents
+            .compactMap { OrgResource(id: $0.documentID, data: $0.data()) }
+            .filter { $0.active }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Bookings for an organization, optionally narrowed to a single day. The
+    /// client filters by time locally; callables enforce no overlap.
+    func fetchResourceBookings(schoolId: String) async throws -> [ResourceBooking] {
+        let snap = try await db.collection("resourceBookings")
+            .whereField("schoolId", isEqualTo: schoolId)
+            .getDocuments()
+        return snap.documents.compactMap { ResourceBooking(id: $0.documentID, data: $0.data()) }
+    }
+
+    // MARK: - Travel & pickup
     func fetchReleasePlans(eventId: String) async throws -> [ReleasePlan] {
         let snap = try await db.collection("events").document(eventId)
             .collection("releasePlans").getDocuments()

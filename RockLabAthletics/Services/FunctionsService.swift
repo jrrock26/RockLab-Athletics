@@ -302,18 +302,24 @@ struct FunctionsService {
         return (result.data as? [String: Any]) ?? [:]
     }
 
-    /// Records the handoff: who released the athlete, to whom, and when.
+    /// Records the handoff: who released the athlete, to whom, and when. When the
+    /// guardian is not on the app (or the network is down) a coach may release on
+    /// verbal consent, which must be explicit and noted.
     func confirmRelease(eventId: String,
                         rosterEntryId: String,
                         releasedToType: String,
                         releasedToName: String,
-                        note: String = "") async throws -> [String: Any] {
+                        note: String = "",
+                        verbalConsent: Bool = false,
+                        consentNote: String = "") async throws -> [String: Any] {
         let result = try await functions.httpsCallable("confirmRelease").call([
             "eventId": eventId,
             "rosterEntryId": rosterEntryId,
             "releasedToType": releasedToType,
             "releasedToName": releasedToName,
             "note": note,
+            "verbalConsent": verbalConsent,
+            "consentNote": consentNote,
         ])
         return (result.data as? [String: Any]) ?? [:]
     }
@@ -324,6 +330,48 @@ struct FunctionsService {
         let result = try await functions.httpsCallable("reopenRelease").call([
             "eventId": eventId,
             "rosterEntryId": rosterEntryId,
+            "reason": reason,
+        ])
+        return (result.data as? [String: Any]) ?? [:]
+    }
+
+    // MARK: - Resources
+
+    /// AD-only: adds a permanent bookable asset to the organization.
+    func createResource(name: String, type: String, notes: String = "") async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("createResource").call([
+            "name": name, "type": type, "notes": notes,
+        ])
+        return (result.data as? [String: Any]) ?? [:]
+    }
+
+    func removeResource(resourceId: String) async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("removeResource").call([
+            "resourceId": resourceId,
+        ])
+        return (result.data as? [String: Any]) ?? [:]
+    }
+
+    /// Books a resource window. The server rejects overlaps in a transaction, so
+    /// two coaches cannot claim the same gym slot.
+    func bookResource(resourceId: String,
+                      teamId: String,
+                      title: String,
+                      start: Date,
+                      end: Date) async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("bookResource").call([
+            "resourceId": resourceId,
+            "teamId": teamId,
+            "title": title,
+            "startMs": start.timeIntervalSince1970 * 1000,
+            "endMs": end.timeIntervalSince1970 * 1000,
+        ])
+        return (result.data as? [String: Any]) ?? [:]
+    }
+
+    func cancelResourceBooking(bookingId: String, reason: String = "") async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("cancelResourceBooking").call([
+            "bookingId": bookingId,
             "reason": reason,
         ])
         return (result.data as? [String: Any]) ?? [:]

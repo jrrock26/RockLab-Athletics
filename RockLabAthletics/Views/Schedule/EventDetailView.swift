@@ -144,7 +144,7 @@ struct EventDetailView: View {
                             }
                         }
                         .swipeActions(edge: .trailing) {
-                            if plan(for: entry) != nil, release(for: entry)?.isReleased != true {
+                            if release(for: entry)?.isReleased != true {
                                 Button {
                                     releaseTarget = entry
                                 } label: {
@@ -232,8 +232,9 @@ struct EventDetailView: View {
                 eventId: event.id,
                 entry: entry,
                 plan: plan(for: entry),
-                opponent: event.title) { type, name, note in
-                    Task { await confirm(entry, type: type, name: name, note: note) }
+                opponent: event.title) { type, name, note, verbal, consentNote in
+                    Task { await confirm(entry, type: type, name: name, note: note,
+                                         verbal: verbal, consentNote: consentNote) }
                 }
         }
         .sheet(item: $overrideTarget) { entry in
@@ -323,7 +324,12 @@ struct EventDetailView: View {
         releases = (try? await FirestoreService.shared.fetchReleases(eventId: event.id)) ?? []
     }
 
-    private func confirm(_ entry: RosterEntry, type: String, name: String, note: String) async {
+    private func confirm(_ entry: RosterEntry,
+                         type: String,
+                         name: String,
+                         note: String,
+                         verbal: Bool,
+                         consentNote: String) async {
         travelError = ""
         do {
             _ = try await FunctionsService.shared.confirmRelease(
@@ -331,7 +337,9 @@ struct EventDetailView: View {
                 rosterEntryId: entry.id,
                 releasedToType: type,
                 releasedToName: name,
-                note: note)
+                note: note,
+                verbalConsent: verbal,
+                consentNote: consentNote)
             await loadReleases()
         } catch {
             travelError = error.localizedDescription
@@ -382,13 +390,19 @@ private struct ReleaseConfirmSheet: View {
     let entry: RosterEntry
     let plan: ReleasePlan?
     let opponent: String
-    var onConfirm: (String, String, String) -> Void
+    var onConfirm: (String, String, String, Bool, String) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var type = "bus"
     @State private var name = ""
     @State private var note = ""
+    @State private var verbal = false
+    @State private var consentNote = ""
     @State private var didPrefill = false
+
+    /// No plan on file: the guardian is not on the app, or the network failed.
+    /// The coach can still release, but only by recording verbal consent.
+    private var requiresVerbal: Bool { plan == nil }
 
     var body: some View {
         NavigationStack {
@@ -423,6 +437,19 @@ private struct ReleaseConfirmSheet: View {
                     TextField("e.g. left with sister", text: $note)
                 }
 
+                if requiresVerbal {
+                    Section {
+                        Toggle("Guardian gave verbal consent", isOn: $verbal)
+                        TextField("Who gave it, and how? e.g. mom called at 8:40pm",
+                                  text: $consentNote, axis: .vertical)
+                            .lineLimit(2...4)
+                    } header: {
+                        Text("No plan on file")
+                    } footer: {
+                        Text("Recorded on the release and in the audit log. Without a plan and without this, the athlete cannot be released.")
+                    }
+                }
+
                 if let plan, plan.homeWith == "other_parent", type != "other_parent" {
                     Section {
                         Label("The plan says another parent is collecting. Confirm you are releasing to someone else.",
@@ -440,10 +467,15 @@ private struct ReleaseConfirmSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Release") {
-                        onConfirm(type, name.trimmingCharacters(in: .whitespacesAndNewlines), note)
+                        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let trimmedConsent = consentNote.trimmingCharacters(in: .whitespacesAndNewlines)
+                        onConfirm(type, trimmedName, note, requiresVerbal ? verbal : false, trimmedConsent)
                         dismiss()
                     }
-                    .disabled(type != "bus" && name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(
+                        (type != "bus" && name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        || (requiresVerbal && (!verbal || consentNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                    )
                 }
             }
             .onAppear {

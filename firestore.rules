@@ -266,6 +266,19 @@ service cloud.firestore {
       }
     }
 
+    // Organization-owned assets (facilities, fields, buses) and their bookings.
+    // Clients can read so coaches can see availability; every write goes through
+    // the booking callables, which enforce no-overlap inside a transaction.
+    match /resources/{resourceId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /resourceBookings/{bookingId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     // Verified career ledger. Written only by verifyGameStats/addCareerStatLine.
     // Staff of the school may read it; nobody may write or delete from a client.
     match /careerStatLines/{lineId} {

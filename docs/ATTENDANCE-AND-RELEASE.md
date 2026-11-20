@@ -108,7 +108,17 @@ Status: **Phases 1 and 2 implemented.**
   requires a written reason and writes to the audit log. The rules no longer allow
   a coach to write a plan directly.
 
-Still to build: the offline manifest and queued sync (Phase 3).
+Still to build: the offline manifest and queued sync (Phase 3) — **dropped by
+decision (2026-11-20).** A coach may instead release an athlete on a **verbal
+agreement** when the guardian is not on the app or the network is down:
+
+- `confirmRelease` accepts `verbalConsent` plus a required `consentNote` ("mom
+  called at 8:40pm") when no plan exists on file.
+- The release record stores `verbalConsent`, `consentNote`, and
+  `planHomeWith: 'verbal'`, and the audit entry says "verbal consent".
+- An athlete with **no plan and no verbal consent still cannot be released** — the
+  safety default is unchanged; the coach simply has a documented way through it
+  instead of being blocked at the field, which is what we actually needed.
 
 ## 5. Enforcement, not just UI
 
@@ -152,7 +162,7 @@ worth solving once, properly.
 | --- | --- | --- |
 | **1** ✅ | Per-athlete travel/release plan for events; guardian picks bus / self / another parent from the team list; coach manifest with *no plan* flags | Delivers the core safety value with no third-party registry |
 | **2** ✅ | Coach handoff confirmation with an immutable release record | The full chain: who physically released the athlete, to whom, when |
-| **3** | Offline manifest + queued sync with device timestamps | Needed before a real Friday night |
+| ~~3~~ | Offline manifest + queued sync — **dropped**; replaced by verbal-consent release | A coach is never blocked at the field |
 | **4** | Reconciliation counts (bus manifest vs pickups), guardian change notifications, 18+ self-release under district policy | Operational polish |
 
 Phase 1 alone is useful; phases 1–3 are what make it trustworthy in the field.

@@ -2682,11 +2682,22 @@ exports.confirmRelease = functions.https.onCall(async (data, context) => {
 
   const planSnap = await db.collection('events').doc(eventId)
     .collection('releasePlans').doc(rosterEntryId).get();
-  if (!planSnap.exists) {
+
+  // A coach may sign an athlete out on a verbal agreement when the guardian is not
+  // on the app, or the network is down. That is allowed, but it must be explicit
+  // and it must say why — an unexplained release is indistinguishable from a
+  // mistake, and this is the record a school would rely on afterwards.
+  const verbal = payload.verbalConsent === true;
+  const consentNote = payload.consentNote ? String(payload.consentNote).trim() : '';
+  if (!planSnap.exists && !verbal) {
     throw new functions.https.HttpsError('failed-precondition',
-      'This athlete has no travel plan, so they cannot be released.');
+      'This athlete has no travel plan. Record verbal guardian consent to release them.');
   }
-  const plan = planSnap.data() || {};
+  if (!planSnap.exists && !consentNote) {
+    throw new functions.https.HttpsError('invalid-argument',
+      'Describe the verbal consent (who gave it, and how) before releasing.');
+  }
+  const plan = planSnap.exists ? (planSnap.data() || {}) : {};
 
   await db.collection('events').doc(eventId).collection('releases').doc(rosterEntryId).set({
     eventId: eventId,
@@ -2696,9 +2707,11 @@ exports.confirmRelease = functions.https.onCall(async (data, context) => {
     releasedToType: releasedToType,
     releasedToName: String(payload.releasedToName || ''),
     note: payload.note ? String(payload.note).slice(0, 300) : '',
-    planHomeWith: plan.homeWith || '',
+    planHomeWith: plan.homeWith || (planSnap.exists ? '' : 'verbal'),
     planDeclaredAtMs: plan.declaredAtMs || 0,
     planDeclaredByName: plan.declaredByName || '',
+    verbalConsent: verbal,
+    consentNote: consentNote.slice(0, 300),
     confirmedByUserId: callerId,
     confirmedByName: caller.name || '',
     confirmedAtMs: Date.now(),
@@ -2712,7 +2725,7 @@ exports.confirmRelease = functions.https.onCall(async (data, context) => {
     action: 'release.confirmed',
     targetType: 'release',
     targetId: `${eventId}/${rosterEntryId}`,
-    detail: `${plan.athleteName || rosterEntryId} released (${releasedToType}${payload.releasedToName ? `: ${payload.releasedToName}` : ''})`,
+    detail: `${plan.athleteName || rosterEntryId} released (${releasedToType}${payload.releasedToName ? `: ${payload.releasedToName}` : ''})${verbal ? ' · verbal consent' : ''}`,
   });
 
   return { ok: true };
@@ -2770,6 +2783,248 @@ exports.reopenRelease = functions.https.onCall(async (data, context) => {
     targetType: 'release',
     targetId: `${eventId}/${rosterEntryId}`,
     detail: reason.slice(0, 200),
+  });
+
+  return { ok: true };
+});
+
+// ---------------------------------------------------------------------------
+// Resources and bookings.
+//
+// An organization owns facilities, fields and buses. The AD adds them once and
+// they become permanent assets; coaches book them by time window. Overlap is
+// enforced in a TRANSACTION, because a client-side check would let two coaches
+// book the same gym for the same hour — the whole point of the feature.
+// ---------------------------------------------------------------------------
+const RESOURCE_TYPES = ['facility', 'field', 'bus', 'other'];
+
+exports.createResource = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const payload = data || {};
+  const name = payload.name ? String(payload.name).trim() : '';
+  const type = payload.type ? String(payload.type) : 'facility';
+  if (!name) {
+    throw new functions.https.HttpsError('invalid-argument', 'A resource name is required.');
+  }
+  if (!RESOURCE_TYPES.includes(type)) {
+    throw new functions.https.HttpsError('invalid-argument', 'Unknown resource type.');
+  }
+
+  const db = admin.firestore();
+  const caller = await userProfile(db, context.auth.uid);
+  const schoolId = (payload.schoolId ? String(payload.schoolId) : '') || caller.schoolId || '';
+  if (!schoolId || caller.role !== 'ad' || caller.schoolId !== schoolId) {
+    throw new functions.https.HttpsError('permission-denied',
+      "Only this school's AD can add resources.");
+  }
+
+  const ref = await db.collection('resources').add({
+    schoolId: schoolId,
+    name: name.slice(0, 120),
+    type: type,
+    notes: payload.notes ? String(payload.notes).slice(0, 300) : '',
+    active: true,
+    createdBy: context.auth.uid,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  await writeAudit({
+    schoolId: schoolId,
+    actorId: context.auth.uid,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'resource.created',
+    targetType: 'resource',
+    targetId: ref.id,
+    detail: `${type}: ${name}`,
+  });
+
+  return { ok: true, resourceId: ref.id };
+});
+
+exports.removeResource = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const resourceId = data && data.resourceId ? String(data.resourceId) : '';
+  if (!resourceId) {
+    throw new functions.https.HttpsError('invalid-argument', 'resourceId is required.');
+  }
+
+  const db = admin.firestore();
+  const caller = await userProfile(db, context.auth.uid);
+  const ref = db.collection('resources').doc(resourceId);
+  const snap = await ref.get();
+  if (!snap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Resource not found.');
+  }
+  const schoolId = snap.get('schoolId') || '';
+  if (caller.role !== 'ad' || caller.schoolId !== schoolId) {
+    throw new functions.https.HttpsError('permission-denied',
+      "Only this school's AD can remove resources.");
+  }
+
+  // Retire rather than delete: past bookings must keep referring to a real asset.
+  await ref.set({ active: false, retiredAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+
+  await writeAudit({
+    schoolId: schoolId,
+    actorId: context.auth.uid,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'resource.retired',
+    targetType: 'resource',
+    targetId: resourceId,
+    detail: snap.get('name') || resourceId,
+  });
+
+  return { ok: true };
+});
+
+exports.bookResource = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const payload = data || {};
+  const resourceId = payload.resourceId ? String(payload.resourceId) : '';
+  const teamId = payload.teamId ? String(payload.teamId) : '';
+  const startMs = Number(payload.startMs);
+  const endMs = Number(payload.endMs);
+  if (!resourceId || !teamId || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+    throw new functions.https.HttpsError('invalid-argument',
+      'resourceId, teamId and a valid time window are required.');
+  }
+
+  const db = admin.firestore();
+  const callerId = context.auth.uid;
+  const resourceRef = db.collection('resources').doc(resourceId);
+  const teamRef = db.collection('teams').doc(teamId);
+  const [resourceSnap, teamSnap] = await Promise.all([resourceRef.get(), teamRef.get()]);
+  if (!resourceSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Resource not found.');
+  }
+  if (!teamSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Team not found.');
+  }
+  if (resourceSnap.get('active') === false) {
+    throw new functions.https.HttpsError('failed-precondition', 'That resource is no longer available.');
+  }
+  const schoolId = resourceSnap.get('schoolId') || '';
+  if (teamSnap.get('schoolId') !== schoolId) {
+    throw new functions.https.HttpsError('failed-precondition',
+      'That resource belongs to a different organization.');
+  }
+
+  const caller = await userProfile(db, callerId);
+  const memSnap = await teamRef.collection('members').doc(callerId).get();
+  const teamRole = memSnap.exists ? memSnap.get('role') : null;
+  const isSchoolAd = caller.role === 'ad' && caller.schoolId === schoolId;
+  if (!isSchoolAd && teamRole !== 'coach') {
+    throw new functions.https.HttpsError('permission-denied',
+      "Only an AD or this team's coach can book a resource.");
+  }
+
+  const bookingRef = db.collection('resourceBookings').doc();
+  const teamName = [teamSnap.get('sportName'), teamSnap.get('level')].filter(Boolean).join(' ');
+
+  // Overlap check inside a transaction: two coaches must not get the same gym slot.
+  await db.runTransaction(async (tx) => {
+    const existing = await tx.get(
+      db.collection('resourceBookings').where('resourceId', '==', resourceId));
+    const clash = existing.docs.find((doc) => {
+      const d = doc.data() || {};
+      if (d.status === 'cancelled') return false;
+      const s = Number(d.startMs) || 0;
+      const e = Number(d.endMs) || 0;
+      return startMs < e && endMs > s;
+    });
+    if (clash) {
+      const c = clash.data() || {};
+      throw new functions.https.HttpsError('already-exists',
+        `Already booked by ${c.teamName || 'another team'} at that time.`);
+    }
+
+    tx.set(bookingRef, {
+      schoolId: schoolId,
+      resourceId: resourceId,
+      resourceName: resourceSnap.get('name') || '',
+      resourceType: resourceSnap.get('type') || '',
+      teamId: teamId,
+      teamName: teamName,
+      title: payload.title ? String(payload.title).slice(0, 120) : '',
+      dateKey: payload.dateKey ? String(payload.dateKey) : '',
+      startMs: startMs,
+      endMs: endMs,
+      status: 'booked',
+      bookedBy: callerId,
+      bookedByName: caller.name || '',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  });
+
+  await writeAudit({
+    schoolId: schoolId,
+    actorId: callerId,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'resource.booked',
+    targetType: 'resourceBooking',
+    targetId: bookingRef.id,
+    detail: `${resourceSnap.get('name')} · ${teamName || teamId} · ${new Date(startMs).toISOString()}`,
+  });
+
+  return { ok: true, bookingId: bookingRef.id };
+});
+
+exports.cancelResourceBooking = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const bookingId = data && data.bookingId ? String(data.bookingId) : '';
+  if (!bookingId) {
+    throw new functions.https.HttpsError('invalid-argument', 'bookingId is required.');
+  }
+
+  const db = admin.firestore();
+  const callerId = context.auth.uid;
+  const ref = db.collection('resourceBookings').doc(bookingId);
+  const snap = await ref.get();
+  if (!snap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Booking not found.');
+  }
+  const booking = snap.data() || {};
+  const schoolId = booking.schoolId || '';
+
+  const caller = await userProfile(db, callerId);
+  const memSnap = await db.collection('teams').doc(booking.teamId || '').collection('members').doc(callerId).get();
+  const teamRole = memSnap.exists ? memSnap.get('role') : null;
+  const isOwner = booking.bookedBy === callerId;
+  const isSchoolAd = caller.role === 'ad' && caller.schoolId === schoolId;
+  if (!isOwner && !isSchoolAd && teamRole !== 'coach') {
+    throw new functions.https.HttpsError('permission-denied', 'You cannot cancel this booking.');
+  }
+
+  // Cancelled rather than deleted: the calendar should show that a slot was held
+  // and released, not silently rewrite history.
+  await ref.set({
+    status: 'cancelled',
+    cancelledBy: callerId,
+    cancelledByName: caller.name || '',
+    cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+    cancelReason: (data && data.reason) ? String(data.reason).slice(0, 300) : '',
+  }, { merge: true });
+
+  await writeAudit({
+    schoolId: schoolId,
+    actorId: callerId,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'resource.booking_cancelled',
+    targetType: 'resourceBooking',
+    targetId: bookingId,
+    detail: `${booking.resourceName || ''} · ${booking.teamName || ''}`,
   });
 
   return { ok: true };
