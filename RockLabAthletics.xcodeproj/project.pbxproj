@@ -293,6 +293,8 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "RockLab Athletics";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Record highlight videos for player showcases.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Record audio with highlight videos.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Select a highlight video from your library to upload to your team.";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -327,6 +329,8 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "RockLab Athletics";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Record highlight videos for player showcases.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Record audio with highlight videos.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Select a highlight video from your library to upload to your team.";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

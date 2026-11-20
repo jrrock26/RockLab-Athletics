@@ -5,39 +5,36 @@ Everything below was probed live, not assumed.
 
 ---
 
-## 1. What's connected now
+## 1. Current state — APPLIED 2026-11-20
 
-| Server | Status | Verdict |
+Config lives at `~/.cline/data/settings/cline_mcp_settings.json` (backup kept alongside).
+Four servers, all verified working by launch-and-handshake, not just by "connected":
+
+| Server | Status | Evidence |
 | --- | --- | --- |
-| **firebase** | ✅ Working | Required. Now set to this project + repo (was pointing at `/`). |
-| **firestore** | ❌ Broken | `Incompatible auth server: does not support dynamic client registration` → then `No connection found`. **Remove it.** |
-| **playwright** | ⚠️ Blocked | Installed, but pinned to `chrome` channel and Chrome.app is absent. |
-| **context7** | ✅ Working | Good for Firebase/SwiftUI API questions; better than model memory. |
-| **composio** | ✅ Working | Gmail / Sheets / Dialpad / 100s more. Sheet import is genuinely useful; Gmail is **not** right for app email. |
+| **firebase** | ✅ Working | `functions_list_functions` returned all 40 deployed functions; `firebase_get_project` → `rocklab-athletics` |
+| **xcode** | ✅ Working | `xcrun mcpbridge` → `serverInfo: xcode-tools`, **54 tools** (`BuildProject`, `RunAllTests`, `RenderPreview`, `GetTopCrashIssues`) |
+| **playwright** | ✅ Working | `npx @playwright/mcp@latest --browser chromium` → handshake OK, **25 tools** |
+| **context7** | ✅ Working | Docs retrieval for Firebase App Check etc. |
+| **firestore** | ❌ **Removed** | Google's endpoint needs OAuth *dynamic client registration*, which Google's auth server does not support — it can never authenticate |
+| **composio** | ✅ Working | Gmail/Sheets/Dialpad connectors (built-in, not in the file) |
 
-**Available but not yet wired:** Apple's Xcode MCP (`xcrun mcpbridge`, 54 tools, zero install) —
-see §3.1. It was found during this audit and is the highest-value addition available.
+**Two servers require a Cline reload** (`xcode`, and `playwright`'s new `--browser chromium`
+arg) because the extension caches server processes for the session. Both were proven by
+launching them with the exact new command and completing an MCP handshake.
 
+### Changes made to the config
 
-### Fixes applied this session
+- **xcode** → added: `{"type":"stdio","command":"xcrun","args":["mcpbridge"]}`.
+  Requires Xcode to be open (it bridges to a running instance).
+- **playwright** → `--browser chromium` added. Chrome's channel needs an admin password;
+  bundled Chromium was already downloaded and is present at
+  `~/Library/Caches/ms-playwright/chromium-1255/`.
+- **firestore** → removed (see table).
+- **firebase** → `--dir /Users/jasonrock/Desktop/RockLab-Athletics` pinned, so it can never
+  again silently attach to the wrong project. Command is the GA form `firebase mcp --dir …`
+  (firebase-tools 15.33.0); `experimental:mcp` still works but is not the supported form.
 
-- **firebase** → repointed to `project_dir=/Users/jasonrock/Desktop/RockLab-Athletics`,
-  `active_project=rocklab-athletics`. It immediately surfaced a real bug (§2).
-  Command note: `firebase mcp --help` (firebase-tools 15.33.0) shows the server is now **GA**
-  as `firebase mcp [--dir <path>] [--only <features>] [--mode stdio|sse]`. If your config still
-  says `experimental:mcp` it works, but `mcp --dir …` is the supported form — and passing
-  `--dir` explicitly means it can't silently attach to the wrong project again.
-
-- **playwright** → Chromium downloaded (100 MB, done). The server still requests the
-  `chrome` *channel*, so either:
-  - install Chrome: `npx playwright install chrome` — **it asks for your admin password**,
-    which is why it stalled mid-run; run it yourself in a terminal, or
-  - change the MCP arg `--browser chrome` → `--browser chromium` (already downloaded).
-
-- **firestore** → remove. It relies on Google OAuth *dynamic client registration*, which
-  Google's auth server doesn't support, so it cannot authenticate — ever. You lose nothing:
-  the `firebase` MCP handles rules/indexes/deploy, and the Admin SDK handles document reads
-  (that's exactly what `functions/scripts/seed-local.js` does).
 
 ---
 
