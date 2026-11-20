@@ -9,6 +9,7 @@ struct LiveScoringView: View {
     @State private var selectedPlayer: RosterEntry?
     @State private var access = TeamAccess()
     @State private var isGameScorer = false
+    @State private var scoringMode = "simple"
     @State private var clockRemaining = 0
     @State private var clockRunning = false
     private let clockTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -17,6 +18,13 @@ struct LiveScoringView: View {
 
     private var canScore: Bool {
         access.canManageTeam || access.hasPerm(.statistician) || isGameScorer
+    }
+
+    /// Coaches and staff statisticians always get player stats. A volunteer only
+    /// gets them when the coach assigned advanced scoring — inaccurate live stats
+    /// are worse than none.
+    private var canTrackPlayerStats: Bool {
+        access.canManageTeam || access.hasPerm(.statistician) || scoringMode == "advanced"
     }
 
     var body: some View {
@@ -67,7 +75,18 @@ struct LiveScoringView: View {
                 .disabled(!canScore)
             }
 
-            if access.canSeeAllEvents {
+            if isGameScorer && scoringMode == "simple" {
+                Section {
+                    Label("Simple scoring — score and clock only", systemImage: "1.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text("Player stats are added after the game by the coach.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if access.canSeeAllEvents && canTrackPlayerStats {
                 Section("Player stats") {
                     if vm.roster.isEmpty {
                         Text("No players on the roster yet.")
@@ -100,9 +119,12 @@ struct LiveScoringView: View {
             await vm.beginGame(game, teamId: teamId)
             vm.watchGame(gameId: game.id)
             access = await FirestoreService.shared.teamAccess(teamId: teamId, userId: auth.user?.id, isAd: auth.user?.role == .ad)
-            // A volunteer who claimed this game holds a per-game grant.
+            // A volunteer who claimed this game holds a per-game grant; its mode
+            // decides whether they may touch player stats.
             if let uid = auth.user?.id {
-                isGameScorer = await FirestoreService.shared.isGameScorer(gameId: game.id, userId: uid)
+                let grant = await FirestoreService.shared.scoringGrant(gameId: game.id, userId: uid)
+                isGameScorer = grant.isScorer
+                scoringMode = grant.mode
             }
         }
         .onAppear {

@@ -71,6 +71,7 @@ export default function Dashboard() {
         <Link className="card link-card" href="/import">Import roster &amp; invite parents</Link>
         <Link className="card link-card" href="/reports">Reports</Link>
         <Link className="card link-card" href="/audit">Audit log</Link>
+        <Link className="card link-card" href="/records">Records &amp; career stats</Link>
         <button className="card link-card" onClick={exportData} disabled={exporting}>
           {exporting ? 'Preparing export…' : 'Export school data'}
         </button>

@@ -242,6 +242,18 @@ struct FirestoreService {
         return doc?.exists ?? false
     }
 
+    /// The volunteer's grant for a game, including which scoring mode the coach
+    /// assigned. Simple mode hides per-player stats entirely, because inaccurate
+    /// live stats are worse than none.
+    func scoringGrant(gameId: String, userId: String) async -> (isScorer: Bool, mode: String) {
+        guard !userId.isEmpty else { return (false, "simple") }
+        guard let doc = try? await db.collection("games").document(gameId)
+            .collection("scorers").document(userId).getDocument(),
+              doc.exists else { return (false, "simple") }
+        let mode = (doc.data()?["mode"] as? String) == "advanced" ? "advanced" : "simple"
+        return (true, mode)
+    }
+
     /// Volleyball: persist per-set scores and derive the match score from sets
     /// won, so `teamScore`/`opponentScore` mean "sets", not "points".
     func saveVolleyballSets(gameId: String, sets: [[String: Int]], status: GameStatus) async throws {

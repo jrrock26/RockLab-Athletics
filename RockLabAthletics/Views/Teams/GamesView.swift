@@ -34,6 +34,14 @@ struct GamesView: View {
                                     .foregroundStyle(.orange)
                             }
                             Spacer()
+                            if access.canManageTeam {
+                                Button(req.mode == "advanced" ? "Advanced" : "Simple") {
+                                    Task { await toggleMode(req) }
+                                }
+                                .font(.caption2.bold())
+                                .buttonStyle(.borderless)
+                                .disabled(!scorerBusy.isEmpty)
+                            }
                             if scorerBusy == req.id {
                                 ProgressView()
                             } else {
@@ -89,6 +97,14 @@ struct GamesView: View {
                                     Label("Ask for a scorer", systemImage: "person.badge.clock")
                                 }
                                 .tint(.orange)
+                            }
+                            if access.canManageTeam && game.status == .final {
+                                Button {
+                                    Task { await verify(game) }
+                                } label: {
+                                    Label("Verify stats", systemImage: "checkmark.seal")
+                                }
+                                .tint(.green)
                             }
                         }
                     }
@@ -159,6 +175,33 @@ struct GamesView: View {
         }
         scorerBusy = ""
     }
+
+    /// Simple vs advanced: advanced lets a trusted statistician attribute stats
+    /// live; simple restricts the volunteer to the score and clock.
+    private func toggleMode(_ request: GameStatisticianRequest) async {
+        scorerBusy = request.id
+        scorerError = ""
+        let next = request.mode == "advanced" ? "simple" : "advanced"
+        do {
+            _ = try await FunctionsService.shared.setScoringMode(requestId: request.id, mode: next)
+            await loadScorerRequests()
+        } catch {
+            scorerError = error.localizedDescription
+        }
+        scorerBusy = ""
+    }
+
+    private func verify(_ game: Game) async {
+        scorerBusy = game.id
+        scorerError = ""
+        do {
+            _ = try await FunctionsService.shared.verifyGameStats(gameId: game.id)
+            await vm.loadGames(teamId: teamId)
+        } catch {
+            scorerError = error.localizedDescription
+        }
+        scorerBusy = ""
+    }
 }
 
 struct GameRow: View {
@@ -177,6 +220,12 @@ struct GameRow: View {
                             .padding(.vertical, 2)
                             .background(Color.purple.opacity(0.15), in: Capsule())
                             .foregroundStyle(Color.purple)
+                    }
+                    if game.statsStatus == "verified" {
+                        Image(systemName: "checkmark.seal.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                            .accessibilityLabel("Stats verified")
                     }
                 }
                 Text(game.date.formatted(date: .abbreviated, time: .shortened))

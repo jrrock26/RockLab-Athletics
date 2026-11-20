@@ -21,8 +21,10 @@ struct Game: Identifiable, Codable {
     /// Volleyball-style set results: [{ "us": 25, "them": 20 }, …]. A match is
     /// decided by sets won, so the running score alone cannot express it.
     var sets: [[String: Int]]
+    /// unverified | verified — only verified stats reach career totals.
+    var statsStatus: String
 
-    init(id: String, teamId: String, opponent: String, isHome: Bool, date: Date, status: GameStatus, teamScore: Int, opponentScore: Int, isDistrictGame: Bool = false, opponentTeamId: String? = nil, period: Int = 0, clockSeconds: Int = 0, sets: [[String: Int]] = []) {
+    init(id: String, teamId: String, opponent: String, isHome: Bool, date: Date, status: GameStatus, teamScore: Int, opponentScore: Int, isDistrictGame: Bool = false, opponentTeamId: String? = nil, period: Int = 0, clockSeconds: Int = 0, sets: [[String: Int]] = [], statsStatus: String = "unverified") {
         self.id = id
         self.teamId = teamId
         self.opponent = opponent
@@ -36,6 +38,7 @@ struct Game: Identifiable, Codable {
         self.period = period
         self.clockSeconds = clockSeconds
         self.sets = sets
+        self.statsStatus = statsStatus
     }
 
     init?(id: String, data: [String: Any]) {
@@ -58,6 +61,7 @@ struct Game: Identifiable, Codable {
             guard let us = raw["us"] as? Int, let them = raw["them"] as? Int else { return nil }
             return ["us": us, "them": them]
         } ?? []
+        self.statsStatus = data["statsStatus"] as? String ?? "unverified"
     }
 }
 
@@ -74,6 +78,8 @@ struct GameStatisticianRequest: Identifiable {
     var isHome: Bool
     /// open | filled | cancelled
     var status: String
+    /// simple | advanced — what the coach allowed the volunteer to do.
+    var mode: String
     var filledBy: String
     var filledByName: String
 
@@ -85,6 +91,7 @@ struct GameStatisticianRequest: Identifiable {
         self.opponent = data["opponent"] as? String ?? ""
         self.isHome = data["isHome"] as? Bool ?? true
         self.status = data["status"] as? String ?? "open"
+        self.mode = data["mode"] as? String ?? "simple"
         self.filledBy = data["filledBy"] as? String ?? ""
         self.filledByName = data["filledByName"] as? String ?? ""
     }

@@ -248,6 +248,33 @@ struct FunctionsService {
         return (result.data as? [String: Any]) ?? [:]
     }
 
+    /// Sets simple or advanced scoring for a claimed/requested game.
+    func setScoringMode(requestId: String, mode: String) async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("setScoringMode").call([
+            "requestId": requestId,
+            "mode": mode,
+        ])
+        return (result.data as? [String: Any]) ?? [:]
+    }
+
+    /// Confirms a game's stats against the paper book and writes the career
+    /// ledger. Only verified stats count toward career totals and records.
+    func verifyGameStats(gameId: String, note: String = "") async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("verifyGameStats").call([
+            "gameId": gameId,
+            "note": note,
+        ])
+        return (result.data as? [String: Any]) ?? [:]
+    }
+
+    /// Withdraws a game's verified stats so they can be corrected.
+    func reopenGameStats(gameId: String) async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("reopenGameStats").call([
+            "gameId": gameId,
+        ])
+        return (result.data as? [String: Any]) ?? [:]
+    }
+
     /// Repairs a missing head-coach membership on an existing team.
     func ensureTeamCoachMembership(teamId: String) async throws -> [String: Any] {
         let result = try await functions.httpsCallable("ensureTeamCoachMembership").call([

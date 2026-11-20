@@ -225,6 +225,21 @@ service cloud.firestore {
       }
     }
 
+    // Verified career ledger. Written only by verifyGameStats/addCareerStatLine.
+    // Staff of the school may read it; nobody may write or delete from a client.
+    match /careerStatLines/{lineId} {
+      allow read: if signedIn() && role() in ['ad','coach','staff']
+        && 'schoolId' in resource.data
+        && resource.data.schoolId == userData().schoolId;
+      allow write: if false;
+    }
+
+    // School records are part of the public story of a program.
+    match /schoolRecords/{recordId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     // A coach asking for a volunteer to run one game's scoring. Team members can
     // see the request; only the Cloud Functions may create, fill or cancel it.
     match /gameStatisticianRequests/{requestId} {

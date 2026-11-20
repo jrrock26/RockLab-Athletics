@@ -1689,6 +1689,7 @@ exports.requestGameStatistician = functions.https.onCall(async (data, context) =
     throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
   }
   const gameId = data && data.gameId ? String(data.gameId) : '';
+  const mode = (data && data.mode === 'advanced') ? 'advanced' : 'simple';
   if (!gameId) {
     throw new functions.https.HttpsError('invalid-argument', 'gameId is required.');
   }
@@ -1723,6 +1724,7 @@ exports.requestGameStatistician = functions.https.onCall(async (data, context) =
     isHome: gameSnap.get('isHome') === true,
     date: gameSnap.get('date') || null,
     status: 'open',
+    mode: mode,
     requestedBy: callerId,
     requestedByName: caller.name || '',
     requestedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1770,12 +1772,14 @@ exports.claimGameStatistician = functions.https.onCall(async (data, context) => 
       'Follow or join the team before claiming a game.');
   }
 
-  // The grant is per game, never a staff role.
+  // The grant is per game, never a staff role. The mode decides whether this
+  // volunteer can touch per-player stats at all.
   await db.collection('games').doc(req.gameId).collection('scorers').doc(callerId).set({
     userId: callerId,
     name: caller.name || '',
     email: caller.email || '',
     requestId: requestId,
+    mode: req.mode === 'advanced' ? 'advanced' : 'simple',
     grantedAt: admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
 
@@ -1852,6 +1856,462 @@ exports.releaseGameStatistician = functions.https.onCall(async (data, context) =
   });
 
   return { ok: true, status: cancel ? 'cancelled' : 'open' };
+});
+
+// ---------------------------------------------------------------------------
+// Scoring mode. A coach decides whether a volunteer gets simple scoring (score
+// and clock only) or advanced scoring (per-player stats). Most parents and
+// students cannot reliably attribute stats live, so simple is the safe default.
+// ---------------------------------------------------------------------------
+const SCORING_MODES = ['simple', 'advanced'];
+
+exports.setScoringMode = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const requestId = data && data.requestId ? String(data.requestId) : '';
+  const mode = data && data.mode ? String(data.mode) : '';
+  if (!requestId || !SCORING_MODES.includes(mode)) {
+    throw new functions.https.HttpsError('invalid-argument', 'requestId and a valid mode are required.');
+  }
+
+  const db = admin.firestore();
+  const ref = db.collection('gameStatisticianRequests').doc(requestId);
+  const snap = await ref.get();
+  if (!snap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Request not found.');
+  }
+  const req = snap.data() || {};
+  const caller = await userProfile(db, context.auth.uid);
+  const memSnap = await db.collection('teams').doc(req.teamId).collection('members').doc(context.auth.uid).get();
+  const isCoach = memSnap.exists && memSnap.get('role') === 'coach';
+  if (!(caller.role === 'ad' || isCoach)) {
+    throw new functions.https.HttpsError('permission-denied', 'Only an AD or coach can set the scoring mode.');
+  }
+
+  await ref.set({ mode: mode }, { merge: true });
+
+  // If the game is already claimed, retune the grant too.
+  if (req.filledBy) {
+    await db.collection('games').doc(req.gameId).collection('scorers').doc(req.filledBy)
+      .set({ mode: mode }, { merge: true });
+  }
+
+  await writeAudit({
+    schoolId: caller.schoolId || '',
+    actorId: context.auth.uid,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'scorer.mode_set',
+    targetType: 'game',
+    targetId: req.gameId || '',
+    detail: `${mode} · vs ${req.opponent || ''}`,
+  });
+
+  return { ok: true, mode: mode };
+});
+
+// ---------------------------------------------------------------------------
+// Stats verification.
+//
+// This is the gate that makes stats real. Raw live numbers are never trusted: a
+// staff member compares them against the paper book and confirms. Only at
+// confirmation do we write `careerStatLines` — the append-only ledger that
+// career totals, school records and a future MaxPreps export all read from.
+// Re-verifying rebuilds the ledger for that game, so corrections are safe.
+// ---------------------------------------------------------------------------
+const STAT_META_KEYS = ['gameId', 'rosterEntryId', 'playerName'];
+
+function athleteKeyFor(rosterEntryId, rosterInfo) {
+  const userId = rosterInfo && rosterInfo.userId;
+  // Prefer the account: it survives promotion between teams and across seasons.
+  if (userId) return `user:${userId}`;
+  return `roster:${(rosterInfo && rosterInfo.teamId) || ''}:${rosterEntryId}`;
+}
+
+exports.verifyGameStats = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const gameId = data && data.gameId ? String(data.gameId) : '';
+  if (!gameId) {
+    throw new functions.https.HttpsError('invalid-argument', 'gameId is required.');
+  }
+
+  const db = admin.firestore();
+  const callerId = context.auth.uid;
+  const gameSnap = await db.collection('games').doc(gameId).get();
+  if (!gameSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Game not found.');
+  }
+  const teamId = gameSnap.get('teamId') || '';
+  const teamSnap = await db.collection('teams').doc(teamId).get();
+  const schoolId = teamSnap.exists ? (teamSnap.get('schoolId') || '') : '';
+
+  const caller = await userProfile(db, callerId);
+  const memSnap = await db.collection('teams').doc(teamId).collection('members').doc(callerId).get();
+  const teamRole = memSnap.exists ? memSnap.get('role') : null;
+  const perms = memSnap.exists ? (memSnap.get('permissions') || []) : [];
+  const isStatStaff = teamRole === 'staff' && perms.includes('statistician');
+  if (!(caller.role === 'ad' || teamRole === 'coach' || isStatStaff)) {
+    throw new functions.https.HttpsError('permission-denied',
+      'Only an AD, the coach, or statistician staff can verify stats.');
+  }
+
+  // Idempotent: clear this game's previous ledger entries before rebuilding.
+  const existing = await db.collection('careerStatLines').where('gameId', '==', gameId).get();
+  await Promise.all(existing.docs.map((d) => d.ref.delete()));
+
+  const [statsSnap, rosterSnap] = await Promise.all([
+    db.collection('games').doc(gameId).collection('stats').get(),
+    db.collection('teams').doc(teamId).collection('roster').get(),
+  ]);
+
+  const roster = {};
+  rosterSnap.docs.forEach((d) => {
+    roster[d.id] = { teamId: teamId, userId: d.get('userId') || null };
+  });
+
+  const sportId = teamSnap.exists ? (teamSnap.get('sportId') || '') : '';
+  const season = teamSnap.exists ? (teamSnap.get('season') || '') : '';
+
+  let written = 0;
+  for (const doc of statsSnap.docs) {
+    const raw = doc.data() || {};
+    const stats = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (STAT_META_KEYS.includes(key)) continue;
+      if (typeof value === 'number' && isFinite(value)) stats[key] = value;
+    }
+    if (Object.keys(stats).length === 0) continue;
+
+    await db.collection('careerStatLines').add({
+      schoolId: schoolId,
+      sportId: sportId,
+      season: season,
+      teamId: teamId,
+      gameId: gameId,
+      rosterEntryId: doc.id,
+      athleteKey: athleteKeyFor(doc.id, roster[doc.id]),
+      athleteName: raw.playerName || '',
+      stats: stats,
+      source: 'game',
+      verified: true,
+      createdBy: callerId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    written++;
+  }
+
+  await db.collection('games').doc(gameId).set({
+    statsStatus: 'verified',
+    statsVerifiedBy: callerId,
+    statsVerifiedByName: caller.name || '',
+    statsVerifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+    statsVerifyNote: (data && data.note) ? String(data.note).slice(0, 300) : '',
+  }, { merge: true });
+
+  await writeAudit({
+    schoolId: schoolId,
+    actorId: callerId,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'stats.verified',
+    targetType: 'game',
+    targetId: gameId,
+    detail: `${written} athlete stat line(s) confirmed`,
+  });
+
+  return { ok: true, athletes: written };
+});
+
+// Reopen a verified game so corrections can be made. Deleting the ledger rows is
+// the point: an unverified game must never keep contributing to career totals.
+exports.reopenGameStats = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const gameId = data && data.gameId ? String(data.gameId) : '';
+  if (!gameId) {
+    throw new functions.https.HttpsError('invalid-argument', 'gameId is required.');
+  }
+
+  const db = admin.firestore();
+  const callerId = context.auth.uid;
+  const gameSnap = await db.collection('games').doc(gameId).get();
+  if (!gameSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Game not found.');
+  }
+  const teamId = gameSnap.get('teamId') || '';
+  const teamSnap = await db.collection('teams').doc(teamId).get();
+  const schoolId = teamSnap.exists ? (teamSnap.get('schoolId') || '') : '';
+
+  const caller = await userProfile(db, callerId);
+  const memSnap = await db.collection('teams').doc(teamId).collection('members').doc(callerId).get();
+  const teamRole = memSnap.exists ? memSnap.get('role') : null;
+  if (!(caller.role === 'ad' || teamRole === 'coach')) {
+    throw new functions.https.HttpsError('permission-denied', 'Only an AD or the coach can reopen stats.');
+  }
+
+  const existing = await db.collection('careerStatLines').where('gameId', '==', gameId).get();
+  await Promise.all(existing.docs.map((d) => d.ref.delete()));
+
+  await db.collection('games').doc(gameId).set({
+    statsStatus: 'unverified',
+    statsVerifiedBy: admin.firestore.FieldValue.delete(),
+    statsVerifiedByName: admin.firestore.FieldValue.delete(),
+    statsVerifiedAt: admin.firestore.FieldValue.delete(),
+  }, { merge: true });
+
+  await writeAudit({
+    schoolId: schoolId,
+    actorId: callerId,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'stats.reopened',
+    targetType: 'game',
+    targetId: gameId,
+    detail: `${existing.size} ledger line(s) withdrawn`,
+  });
+
+  return { ok: true, removed: existing.size };
+});
+
+// ---------------------------------------------------------------------------
+// Historical career stats.
+//
+// A school adopting the app mid-career must not lose what came before. This adds
+// a verified historical line for an athlete, keyed so it aggregates with stats
+// earned in the app. No game, no roster entry, no account required.
+// ---------------------------------------------------------------------------
+exports.addCareerStatLine = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const payload = data || {};
+  const athleteName = payload.athleteName ? String(payload.athleteName).trim() : '';
+  const sportId = payload.sportId ? String(payload.sportId) : '';
+  const rawStats = payload.stats && typeof payload.stats === 'object' ? payload.stats : null;
+  if (!athleteName || !sportId || !rawStats) {
+    throw new functions.https.HttpsError('invalid-argument',
+      'athleteName, sportId and stats are required.');
+  }
+
+  const stats = {};
+  for (const [key, value] of Object.entries(rawStats)) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n !== 0) stats[key] = n;
+  }
+  if (Object.keys(stats).length === 0) {
+    throw new functions.https.HttpsError('invalid-argument', 'Provide at least one non-zero stat.');
+  }
+
+  const db = admin.firestore();
+  const callerId = context.auth.uid;
+  const caller = await userProfile(db, callerId);
+  const schoolId = (payload.schoolId ? String(payload.schoolId) : '') || caller.schoolId || '';
+  if (!schoolId) {
+    throw new functions.https.HttpsError('failed-precondition', 'No school on this account.');
+  }
+  if (!(caller.role === 'ad' || caller.role === 'staff') || caller.schoolId !== schoolId) {
+    throw new functions.https.HttpsError('permission-denied',
+      'Only this school\'s AD or staff can enter historical stats.');
+  }
+
+  // Key to the account when the athlete is known, otherwise to their name so
+  // historical totals still aggregate with each other.
+  const linkedUserId = payload.athleteUserId ? String(payload.athleteUserId) : '';
+  const athleteKey = linkedUserId
+    ? `user:${linkedUserId}`
+    : `name:${athleteName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+
+  const ref = await db.collection('careerStatLines').add({
+    schoolId: schoolId,
+    sportId: sportId,
+    season: payload.season ? String(payload.season) : '',
+    teamId: '',
+    gameId: '',
+    rosterEntryId: '',
+    athleteKey: athleteKey,
+    athleteName: athleteName,
+    stats: stats,
+    source: 'historical',
+    verified: true,
+    note: payload.note ? String(payload.note).slice(0, 300) : '',
+    createdBy: callerId,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  await writeAudit({
+    schoolId: schoolId,
+    actorId: callerId,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'career.historical_added',
+    targetType: 'careerStatLine',
+    targetId: ref.id,
+    detail: `${athleteName} · ${payload.season || 'no season'} · ${Object.keys(stats).join(', ')}`,
+  });
+
+  return { ok: true, lineId: ref.id, athleteKey: athleteKey };
+});
+
+// ---------------------------------------------------------------------------
+// School records.
+//
+// Records are seeded and maintained by the AD, including history from before the
+// school used the app. They are the reference point for record watch below.
+// ---------------------------------------------------------------------------
+exports.setSchoolRecord = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const payload = data || {};
+  const sportId = payload.sportId ? String(payload.sportId) : '';
+  const statKey = payload.statKey ? String(payload.statKey) : '';
+  const value = Number(payload.value);
+  const holderName = payload.holderName ? String(payload.holderName).trim() : '';
+  if (!sportId || !statKey || !Number.isFinite(value) || value <= 0 || !holderName) {
+    throw new functions.https.HttpsError('invalid-argument',
+      'sportId, statKey, a positive value and holderName are required.');
+  }
+
+  const db = admin.firestore();
+  const callerId = context.auth.uid;
+  const caller = await userProfile(db, callerId);
+  const schoolId = (payload.schoolId ? String(payload.schoolId) : '') || caller.schoolId || '';
+  if (!schoolId || caller.role !== 'ad' || caller.schoolId !== schoolId) {
+    throw new functions.https.HttpsError('permission-denied',
+      "Only this school's AD can set records.");
+  }
+
+  // Deterministic id: one current record per sport+stat.
+  const docId = `${sportId}__${statKey}`;
+  await db.collection('schoolRecords').doc(docId).set({
+    schoolId: schoolId,
+    sportId: sportId,
+    statKey: statKey,
+    value: value,
+    holderName: holderName,
+    holderAthleteKey: payload.holderAthleteKey ? String(payload.holderAthleteKey) : '',
+    season: payload.season ? String(payload.season) : '',
+    updatedBy: callerId,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  await writeAudit({
+    schoolId: schoolId,
+    actorId: callerId,
+    actorName: caller.name,
+    actorRole: caller.role || '',
+    action: 'record.set',
+    targetType: 'schoolRecord',
+    targetId: docId,
+    detail: `${sportId} ${statKey} = ${value} (${holderName})`,
+  });
+
+  return { ok: true, recordId: docId };
+});
+
+// ---------------------------------------------------------------------------
+// Record watch.
+//
+// Answers "who is close to breaking a school record, and by how much?" from the
+// verified career ledger. Read-only and cheap enough for an AD dashboard; the
+// `within` fraction defaults to 15% of the record.
+// ---------------------------------------------------------------------------
+exports.recordProximity = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const payload = data || {};
+  const db = admin.firestore();
+  const caller = await userProfile(db, context.auth.uid);
+  const schoolId = (payload.schoolId ? String(payload.schoolId) : '') || caller.schoolId || '';
+  if (!schoolId) {
+    throw new functions.https.HttpsError('failed-precondition', 'No school on this account.');
+  }
+  if (!['ad', 'coach', 'staff'].includes(caller.role) || caller.schoolId !== schoolId) {
+    throw new functions.https.HttpsError('permission-denied', 'Staff only.');
+  }
+
+  const within = Math.min(Math.max(Number(payload.within) || 0.15, 0.01), 1);
+  const sportFilter = payload.sportId ? String(payload.sportId) : '';
+
+  // Query by schoolId only and filter in JS: two equality filters would need a
+  // composite index for no real benefit at school scale.
+  const [recordsSnap, linesSnap] = await Promise.all([
+    db.collection('schoolRecords').where('schoolId', '==', schoolId).get(),
+    db.collection('careerStatLines').where('schoolId', '==', schoolId).get(),
+  ]);
+
+  const records = recordsSnap.docs
+    .map((d) => d.data() || {})
+    .filter((r) => !sportFilter || r.sportId === sportFilter);
+
+  // athleteKey -> { name, sportId, totals: { statKey: total } }
+  const athletes = new Map();
+  for (const doc of linesSnap.docs) {
+    const line = doc.data() || {};
+    if (!line.verified) continue;
+    if (sportFilter && line.sportId !== sportFilter) continue;
+    const key = line.athleteKey || '';
+    if (!key) continue;
+    const entry = athletes.get(key) || {
+      athleteKey: key,
+      athleteName: line.athleteName || '',
+      sportId: line.sportId || '',
+      totals: {},
+    };
+    if (!entry.athleteName && line.athleteName) entry.athleteName = line.athleteName;
+    for (const [statKey, value] of Object.entries(line.stats || {})) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) continue;
+      entry.totals[statKey] = (entry.totals[statKey] || 0) + n;
+    }
+    athletes.set(key, entry);
+  }
+
+  const out = [];
+  for (const record of records) {
+    const recordValue = Number(record.value) || 0;
+    if (recordValue <= 0) continue;
+    const threshold = Math.max(1, Math.ceil(recordValue * within));
+    const chasing = [];
+    const broken = [];
+    for (const athlete of athletes.values()) {
+      const total = athlete.totals[record.statKey] || 0;
+      if (total <= 0) continue;
+      const remaining = recordValue - total;
+      if (remaining <= 0) {
+        broken.push({
+          athleteKey: athlete.athleteKey,
+          athleteName: athlete.athleteName,
+          total: total,
+        });
+      } else if (remaining <= threshold) {
+        chasing.push({
+          athleteKey: athlete.athleteKey,
+          athleteName: athlete.athleteName,
+          total: total,
+          remaining: remaining,
+        });
+      }
+    }
+    chasing.sort((a, b) => a.remaining - b.remaining);
+    out.push({
+      sportId: record.sportId || '',
+      statKey: record.statKey || '',
+      recordValue: recordValue,
+      holderName: record.holderName || '',
+      season: record.season || '',
+      within: within,
+      chasing: chasing.slice(0, 5),
+      broken: broken.slice(0, 5),
+    });
+  }
+
+  return { schoolId: schoolId, records: out, athletesTracked: athletes.size };
 });
 
 // Safety net: if a head coach is missing their membership (e.g. a team created
