@@ -2454,12 +2454,12 @@ async function runRecordChaseAnnouncements(db, schoolId, lookaheadHours, gamesAw
       const average = gamesPlayed > 0 ? total / gamesPlayed : 0;
       if (average <= 0) continue;
       const gamesAway = Math.ceil(remaining / average);
-      if (gamesAway > gamesAwayMax) continue;
       if (!athlete.teamId) continue;
 
       const body = `${athlete.name} needs ${remaining} ${record.statKey} to tie the school record or ${remaining + 1} to break it.`;
 
-      // 1) Baseline, once per record per athlete.
+      // 1) Baseline, once per record per athlete — regardless of how far away
+      // they are, so the season starts with the story set up.
       const baselineId = sanitizeDocId(
         `baseline__${schoolId}__${record.season || 'current'}__${record.statKey}__${athlete.key}`);
       const baselineSnap = await db.collection('recordChaseAnnouncements').doc(baselineId).get();
@@ -2476,7 +2476,9 @@ async function runRecordChaseAnnouncements(db, schoolId, lookaheadHours, gamesAw
         announced.push({ kind: 'baseline', statKey: record.statKey, athleteName: athlete.name, remaining });
       }
 
-      // 2) One pre-game notice per upcoming game.
+      // 2) One pre-game notice per upcoming game, but only once the chase is
+      // close enough to be meaningful (a few games away).
+      if (gamesAway > gamesAwayMax) continue;
       const gamesSnap = await db.collection('games').where('teamId', '==', athlete.teamId).limit(50).get();
       const upcoming = gamesSnap.docs
         .map((d) => {
