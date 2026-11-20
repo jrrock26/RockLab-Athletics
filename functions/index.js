@@ -422,18 +422,8 @@ async function notifyTeam(teamId, title, body, includeFollowers = false, data = 
   }
 }
 
-exports.sendTestPush = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
-  }
-  const title = (data && data.title) || 'Test';
-  const body = (data && data.body) || 'Push notifications are working!';
-  const ok = await sendToUser(context.auth.uid, title, body);
-  if (!ok) {
-    throw new functions.https.HttpsError('not-found', 'No FCM token for this user yet. Register for push on a real device first.');
-  }
-  return { ok: true };
-});
+// NOTE: the former `sendTestPush` diagnostic callable was removed before release.
+// It existed to verify FCM delivery during development and had no app-side caller.
 
 exports.onEventCreated = functions.firestore.document('events/{eventId}').onCreate(async (snap) => {
   const ev = snap.data() || {};

@@ -29,6 +29,14 @@ struct RootView: View {
         .animation(.default, value: auth.isSignedIn)
         .animation(.default, value: auth.needsEmailVerification)
         .onAppear { auth.start() }
+        .task(id: auth.isSignedIn) {
+            // Ask for notification permission only once the user is actually signed
+            // in. Asking at launch (before login) suppresses opt-in and is against
+            // Apple's HIG guidance for permission prompts.
+            if auth.isSignedIn {
+                AppDelegate.requestNotificationPermission()
+            }
+        }
     }
 }
 
