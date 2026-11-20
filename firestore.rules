@@ -81,6 +81,15 @@ service cloud.firestore {
       allow read: if signedIn();
       allow create: if signedIn() && request.resource.data.adUserId == uid();
       allow update, delete: if isAd();
+
+      // Following an ORGANIZATION, not an individual team. A follower manages
+      // their own row; the school's AD can see who follows them.
+      match /followers/{followerId} {
+        allow read: if signedIn() && (uid() == followerId
+          || (isAd() && userData().schoolId == schoolId));
+        allow create, delete: if signedIn() && uid() == followerId;
+        allow update: if false;
+      }
     }
 
     match /teams/{teamId} {

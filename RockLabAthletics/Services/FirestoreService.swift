@@ -144,6 +144,87 @@ struct FirestoreService {
         return snapshot.documents.compactMap { School(id: $0.documentID, data: $0.data()) }
     }
 
+    // MARK: - Following an organization
+
+    /// Follows a whole school/org, not an individual team. The org is what a
+    /// community member cares about; individual teams are something they browse
+    /// from the org dashboard.
+    func followSchool(schoolId: String, userId: String, name: String, email: String) async throws {
+        try await db.collection("schools").document(schoolId)
+            .collection("followers").document(userId)
+            .setData([
+                "userId": userId,
+                "name": name,
+                "email": email,
+                "followedAt": FieldValue.serverTimestamp(),
+            ], merge: true)
+        try await db.collection("users").document(userId).setData([
+            "followedSchoolIds": FieldValue.arrayUnion([schoolId]),
+        ], merge: true)
+    }
+
+    func unfollowSchool(schoolId: String, userId: String) async throws {
+        try await db.collection("schools").document(schoolId)
+            .collection("followers").document(userId).delete()
+        try await db.collection("users").document(userId).setData([
+            "followedSchoolIds": FieldValue.arrayRemove([schoolId]),
+        ], merge: true)
+    }
+
+    func fetchFollowedSchools(userId: String) async throws -> [School] {
+        let userSnap = try await db.collection("users").document(userId).getDocument()
+        let ids = (userSnap.data()?["followedSchoolIds"] as? [String]) ?? []
+        guard !ids.isEmpty else { return [] }
+        var schools: [School] = []
+        for chunk in ids.chunked(into: 10) {
+            let snap = try await db.collection("schools")
+                .whereField(FieldPath.documentID(), in: chunk)
+                .getDocuments()
+            schools += snap.documents.compactMap { School(id: $0.documentID, data: $0.data()) }
+        }
+        return schools.sorted { $0.name < $1.name }
+    }
+
+    /// Prefix search so a follower can find their school by typing its name.
+    func searchSchools(matching term: String) async throws -> [School] {
+        let query = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        let upper = query + "\u{f8ff}"
+        let snap = try await db.collection("schools")
+            .whereField("name", isGreaterThanOrEqualTo: query)
+            .whereField("name", isLessThan: upper)
+            .limit(to: 20)
+            .getDocuments()
+        return snap.documents.compactMap { School(id: $0.documentID, data: $0.data()) }
+    }
+
+    /// Games across many teams — used by the org dashboard, which spans every
+    /// team in a school. Firestore caps `in` at 10, so this chunks.
+    func fetchGames(teamIds: [String], limit: Int = 300) async throws -> [Game] {
+        guard !teamIds.isEmpty else { return [] }
+        var games: [Game] = []
+        for chunk in teamIds.chunked(into: 10) {
+            let snap = try await db.collection("games")
+                .whereField("teamId", in: chunk)
+                .limit(to: limit)
+                .getDocuments()
+            games += snap.documents.compactMap { Game(id: $0.documentID, data: $0.data()) }
+        }
+        return games
+    }
+
+    func fetchFundraisers(teamIds: [String]) async throws -> [Fundraiser] {
+        guard !teamIds.isEmpty else { return [] }
+        var items: [Fundraiser] = []
+        for chunk in teamIds.chunked(into: 10) {
+            let snap = try await db.collection("fundraisers")
+                .whereField("teamId", in: chunk)
+                .getDocuments()
+            items += snap.documents.compactMap { Fundraiser(id: $0.documentID, data: $0.data()) }
+        }
+        return items
+    }
+
     /// Client-side school search (fine for a single-school directory; use a
     /// dedicated search index like Algolia/Typesense at production scale).
     func searchSchools(query: String) async throws -> [School] {
@@ -1275,3 +1356,5 @@ struct FirestoreService {
         }
     }
 }
+
+

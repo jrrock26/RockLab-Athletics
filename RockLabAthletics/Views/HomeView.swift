@@ -52,7 +52,7 @@ struct HomeView: View {
             formsSection
             organizationSection
         case .follower:
-            if myTeams.isEmpty { noTeamSection } else { teamsSection("Following") }
+            FollowedOrgSection()
             organizationSection
         }
     }
@@ -235,6 +235,273 @@ struct HomeView: View {
             Spacer()
         }
         .padding(.vertical, 2)
+    }
+}
+
+
+// MARK: - Follower: organization dashboard
+
+/// The follower experience.
+///
+/// A follower follows an **organization**, not individual teams: search the
+/// school, tap Follow, and the dashboard aggregates everything public across
+/// every team in that school — upcoming games, this week's results, fundraisers,
+/// and the team list to browse. Nothing here exposes rosters, forms, injuries,
+/// RSVP, chat, or eligibility; those stay gated behind a team membership.
+struct FollowedOrgSection: View {
+    @Environment(AuthViewModel.self) private var auth
+
+    @State private var schools: [School] = []
+    @State private var teams: [Team] = []
+    @State private var games: [Game] = []
+    @State private var fundraisers: [Fundraiser] = []
+    @State private var searchTerm = ""
+    @State private var results: [School] = []
+    @State private var loading = true
+    @State private var busyId = ""
+    @State private var errorMessage = ""
+
+    private var teamLookup: [String: Team] {
+        Dictionary(teams.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// Next few games from today onward, soonest first.
+    private var upcoming: [Game] {
+        let cutoff = Date().addingTimeInterval(-3600)
+        return Array(games
+            .filter { $0.status != .final && $0.date >= cutoff }
+            .sorted { $0.date < $1.date }
+            .prefix(6))
+    }
+
+    /// Finals from the last seven days, most recent first.
+    private var recentResults: [Game] {
+        let cutoff = Date().addingTimeInterval(-7 * 24 * 3600)
+        return Array(games
+            .filter { $0.status == .final && $0.date >= cutoff }
+            .sorted { $0.date > $1.date }
+            .prefix(8))
+    }
+
+    private var activeFundraisers: [Fundraiser] {
+        Array(fundraisers.sorted { $0.raised > $1.raised }.prefix(5))
+    }
+
+    var body: some View {
+        Group {
+            if loading {
+                Section { ProgressView() }
+            } else {
+                schoolSection
+                if !upcoming.isEmpty { upcomingSection }
+                if !recentResults.isEmpty { resultsSection }
+                if !activeFundraisers.isEmpty { fundraiserSection }
+                if !schools.isEmpty { teamsSectionForSchools }
+                if !errorMessage.isEmpty {
+                    Section { Text(errorMessage).foregroundStyle(.red).font(.footnote) }
+                }
+            }
+        }
+        .task { await load() }
+    }
+
+    // MARK: Sections
+
+    @ViewBuilder
+    private var schoolSection: some View {
+        Section {
+            TextField("Search for your school", text: $searchTerm)
+                .textInputAutocapitalization(.words)
+                .autocorrectionDisabled()
+                .onSubmit { Task { await search() } }
+
+            ForEach(results) { school in
+                Button {
+                    Task { await follow(school) }
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(school.name).foregroundStyle(.primary)
+                            if !school.mascot.isEmpty {
+                                Text(school.mascot)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        if busyId == school.id {
+                            ProgressView()
+                        } else {
+                            Text("Follow").font(.caption.bold()).foregroundStyle(.blue)
+                        }
+                    }
+                }
+                .disabled(!busyId.isEmpty)
+            }
+        } header: {
+            Text(schools.isEmpty ? "Follow your school" : "Find another school")
+        } footer: {
+            if schools.isEmpty {
+                Text("Follow a school to see its games, scores, fundraisers and announcements. You do not need to be on a team.")
+            }
+        }
+
+        if !schools.isEmpty {
+            Section("Following") {
+                ForEach(schools) { school in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(school.name).font(.headline)
+                            if !school.mascot.isEmpty {
+                                Text(school.mascot).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        Button("Unfollow") {
+                            Task { await unfollow(school) }
+                        }
+                        .font(.caption)
+                        .buttonStyle(.borderless)
+                        .disabled(!busyId.isEmpty)
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+extension FollowedOrgSection {
+
+    private var upcomingSection: some View {
+        Section("Upcoming games") {
+            ForEach(upcoming) { game in
+                gameRow(game, showScore: false)
+            }
+        }
+    }
+
+    private var resultsSection: some View {
+        Section("This week's results") {
+            ForEach(recentResults) { game in
+                gameRow(game, showScore: true)
+            }
+        }
+    }
+
+    private var fundraiserSection: some View {
+        Section("Fundraisers") {
+            ForEach(activeFundraisers) { fundraiser in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(fundraiser.title).font(.subheadline.weight(.semibold))
+                    Text(teamLookup[fundraiser.teamId]?.title ?? "")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var teamsSectionForSchools: some View {
+        Section("Teams") {
+            ForEach(schools) { school in
+                let schoolTeams = teams.filter { $0.schoolId == school.id }
+                    .sorted { $0.title < $1.title }
+                ForEach(schoolTeams) { team in
+                    NavigationLink {
+                        TeamDetailView(team: team)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(team.title)
+                            Text(team.season.isEmpty ? "Season not set" : team.season)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func gameRow(_ game: Game, showScore: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(teamLookup[game.teamId]?.title ?? "Team")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Text("\(game.isHome ? "vs" : "@") \(game.opponent)")
+                    .font(.subheadline)
+                Spacer()
+                if showScore {
+                    Text("\(game.teamScore)–\(game.opponentScore)")
+                        .font(.subheadline.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(game.teamScore > game.opponentScore ? .green : .secondary)
+                } else {
+                    Text(game.date.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    // MARK: Data
+
+    private func load() async {
+        guard let userId = auth.user?.id else { loading = false; return }
+        do {
+            schools = try await FirestoreService.shared.fetchFollowedSchools(userId: userId)
+            var allTeams: [Team] = []
+            for school in schools {
+                allTeams += (try? await FirestoreService.shared.fetchTeams(schoolId: school.id)) ?? []
+            }
+            teams = allTeams
+            let ids = allTeams.map(\.id)
+            games = (try? await FirestoreService.shared.fetchGames(teamIds: ids)) ?? []
+            fundraisers = (try? await FirestoreService.shared.fetchFundraisers(teamIds: ids)) ?? []
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        loading = false
+    }
+
+    private func search() async {
+        do {
+            results = try await FirestoreService.shared.searchSchools(matching: searchTerm)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func follow(_ school: School) async {
+        guard let user = auth.user else { return }
+        busyId = school.id
+        do {
+            try await FirestoreService.shared.followSchool(
+                schoolId: school.id,
+                userId: user.id,
+                name: user.displayName,
+                email: user.email)
+            searchTerm = ""
+            results = []
+            await load()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        busyId = ""
+    }
+
+    private func unfollow(_ school: School) async {
+        guard let user = auth.user else { return }
+        busyId = school.id
+        do {
+            try await FirestoreService.shared.unfollowSchool(schoolId: school.id, userId: user.id)
+            await load()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        busyId = ""
     }
 }
 

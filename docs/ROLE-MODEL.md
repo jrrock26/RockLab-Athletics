@@ -109,7 +109,7 @@ feed.
 
 | # | Gap | Why it matters | Size |
 | --- | --- | --- | --- |
-| 1 | Follower is per-team, not per-school | The described community use case doesn't fully work until a fan can follow the school once | 2–3 d |
+| 1 | ~~Follower is per-team, not per-school~~ | **Closed this pass.** Followers now search and follow the organization, and get an org dashboard. | done |
 | 2 | No athlete-centric profile | Parents see a team list, not *my child* across sports and levels | 2–3 d |
 | 3 | No graduation pruning at rollover | Rollover copies seniors forward; need a graduated flag and prune step | 1 d |
 | 4 | No school-wide staff directory | An AD can't see all coaches/staff and their permissions in one place | 2–3 d |
