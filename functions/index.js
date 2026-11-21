@@ -1086,7 +1086,116 @@ exports.acceptAdTransfer = functions.https.onCall(async (data, context) => {
   return { ok: true, schoolId: outcome.schoolId, previousAd: outcome.previousAdId };
 });
 
-/// Join by team code. Writes a REQUEST and nothing else: no membership, no roster
+/// Bulk roster import: a coach or AD pastes a list of names and gets players.
+///
+/// Creates a durable `players` record AND a roster entry for each name, because a
+/// roster entry without a playerId would bypass the identity model and reintroduce the
+/// per-season key that splits a child's history.
+///
+/// Reuses an existing player at the same school with the same normalised name rather
+/// than creating a second "Mikey Smith". The lookup is a single equality filter on
+/// schoolId, because schoolId + name would need a composite index -- the missing-index
+/// trap that has already cost two deploys in this project.
+exports.importPlayers = functions.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  const callerId = context.auth.uid;
+  const db = admin.firestore();
+
+  const teamId = String((data && data.teamId) || '');
+  const rawNames = Array.isArray(data && data.names) ? data.names : [];
+  if (!teamId) throw new functions.https.HttpsError('invalid-argument', 'teamId is required.');
+  if (!rawNames.length) throw new functions.https.HttpsError('invalid-argument', 'Paste at least one name.');
+  if (rawNames.length > 200) throw new functions.https.HttpsError('invalid-argument', 'Import 200 names at a time or fewer.');
+
+  const names = rawNames
+    .map((n) => String(n || '').trim().replace(/\s+/g, ' '))
+    .filter((n) => n.length >= 2)
+    .slice(0, 200);
+  if (!names.length) throw new functions.https.HttpsError('invalid-argument', 'No usable names found.');
+
+  const teamRef = db.collection('teams').doc(teamId);
+  const teamSnap = await teamRef.get();
+  if (!teamSnap.exists) throw new functions.https.HttpsError('not-found', 'Team not found.');
+  const schoolId = teamSnap.get('schoolId') || '';
+
+  // Authorised: the team's coach, or the AD who owns the school.
+  const memSnap = await teamRef.collection('members').doc(callerId).get();
+  const isCoach = memSnap.exists && memSnap.get('role') === 'coach';
+  let isAd = false;
+  if (!isCoach && schoolId) {
+    const [userSnap, schoolSnap] = await Promise.all([
+      db.collection('users').doc(callerId).get(),
+      db.collection('schools').doc(schoolId).get(),
+    ]);
+    isAd = userSnap.exists && userSnap.get('role') === 'ad'
+      && schoolSnap.exists && schoolSnap.get('adUserId') === callerId;
+  }
+  if (!isCoach && !isAd) {
+    throw new functions.https.HttpsError('permission-denied', 'Only this team\u2019s coach or the AD can import players.');
+  }
+
+  const normal = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+
+  // Existing players at this school, and whoever is already on this roster.
+  const [schoolPlayers, rosterSnap] = await Promise.all([
+    schoolId ? db.collection('players').where('schoolId', '==', schoolId).get() : Promise.resolve(null),
+    teamRef.collection('roster').get(),
+  ]);
+  const byName = new Map();
+  (schoolPlayers ? schoolPlayers.docs : []).forEach((d) => {
+    byName.set(normal(d.get('name')), d.id);
+  });
+  const onRoster = new Set(rosterSnap.docs.map((d) => normal(d.get('playerName'))));
+
+  const created = [];
+  const skipped = [];
+  const batch = db.batch();
+
+  for (const name of names) {
+    const key = normal(name);
+    if (!key) continue;
+    if (onRoster.has(key)) { skipped.push(name); continue; }
+
+    let playerId = byName.get(key);
+    if (!playerId) {
+      const playerRef = db.collection('players').doc();
+      batch.set(playerRef, {
+        name,
+        schoolId,
+        gender: '',
+        gradYear: null,
+        photoUrl: '',
+        createdBy: callerId,
+        createdByRole: isAd ? 'ad' : 'coach',
+        claimedByUserId: null,
+        claimedAt: null,
+        status: 'active',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      playerId = playerRef.id;
+      byName.set(key, playerId);
+    }
+
+    const entryRef = teamRef.collection('roster').doc();
+    batch.set(entryRef, {
+      teamId,
+      playerId,
+      playerName: name,
+      jerseyNumber: '',
+      position: '',
+      userId: null,
+      guardianUserIds: [],
+      importedBy: callerId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    onRoster.add(key);
+    created.push(name);
+  }
+
+  await batch.commit();
+  return { ok: true, created: created.length, skipped: skipped.length, createdNames: created, skippedNames: skipped };
+});
+
 /// entry. A code is a shared secret in a group chat, so a forwarded or leaked code
 /// must produce a queue item a coach can reject, never a member.
 ///
