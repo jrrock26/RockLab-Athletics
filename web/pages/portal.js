@@ -8,7 +8,7 @@ import {
   signOut,
   updateProfile,
 } from 'firebase/auth';
-import { collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { auth, db, functions } from '../lib/firebase';
 import {
@@ -288,9 +288,38 @@ export default function Portal() {
     });
   }, [teams, user, profile, loadRequirements]);
 
-  /// Load each child's existing answer, once per event. The query is filtered on
-  /// respondentUserId so the rule can admit it; a denial simply means no answers
-  /// yet and must not blank the page.
+  /// Recent comm-board posts, per team. Read-only on web by design: posting stays in
+  /// the app where moderation and reporting already live, but a guardian must be able
+  /// to see what the coach announced without installing anything.
+  const [announcements, setAnnouncements] = useState({});
+  const announceRequested = useRef({});
+
+  useEffect(() => {
+    if (!user || !teams.length) return;
+    teams.forEach(async (t) => {
+      if (announceRequested.current[t.id]) return;
+      announceRequested.current[t.id] = true;
+      try {
+        // Read the board by id rather than querying the collection: the chats rule
+        // decides access with an exists() lookup on the caller's membership, and
+        // Firestore cannot satisfy that for a list query, so the query is denied
+        // even when the caller is entitled. A direct get has no such problem.
+        const chatSnap = await getDoc(doc(db, 'chats', `${t.id}_commBoard`));
+        if (!chatSnap.exists()) return;
+        const snap = await getDocs(query(
+          collection(db, 'chats', chatSnap.id, 'messages'),
+          orderBy('createdAt', 'desc'),
+          limit(5),
+        ));
+        setAnnouncements((prev) => ({
+          ...prev,
+          [t.id]: snap.docs.map((d) => ({ id: d.id, ...d.data() })),
+        }));
+      } catch (err) {
+        // Not permitted, or no board yet: the section simply does not appear.
+      }
+    });
+  }, [teams, user]);
   useEffect(() => {
     if (!user || !teams.length) return;
     teams.forEach((t) => {
@@ -588,6 +617,22 @@ export default function Portal() {
                         </li>
                       );
                     })}
+                  </ul>
+                </>
+              )}
+
+              {(announcements[t.id] || []).length > 0 && (
+                <>
+                  <h3>From your coach</h3>
+                  <ul className="announcements">
+                    {announcements[t.id].map((m) => (
+                      <li key={m.id}>
+                        <span className="muted small">
+                          {m.senderName || 'Coach'} · {formatWhen(toMillis(m.createdAt))}
+                        </span>
+                        <div>{m.text}</div>
+                      </li>
+                    ))}
                   </ul>
                 </>
               )}
