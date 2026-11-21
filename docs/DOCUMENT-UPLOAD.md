@@ -59,7 +59,32 @@ player. A teammate must not be able to open another child's physical.
 Neither is exploited today only because no sensitive path is open. Opening document
 upload without fixing them first would make both exploitable.
 
-## Sequencing
+## Known defect: AD school-logo upload is denied
+
+Verified with real tokens against live Storage (bucket
+`rocklab-athletics.firebasestorage.app`):
+
+```
+PASS  guardian writes own profile photo        -> 200
+PASS  guardian writes ANOTHER user photo       -> 403
+PASS  guardian writes team media (staff-only)  -> 403
+PASS  guardian writes game film (staff-only)   -> 403
+FAIL  AD writes own school logo                -> 403  (expected 200)
+PASS  AD writes ANOTHER school logo            -> 403
+```
+
+The security-relevant case passes: an AD cannot write another school's logo. The
+regression is the positive case — an AD cannot write **their own**.
+
+Likely cause, not yet confirmed: the rule chain performs more Firestore lookups than
+Storage rules allow per evaluation (`role()` → `userData()`, `mySchoolId()` →
+`userData()` again, `ownsSchool()` → `exists` + `get`, then `isSchoolAd` → `exists` +
+`get`). Exceeding the lookup budget makes evaluation error, which denies.
+
+Fix to try: reduce duplicate lookups (read `userData()` once, pass it down) and check
+`isSchoolAd` before `isAd` so the cheaper path short-circuits. Then re-run the matrix
+above; the 403-for-another-school case must stay 403.
+
 
 1. Fix the two `storage.rules` defects above (small, and they gate everything else).
 2. Add the documents path and its rules.
