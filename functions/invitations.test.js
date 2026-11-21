@@ -29,6 +29,27 @@ test('expiry is read from a number, a Firestore Timestamp, or a raw seconds obje
   assert.strictEqual(readExpiryMs(null), null);
 });
 
+test('a SECONDS expiry written by the iOS client is not read as milliseconds', () => {
+  // Regression. FirestoreService writes Date().timeIntervalSince1970, i.e. seconds.
+  // Comparing that number directly against Date.now() made every real invitation
+  // look expired, and acceptance refused all of them. Found only by walking the
+  // live flow; the earlier tests all used consistent milliseconds.
+  const secondsBased = { email: 'a@b.c', status: 'pending', expiresAt: (NOW + DAY) / 1000 };
+  assert.strictEqual(readExpiryMs(secondsBased), NOW + DAY);
+  assert.strictEqual(isExpired(secondsBased, NOW), false);
+  assert.strictEqual(acceptanceBlocker(secondsBased, NOW), null);
+
+  // ...and one that really is in the past is still refused.
+  const staleSeconds = { email: 'a@b.c', status: 'pending', expiresAt: (NOW - DAY) / 1000 };
+  assert.strictEqual(acceptanceBlocker(staleSeconds, NOW), 'This invitation has expired.');
+});
+
+test('a nonsense expiry is ignored rather than voiding the invitation', () => {
+  assert.strictEqual(readExpiryMs({ expiresAt: 0 }), null);
+  assert.strictEqual(readExpiryMs({ expiresAt: -1 }), null);
+  assert.strictEqual(isExpired({ email: 'a@b.c', expiresAt: NaN }, NOW), false);
+});
+
 test('an invitation without a recorded expiry is NOT treated as expired', () => {
   // Every invitation sent before this field existed would otherwise be voided the
   // moment the new code deploys.

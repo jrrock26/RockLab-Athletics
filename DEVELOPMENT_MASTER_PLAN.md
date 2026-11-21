@@ -28,7 +28,7 @@ the same as usability.
 | # | Feature | Status | Hard dependency | Reality check |
 |---|---|---|---|---|
 | 1 | Invitations & onboarding | **IMPLEMENTING (1–4 done)** | SMTP credentials | Expiry, athlete link, resend tracking, schema tolerance shipped; email half blocked |
-| 2 | Parent web portal | **DISCOVERY DONE / PLANNED** | Web sign-up→accept path | Shell exists; see §2b for the real gaps |
+| 2 | Parent web portal | **IMPLEMENTING (web path works)** | Roster-based guardian invite UI | Live: new account → accept → athlete + schedule; see §2b/2c |
 | 3 | Player web portal | NOT STARTED | #2 (shell + consent model) | Minor-consent rules needed first |
 | 4 | Data imports | NOT STARTED | — | Existing MaxPreps importer must be audited first |
 | 5 | Group chat, media, polls | NOT STARTED | #2 for web; web push | Largest build in the list |
@@ -102,7 +102,7 @@ project and its `lib/firebase.js` SDK init.
 | Data | Parent (follower) access |
 |---|---|
 | `teams/{t}` | any signed-in user |
-| `teams/{t}/roster` | allowed for `follower` |
+| `teams/{t}/roster` | **listing is staff-only.** A guardian may read only the specific entries that name them (`guardianUserIds`) |
 | `events` | **only** `type in ['game','meeting','meal','travel']` — "followers see the team calendar except practice details (item F)" |
 | `games` | any signed-in user |
 | chat `commBoard` | allowed for `follower`; `parent`/`team` channels are not |
@@ -134,6 +134,31 @@ missing by accident.
 **Sequencing consequence:** build the smallest honest portal (sign in → accept
 invitation → see linked athlete → upcoming games/events → roster), and seed a real
 guardian↔athlete link first, or the feature cannot be verified as working.
+
+### 2c. Corrections from building it (items that were wrong above)
+
+Walking the real path with a brand-new account contradicted the discovery in three
+places. The corrections matter more than the original notes:
+
+1. **Roster was NOT readable by a follower.** The first pass cited line 189, which is
+   the `videos`/`reels` rule; the actual roster rule is `isAd() || isTeamMember()`, and
+   `isTeamMember` excludes `follower`. Listing the roster is staff-only — correctly so,
+   because an entry carries the guardian's contact details.
+   **Resolved by narrowing rather than widening:** a guardian may read only entries
+   whose `guardianUserIds` contains them, written by `acceptInvitation`. Verified against
+   deployed rules: own child 200, roster list 403, another family 403.
+2. **A single denied read blanked the whole team card.** `Promise.all` rejected on the
+   roster 403, so the page claimed "no team has been shared". Reads are now settled
+   independently and the roster falls back to per-document reads.
+3. **Every real invitation was rejected as expired.** iOS writes `expiresAt` in epoch
+   *seconds*; the comparison was against `Date.now()` in *milliseconds*. The unit is now
+   inferred and pinned by a regression test written from the client's write path. This
+   was shipped in the previous commit and only a live acceptance exposed it.
+
+Also confirmed live: the events rule **rejects** an unfiltered `where('teamId','==',id)`
+(403) and accepts it with the type filter (200). A parent's "Next up" shows the game and
+not the practice, which is the intended privacy behaviour, not a bug.
+
 
 
 

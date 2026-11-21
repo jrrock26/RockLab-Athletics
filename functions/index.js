@@ -856,9 +856,22 @@ exports.acceptInvitation = functions.https.onCall(async (data, context) => {
       linkedPlayerIds: admin.firestore.FieldValue.arrayUnion(invData.rosterEntryId),
     }, { merge: true });
 
-    if (role === 'player' && teamId) {
-      await db.collection('teams').doc(teamId).collection('roster')
-        .doc(invData.rosterEntryId).set({ userId: callerId }, { merge: true });
+    const entryRef = teamId
+      ? db.collection('teams').doc(teamId).collection('roster').doc(invData.rosterEntryId)
+      : null;
+
+    if (entryRef) {
+      if (role === 'player') {
+        // The invitee is the athlete: they claim the slot itself.
+        await entryRef.set({ userId: callerId }, { merge: true });
+      } else {
+        // A guardian is named on the entry. firestore.rules grants a follower
+        // read access only to entries listing them here, which is what lets a
+        // parent see their own child without exposing every family's details.
+        await entryRef.set({
+          guardianUserIds: admin.firestore.FieldValue.arrayUnion(callerId),
+        }, { merge: true });
+      }
     }
   }
 

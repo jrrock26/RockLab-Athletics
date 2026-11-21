@@ -29,17 +29,15 @@ export default function Invite() {
           <h2>Three steps</h2>
           <ol>
             <li>
-              <strong>Install the app.</strong>{' '}
-              {APP_STORE_URL ? (
-                <a href={APP_STORE_URL}>Open RockLab Athletics on the App Store</a>
-              ) : (
-                <span className="muted">
-                  Your athletic director will send the install link.
-                </span>
-              )}
+              <strong>
+                Open the portal: <Link href="/portal">rocklab-athletics.web.app/portal</Link>
+              </strong>{' '}
+              <span className="muted">
+                Works on any phone or computer, including Android. No app to install.
+              </span>
             </li>
             <li>
-              <strong>Sign up with this exact email address.</strong>
+              <strong>Create an account using this exact email address.</strong>
               {address ? (
                 <div className="card" style={{ marginTop: 8 }}>
                   <code>{address}</code>
@@ -49,8 +47,8 @@ export default function Invite() {
               )}
             </li>
             <li>
-              <strong>Accept the invitation.</strong> It appears under{' '}
-              <em>Settings → Invitations</em> once you sign up.
+              <strong>Accept the invitation.</strong> It appears at the top of the portal
+              the moment you sign in.
             </li>
           </ol>
 
@@ -61,8 +59,13 @@ export default function Invite() {
           )}
 
           <p className="small muted">
-            Using a different email address won&apos;t show the invitation — the
-            match is exact. If you need it sent to another address, ask your
+            Already have an iPhone? You can use the RockLab Athletics app instead
+            {APP_STORE_URL ? (
+              <> (<a href={APP_STORE_URL}>App Store</a>)</>
+            ) : null}{' '}
+            — the invitation shows under <em>Settings → Invitations</em>. Either way, sign
+            up with the email address above: the match is exact, and a different spelling
+            won&apos;t show the invitation. If you need it sent elsewhere, ask your
             athletic director to re-issue it.
           </p>
         </div>

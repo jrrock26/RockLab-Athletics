@@ -26,7 +26,15 @@ function expiryFrom(nowMs, ttlDays = DEFAULT_TTL_DAYS) {
 function readExpiryMs(invitation) {
   const raw = invitation && invitation.expiresAt;
   if (raw == null) return null;
-  if (typeof raw === 'number') return raw;
+  if (typeof raw === 'number') {
+    // The iOS client writes `Date().timeIntervalSince1970` (SECONDS) while the
+    // comparison below is against Date.now() (MILLISECONDS). Treating the number
+    // as milliseconds made every real invitation look long expired, so the unit
+    // is inferred instead of assumed: nothing this product stores is dated
+    // before 1973 in milliseconds, so a small number must be seconds.
+    if (!Number.isFinite(raw) || raw <= 0) return null;
+    return raw < 1e11 ? Math.round(raw * 1000) : Math.round(raw);
+  }
   if (typeof raw.toMillis === 'function') return raw.toMillis();       // Firestore Timestamp
   if (typeof raw === 'object' && typeof raw.seconds === 'number') return raw.seconds * 1000;
   return null;

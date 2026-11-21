@@ -208,7 +208,17 @@ service cloud.firestore {
       }
 
       match /roster/{entryId} {
-        allow read: if signedIn() && (isAd() || isTeamMember(teamId));
+        // `follower` is deliberately excluded: a roster entry carries the
+        // athlete's guardian contact details, so a follower must not see the
+        // whole roster. A guardian instead reads exactly the entries that name
+        // them, written by acceptInvitation when a parent invitation carries a
+        // rosterEntryId. That keeps "see my child" from meaning "see every
+        // family's email address".
+        allow read: if signedIn() && (
+          isAd() || isTeamMember(teamId)
+          || (memberRole(teamId) == 'follower'
+              && request.auth.uid in resource.data.guardianUserIds)
+        );
         allow write: if canManageTeam(teamId);
         // Injury history is staff-only; writes go through Cloud Functions.
         match /injuryReports/{reportId} {
