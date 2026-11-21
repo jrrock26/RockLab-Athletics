@@ -183,6 +183,7 @@ export default function Portal() {
           label: FORM_LABELS[form.type] || form.type || 'Requirement',
           status: requirementStatus(form, null, now),
           dueAt: form.dueDate,
+          expiresAt: form.expiresAt,
         };
       });
       setRequirements((prev) => ({ ...prev, [key]: { rows, error: '' } }));
@@ -521,6 +522,34 @@ export default function Portal() {
 
   const hasInvitations = invitations.length > 0;
 
+  /// Everything time-sensitive across every athlete, so a family with two children
+  /// sees one list instead of hunting through each card. "Expiring soon" is a
+  /// COMPLETED requirement whose document lapses within 30 days: the family's work
+  /// is done, but the athlete becomes ineligible again if nothing new is filed — the
+  /// failure a parent most needs warning about and least expects.
+  const ATTENTION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+  const nowMs = Date.now();
+  const attention = [];
+  teams.forEach((t) => {
+    myAthletes(t.roster, { uid: user.uid, linkedPlayerIds: profile?.linkedPlayerIds }).forEach((a) => {
+      (requirements[`${t.id}:${a.id}`]?.rows || []).forEach((r) => {
+        const exp = toMillis(r.expiresAt);
+        const expiringSoon = exp != null && exp > nowMs && exp - nowMs <= ATTENTION_WINDOW_MS;
+        const needsAttention = ['expired', 'overdue', 'rejected'].includes(r.status)
+          || (r.status === 'completed' && expiringSoon);
+        if (!needsAttention) return;
+        attention.push({
+          key: `${t.id}:${a.id}:${r.id}`,
+          who: displayName(a),
+          label: r.label,
+          status: r.status,
+          when: expiringSoon ? exp : toMillis(r.dueAt),
+          expiringSoon,
+        });
+      });
+    });
+  });
+
   return (
     <>
       <Head><title>Your teams · RockLab Athletics</title></Head>
@@ -563,6 +592,23 @@ export default function Portal() {
               has been sent to this address. Ask your athletic director to invite this exact
               address — a different spelling won&apos;t match.
             </p>
+          </section>
+        )}
+
+        {attention.length > 0 && (
+          <section className="card attention">
+            <h2>Needs attention</h2>
+            <ul>
+              {attention.map((x) => (
+                <li key={x.key}>
+                  <strong>{x.who}</strong> · {x.label}{' '}
+                  <span className={`badge ${x.status}`}>
+                    {x.expiringSoon ? 'Expires soon' : REQUIREMENT_LABELS[x.status]}
+                  </span>
+                  {x.when ? <span className="muted small"> · {formatWhen(x.when)}</span> : null}
+                </li>
+              ))}
+            </ul>
           </section>
         )}
 
