@@ -292,54 +292,6 @@ export default function Portal() {
   /// Guardian-editable details, keyed `${teamId}:${entryId}`. The field list here
   /// must stay inside the hasOnly() whitelist on the roster update rule; adding a
   /// field that is not whitelisted makes the whole save fail.
-  const [editingDetails, setEditingDetails] = useState('');
-  const [detailDrafts, setDetailDrafts] = useState({});
-  const [savingDetails, setSavingDetails] = useState('');
-
-  const openDetails = useCallback((key, athlete) => {
-    setDetailDrafts((prev) => ({
-      ...prev,
-      [key]: {
-        parentName: athlete.parentName || '',
-        parentEmail: athlete.parentEmail || '',
-        parentPhone: athlete.parentPhone || '',
-        emergencyContactName: athlete.emergencyContactName || '',
-        emergencyContactPhone: athlete.emergencyContactPhone || '',
-        allergies: athlete.allergies || '',
-        medicalNotes: athlete.medicalNotes || '',
-      },
-    }));
-    setEditingDetails(key);
-  }, []);
-
-  const saveDetails = useCallback(async (teamId, entryId, key) => {
-    const draft = detailDrafts[key] || {};
-    setSavingDetails(key);
-    setError('');
-    try {
-      await setDoc(
-        doc(db, 'teams', teamId, 'roster', entryId),
-        {
-          ...draft,
-          // Server timestamp, and inside the whitelist so this stays a single write.
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true },
-      );
-      setEditingDetails('');
-      setNotice('Your details were saved.');
-    } catch (err) {
-      // A refused save here almost always means a field outside the whitelist.
-      setError(
-        err?.code === 'permission-denied'
-          ? 'Those details could not be saved. Ask your coach to correct them.'
-          : err?.message || 'Those details could not be saved.',
-      );
-    } finally {
-      setSavingDetails('');
-    }
-  }, [detailDrafts]);
-  const [announcements, setAnnouncements] = useState({});
   const announceRequested = useRef({});
 
   useEffect(() => {
@@ -821,15 +773,6 @@ export default function Portal() {
 /// The guardian-editable fields, in the order a family thinks of them. Every key
 /// here must appear in the roster update whitelist in firestore.rules; a key that
 /// does not makes the entire save fail with permission-denied.
-const DETAIL_FIELDS = [
-  { key: 'parentName', label: 'Parent or guardian name' },
-  { key: 'parentEmail', label: 'Parent email' },
-  { key: 'parentPhone', label: 'Parent phone' },
-  { key: 'emergencyContactName', label: 'Emergency contact' },
-  { key: 'emergencyContactPhone', label: 'Emergency contact phone' },
-  { key: 'allergies', label: 'Allergies' },
-  { key: 'medicalNotes', label: 'Medical notes' },
-];
 
 /// Comm-board categories a school-level follower may read. Mirrors the follower
 /// branch of `messageReadAllowed` in firestore.rules; drift here is not cosmetic,
