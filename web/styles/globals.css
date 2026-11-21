@@ -114,3 +114,27 @@ a { color: var(--accent); }
 .badge.rejected,
 .badge.expired { color: var(--error); border-color: rgba(255, 107, 107, 0.45); }
 
+/* --- Parent portal: RSVP --------------------------------------------------- */
+
+.rsvp { margin-top: 10px; display: grid; gap: 6px; }
+.rsvp-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.rsvp-row > span { min-width: 88px; }
+
+.choice {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.choice:hover:not(:disabled) { color: var(--text); border-color: var(--muted); }
+.choice.on {
+  color: var(--text);
+  border-color: var(--accent);
+  background: rgba(47, 111, 237, 0.18);
+}
+.choice:disabled { opacity: 0.55; cursor: default; }
+

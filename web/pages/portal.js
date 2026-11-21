@@ -56,6 +56,33 @@ export default function Portal() {
   const [submitting, setSubmitting] = useState('');
   const requested = useRef({});
 
+  /// Answers keyed `${eventId}:${rosterEntryId}` so two children on one team each
+  /// hold their own answer — the whole point of the composite document id.
+  const [rsvps, setRsvps] = useState({});
+  const [savingRsvp, setSavingRsvp] = useState('');
+  const rsvpRequested = useRef({});
+
+  const setRsvp = useCallback(async (eventId, entryId, status) => {
+    const key = `${eventId}:${entryId}`;
+    setSavingRsvp(key);
+    setError('');
+    try {
+      await setDoc(doc(db, 'events', eventId, 'rsvps', `${auth.currentUser.uid}__${entryId}`), {
+        eventId,
+        userId: auth.currentUser.uid,
+        respondentUserId: auth.currentUser.uid,
+        athleteEntryId: entryId,
+        status,
+        updatedAt: serverTimestamp(),
+      });
+      setRsvps((prev) => ({ ...prev, [key]: status }));
+    } catch (err) {
+      setError(err?.message || 'That answer could not be saved.');
+    } finally {
+      setSavingRsvp('');
+    }
+  }, []);
+
   /// Pending invitations addressed to this exact address. The rule permits this
   /// query because it filters on email, matching the invitee clause.
   const loadInvitations = useCallback(async (account) => {
@@ -260,6 +287,35 @@ export default function Portal() {
         });
     });
   }, [teams, user, profile, loadRequirements]);
+
+  /// Load each child's existing answer, once per event. The query is filtered on
+  /// respondentUserId so the rule can admit it; a denial simply means no answers
+  /// yet and must not blank the page.
+  useEffect(() => {
+    if (!user || !teams.length) return;
+    teams.forEach((t) => {
+      (t.events || []).forEach(async (e) => {
+        if (rsvpRequested.current[e.id]) return;
+        rsvpRequested.current[e.id] = true;
+        try {
+          const snap = await getDocs(query(
+            collection(db, 'events', e.id, 'rsvps'),
+            where('respondentUserId', '==', user.uid),
+          ));
+          const next = {};
+          snap.docs.forEach((d) => {
+            const data = d.data();
+            if (data.athleteEntryId && data.status) {
+              next[`${e.id}:${data.athleteEntryId}`] = data.status;
+            }
+          });
+          if (Object.keys(next).length) setRsvps((prev) => ({ ...prev, ...next }));
+        } catch (err) {
+          // No answers yet, or not permitted: say nothing rather than alarm.
+        }
+      });
+    });
+  }, [teams, user]);
 
 
   async function signIn(e) {
@@ -546,6 +602,31 @@ export default function Portal() {
                       <strong>{e.title || e.type}</strong>
                       <span className="muted"> · {formatWhen(toMillis(e.date))}</span>
                       {e.location ? <span className="muted"> · {e.location}</span> : null}
+
+                      {athletes.length > 0 && (
+                        <div className="rsvp">
+                          {athletes.map((a) => {
+                            const key = `${e.id}:${a.id}`;
+                            const current = rsvps[key];
+                            return (
+                              <div className="rsvp-row" key={a.id}>
+                                <span className="muted small">{displayName(a)}</span>
+                                {RSVP_CHOICES.map((c) => (
+                                  <button
+                                    key={c.value}
+                                    type="button"
+                                    className={current === c.value ? 'choice on' : 'choice'}
+                                    disabled={savingRsvp === key}
+                                    onClick={() => setRsvp(e.id, a.id, c.value)}
+                                  >
+                                    {c.label}
+                                  </button>
+                                ))}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -590,6 +671,13 @@ export default function Portal() {
     </>
   );
 }
+
+/// The exact raw values iOS writes (Models/Event.swift RSVPStatus). Inventing
+/// "going" here would have stored answers the coach's roster could not parse.
+const RSVP_CHOICES = [
+  { value: 'attending', label: 'Attending' },
+  { value: 'notAttending', label: 'Not attending' },
+];
 
 /// Form types as a family would name them. The stored values are camelCase enum
 /// cases; showing `concussionWaiver` to a parent would be a small insult.

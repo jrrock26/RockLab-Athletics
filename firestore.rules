@@ -311,8 +311,22 @@ service cloud.firestore {
       allow create, update, delete: if canManageTeam(request.resource.data.teamId);
 
       match /rsvps/{rsvpUserId} {
-        allow read: if signedIn() && (uid() == rsvpUserId || isAd() || isCoachOf(eventTeam(eventId)));
-        allow write: if signedIn() && (uid() == rsvpUserId || isAd() || isCoachOf(eventTeam(eventId)));
+        // A family must answer for each child separately, so a guardian's document
+        // is keyed `${uid}__${rosterEntryId}` and the authority is the
+        // respondentUserId field. One answer per account (the original shape) made
+        // a parent with two athletes on one team answer for only one of them.
+        // Legacy documents (id == uid, field userId) stay valid so iOS is unchanged.
+        allow read: if signedIn() && (
+          uid() == rsvpUserId
+          || ('respondentUserId' in resource.data && resource.data.respondentUserId == uid())
+          || isAd() || isCoachOf(eventTeam(eventId))
+        );
+        allow write: if signedIn() && (
+          (uid() == rsvpUserId && request.resource.data.userId == uid())
+          || ('respondentUserId' in request.resource.data
+              && request.resource.data.respondentUserId == uid())
+          || isAd() || isCoachOf(eventTeam(eventId))
+        );
       }
 
       match /attendance/{entryId} {
