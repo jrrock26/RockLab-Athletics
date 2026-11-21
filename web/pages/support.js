@@ -37,8 +37,8 @@ export default function Support() {
 
       <h3>We&apos;re a school and want to buy</h3>
       <p>
-        School plans are purchased on the web. Email us and we&apos;ll get you set up — subscriptions
-        are never sold inside the iOS app.
+        School plans are purchased on the web. See <Link href="/billing">plans and limits</Link> for
+        what each tier includes — subscriptions are never sold inside the iOS app.
       </p>
 
       <h2>Contact</h2>
