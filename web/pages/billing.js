@@ -43,7 +43,7 @@ export default function Billing() {
 
       <h2>Need help?</h2>
       <p>
-        <a href="mailto:support@rocklabathletics.com">support@rocklabathletics.com</a>
+        <a href="mailto:info@rocklabtechnologies.com">info@rocklabtechnologies.com</a>
       </p>
       <p className="muted small">
         <Link href="/dashboard">Dashboard</Link> · <Link href="/privacy">Privacy</Link> ·{' '}

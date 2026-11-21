@@ -41,7 +41,7 @@ export default function Support() {
       </p>
 
       <h2>Contact</h2>
-      <p><a href="mailto:support@rocklabathletics.com">support@rocklabathletics.com</a></p>
+      <p><a href="mailto:info@rocklabtechnologies.com">info@rocklabtechnologies.com</a></p>
       <p className="muted small"><Link href="/privacy">Privacy</Link> · <Link href="/">Home</Link></p>
     </main>
   );
