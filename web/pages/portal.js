@@ -14,6 +14,7 @@ import { auth, db, functions } from '../lib/firebase';
 import {
   VISIBLE_EVENT_TYPES,
   REQUIREMENT_LABELS,
+  isAwaitingReview,
   isOutstanding,
   myAthletes,
   normalizeEmail,
@@ -439,6 +440,10 @@ export default function Portal() {
                       const reqRecord = requirements[reqKey];
                       const rows = reqRecord?.rows || [];
                       const outstanding = outstandingRequirements(rows);
+                      // "All requirements complete" above three Pending approval badges
+                      // read as a flat contradiction in the live screenshot. Waiting on
+                      // staff is its own state, so it gets its own words.
+                      const awaitingCount = rows.filter((r) => isAwaitingReview(r.status)).length;
                       return (
                         <li key={a.id}>
                           <strong>{displayName(a)}</strong>
@@ -454,9 +459,11 @@ export default function Portal() {
                             {rows.length > 0 && (
                               <>
                                 <h4>
-                                  {outstanding.length === 0
-                                    ? 'All requirements complete'
-                                    : `${outstanding.length} still to do`}
+                                  {outstanding.length > 0
+                                    ? `${outstanding.length} still to do`
+                                    : awaitingCount > 0
+                                      ? 'Waiting on your coach'
+                                      : 'All requirements complete'}
                                 </h4>
                                 <ul className="req-list">
                                   {rows.map((r) => {

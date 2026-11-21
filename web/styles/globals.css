@@ -102,6 +102,7 @@ a { color: var(--accent); }
   display: inline-block;
   font-size: 12px;
   padding: 2px 8px;
+  margin-left: 6px;
   border-radius: 999px;
   border: 1px solid var(--line);
   color: var(--muted);
