@@ -648,48 +648,9 @@ export default function Portal() {
                           {a.jerseyNumber ? <span className="muted"> · #{a.jerseyNumber}</span> : null}
                           {a.position ? <span className="muted"> · {a.position}</span> : null}
 
-                          <div className="details">
-                            {editingDetails !== reqKey ? (
-                              <button
-                                type="button"
-                                className="link"
-                                onClick={() => openDetails(reqKey, a)}
-                              >
-                                {a.parentPhone || a.parentName ? 'Update your details' : 'Add your details'}
-                              </button>
-                            ) : (
-                              <form
-                                onSubmit={(e) => {
-                                  e.preventDefault();
-                                  saveDetails(t.id, a.id, reqKey);
-                                }}
-                              >
-                                {DETAIL_FIELDS.map((f) => (
-                                  <label key={f.key}>
-                                    {f.label}
-                                    <input
-                                      value={(detailDrafts[reqKey] || {})[f.key] || ''}
-                                      onChange={(e) =>
-                                        setDetailDrafts((prev) => ({
-                                          ...prev,
-                                          [reqKey]: { ...(prev[reqKey] || {}), [f.key]: e.target.value },
-                                        }))
-                                      }
-                                    />
-                                  </label>
-                                ))}
-                                <div className="actions">
-                                  <button type="submit" disabled={savingDetails === reqKey}>
-                                    {savingDetails === reqKey ? 'Saving…' : 'Save details'}
-                                  </button>
-                                  <button type="button" className="link" onClick={() => setEditingDetails('')}>
-                                    Cancel
-                                  </button>
-                                </div>
-                              </form>
-                            )}
-                          </div>
-
+                          {/* Guardian contact lives on their own account, and player
+                              information changes are a REQUEST. There is deliberately
+                              no edit form here: the school owns the roster entry. */}
                           <div className="requirements">
                             {reqRecord?.error && <p className="error small">{reqRecord.error}</p>}
                             {!reqRecord && <p className="muted small">Checking requirements…</p>}

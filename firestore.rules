@@ -314,17 +314,13 @@ service cloud.firestore {
           || request.auth.uid in resource.data.guardianUserIds
         );
         allow write: if canManageTeam(teamId);
-        // A guardian may correct their own contact details and supply emergency and
-        // medical information — the things only a family knows. They may NOT touch
-        // anything the school owns: playerName, jerseyNumber, position, teamId,
-        // userId, guardianUserIds, or ANY injury* field. hasOnly() refuses every
-        // field not named here, so the list is the whole permission.
-        allow update: if signedIn() && isGuardianOf(teamId, entryId)
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'parentName', 'parentEmail', 'parentPhone',
-            'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelationship',
-            'allergies', 'medicalNotes', 'updatedAt'
-          ]);
+        // Deliberately NO guardian write here. The school owns the player profile: a
+        // guardian REQUESTS changes to player information, and edits their own contact
+        // details on their own user document. An earlier whitelist let guardians write
+        // parentName, parentPhone, allergies and medical notes onto this entry, which
+        // both breached school ownership and duplicated guardian contact onto the
+        // player record. Family-supplied safety data belongs on the player profile as a
+        // staff-approved field, not on a record a family can silently rewrite.
         // Injury history is staff-only; writes go through Cloud Functions.
         match /injuryReports/{reportId} {
           allow read: if signedIn() && (isAd() || isCoachOf(teamId) || isStaffOf(teamId));
