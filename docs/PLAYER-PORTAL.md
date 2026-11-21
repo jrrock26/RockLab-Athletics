@@ -125,9 +125,40 @@ function athleteAcknowledging(teamId, entryId) {
 
 ### Sequencing
 
-1. Rules (hole first). 2. `portal.mjs` helpers + tests. 3. `/player` page.
-4. iOS display of both acts. 5. Verify with a real athlete login.
+1. **Rules (done).** Player e-signature path added with a guardian gate; verified 5/5
+   with a real player credential (`4376558`).
+2. `portal.mjs` helpers for the player view + tests (not started).
+3. `/player` page (not started).
+4. iOS display of both signature acts (not started).
 
-**Blocked on**: a player credential. `player@rocklabathletics.com` does not accept the
-known test password, and the Auth tool cannot set one, so the athlete-write tests cannot
-run until that account is reachable.
+### Rules layer — SHIPPED and verified
+
+The gate lives on `teams/{teamId}/roster/{entryId}/forms/{formId}`:
+
+- athlete (`uid == entry.userId`) may write **only**
+  `playerSignedByName`, `playerSignedAt`, `playerSignedBy`, `status`, `updatedAt`
+- athlete may set `status: 'submitted'` **only** when the form does not require a
+  guardian signature, or `signedByName` is already populated
+- both `requiresParentSignature` and `signedByName` are read from the **stored**
+  document, so the requirement cannot be cleared by the write that satisfies it
+- the half-signed state (player signed, guardian pending) is explicitly allowed
+
+Verified against the live project with a real player login:
+
+```
+PASS  player e-signs own part            -> 200
+PASS  player completes WITHOUT guardian  -> 403
+PASS  player edits jersey number         -> 403
+PASS  guardian e-signs                   -> 200
+PASS  player completes AFTER guardian    -> 200
+```
+
+### What the /player page still has to solve
+
+The remaining work is a read path, not a permission: a player needs to find **their own
+roster entries**. `isTeamMember`-style rules and `collectionGroup('roster')` queries
+are the obvious approaches, but the roster read rule resolves membership with an
+`exists()` lookup, which Firestore cannot evaluate for a list query — the same trap that
+broke the announcements query. The page must therefore resolve entries the same way the
+portal does: a direct read of the user document, then per-document gets, not a query.
+
