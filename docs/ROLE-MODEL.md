@@ -124,3 +124,68 @@ feed.
 - The `family` role added earlier in the session has been fully reverted:
   `UserRole`, `HomeView`, `TeamAccess`, `TeamDetailView`, rules, role pickers and
   `ALLOWED_ROLES` are back to a single `follower` role.
+
+## AD is school ownership, not a label (security fix)
+
+`users/{uid}.role` is written **by the client** — onboarding sets it immediately
+after creating the school. The rules used to trust that string:
+
+```
+function isAd() { return role() == 'ad'; }
+allow create: if signedIn() && uid() == userId;   // any role, including 'ad'
+allow update: if signedIn() && (uid() == userId || isAd());
+```
+
+Which meant any signed-in account could write `role: 'ad'` to its own document and
+become an athletic director **of every school in the database** — reading all user
+records, editing organisations, creating and deleting teams. Found while seeding
+test data: creating a coach required it.
+
+The fix defines AD standing as ownership of the school you are attached to:
+
+```
+function ownsSchool() {
+  return signedIn() && mySchoolId() != ''
+    && exists(schools/$(mySchoolId()))
+    && get(schools/$(mySchoolId())).data.adUserId == uid();
+}
+function isAd() { return role() == 'ad' && ownsSchool(); }
+```
+
+A self-declared `role: 'ad'` with no school — or with someone else's school —
+now grants nothing. Every `isAd()` check in the file inherits the restriction,
+because they all route through that function.
+
+Supporting changes:
+
+- **`users` create** accepts `follower | player | parent | coach` freely; `ad`
+  requires the same write to name a school whose `adUserId` is the caller.
+- **`users` update** allows any role change except promotion to `ad` without
+  proof. The check reads the *incoming* `schoolId`, because onboarding writes role
+  and schoolId together before the stored document has a school at all —
+  checking the existing document would break first-time onboarding.
+- **`users` read** for coach/staff was "read every user" via a forgeable role; it
+  is now limited to the same `schoolId`.
+- **`schools` update/delete** is scoped to `resource.data.adUserId == uid()`
+  instead of the global flag.
+- **`teams` create/delete** additionally require the team's `schoolId` to be the
+  AD's own.
+
+Verified against the deployed rules with two real accounts (11 checks):
+
+| Attempt | Result |
+| --- | --- |
+| Follower sets own `role = ad` | **403** |
+| Follower sets `role = ad` + victim `schoolId` | **403** |
+| Follower edits the school | **403** |
+| Follower edits the team | **403** |
+| Follower writes a play | **403** |
+| Follower changes own role to `coach` then back | 200 |
+| Coach edits own school | 200 |
+| Coach edits own team | 200 |
+| Follower reads live game and plays | 200 |
+
+Still open: `role` remains client-written, so `coach`/`staff` labels are likewise
+forgeable — they now only unlock same-school data. Moving AD/staff to custom
+claims set by a Cloud Function is the durable fix.
+

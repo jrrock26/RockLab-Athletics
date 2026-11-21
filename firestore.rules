@@ -13,7 +13,26 @@ service cloud.firestore {
     }
     function memberRole(t) { return membership(t) == null ? null : membership(t).role; }
 
-    function isAd() { return role() == 'ad'; }
+    /// The school this user belongs to, or '' if unattached.
+    function mySchoolId() {
+      return ('schoolId' in userData() && userData().schoolId is string) ? userData().schoolId : '';
+    }
+
+    /// AD standing comes from OWNING a school, not from a label on the user doc.
+    ///
+    /// `role` is written by the client (onboarding sets it right after creating
+    /// the school), so a bare `role() == 'ad'` was self-grantable: any signed-in
+    /// account could write role 'ad' to its own document and then edit every
+    /// school in the database. Requiring ownership of the school the user is
+    /// attached to bounds that to a single organization.
+    function ownsSchool() {
+      return signedIn()
+        && mySchoolId() != ''
+        && exists(/databases/$(database)/documents/schools/$(mySchoolId()))
+        && get(/databases/$(database)/documents/schools/$(mySchoolId())).data.adUserId == uid();
+    }
+
+    function isAd() { return role() == 'ad' && ownsSchool(); }
     function isCoachOf(t) { return memberRole(t) == 'coach'; }
     function isStaffOf(t) { return memberRole(t) == 'staff'; }
     function isTeamMember(t) { return memberRole(t) in ['coach','staff','player','parent']; }
@@ -91,16 +110,51 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read: if signedIn() && (uid() == userId || role() in ['ad','coach','staff']);
-      allow create: if signedIn() && uid() == userId;
-      allow update: if signedIn() && (uid() == userId || isAd());
+      // Your own record, an AD of the school you share, or staff of the same
+      // school. Previously any user claiming role coach/staff could read every
+      // document in this collection; the same-school check confines that.
+      allow read: if signedIn() && (
+        uid() == userId
+        || isAd()
+        || (role() in ['coach','staff'] && mySchoolId() != '' && mySchoolId() == resource.data.schoolId)
+      );
+
+      // Self-signup may claim an unprivileged role. Claiming 'ad' requires the
+      // school in the same write to already name this user as its AD — which is
+      // exactly what onboarding creates a moment earlier.
+      allow create: if signedIn() && uid() == userId && (
+        request.resource.data.role in ['follower','player','parent','coach']
+        || (request.resource.data.role == 'ad'
+            && request.resource.data.schoolId is string
+            && exists(/databases/$(database)/documents/schools/$(request.resource.data.schoolId))
+            && get(/databases/$(database)/documents/schools/$(request.resource.data.schoolId)).data.adUserId == uid())
+      );
+
+      // A role may only become 'ad' when the write proves school ownership. The
+      // check reads the incoming schoolId because onboarding sets role and
+      // schoolId together, before the stored document has a school at all.
+      allow update: if signedIn() && (
+        (uid() == userId && (
+          !('role' in request.resource.data)
+          || request.resource.data.role == resource.data.role
+          || request.resource.data.role in ['follower','player','parent','coach']
+          || (request.resource.data.role == 'ad'
+              && request.resource.data.schoolId is string
+              && request.resource.data.schoolId != ''
+              && exists(/databases/$(database)/documents/schools/$(request.resource.data.schoolId))
+              && get(/databases/$(database)/documents/schools/$(request.resource.data.schoolId)).data.adUserId == uid())
+        ))
+        || isAd()
+      );
       allow delete: if false;
     }
 
     match /schools/{schoolId} {
       allow read: if signedIn();
       allow create: if signedIn() && request.resource.data.adUserId == uid();
-      allow update, delete: if isAd();
+      // Only the owner edits or deletes their school. Previously any self-declared
+      // AD could edit every school.
+      allow update, delete: if signedIn() && resource.data.adUserId == uid();
 
       // Following an ORGANIZATION, not an individual team. A follower manages
       // their own row; the school's AD can see who follows them.
@@ -114,9 +168,11 @@ service cloud.firestore {
 
     match /teams/{teamId} {
       allow read: if signedIn();
-      allow create: if signedIn() && isAd();
+      allow create: if signedIn() && isAd() && request.resource.data.schoolId == mySchoolId();
       allow update: if canManageTeam(teamId);
-      allow delete: if isAd();
+      // Deleting a team removes its whole season of data, so it stays with the AD
+      // who owns that school — not any AD in the district.
+      allow delete: if isAd() && resource.data.schoolId == mySchoolId();
 
       match /members/{memberId} {
         allow read: if signedIn() && (uid() == memberId || isAd() || isCoachOf(teamId));
