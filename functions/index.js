@@ -1138,19 +1138,32 @@ exports.requestTeamJoin = functions.https.onCall(async (data, context) => {
   }
 
   // Attempt cap across ALL teams, so someone cannot walk codes by spraying requests.
-  const since = new Date(Date.now() - JOIN_WINDOW_MS);
-  const recent = await db.collection('joinAttempts')
-    .where('userId', '==', callerId)
-    .where('at', '>=', since).get();
-  if (recent.size >= JOIN_MAX_PER_WINDOW) {
+  //
+  // A single counter document per account, NOT a query. The first version queried
+  // `userId ==` plus `at >=`, which needs a composite index that did not exist and
+  // threw INTERNAL on every legitimate call — the same missing-index trap that broke
+  // the announcements query. One document needs no index and cannot fail that way.
+  const attemptRef = db.collection('joinAttempts').doc(callerId);
+  const attemptSnap = await attemptRef.get();
+  const nowMs = Date.now();
+  const prevStart = attemptSnap.exists ? (attemptSnap.get('windowStartMs') || 0) : 0;
+  const prevCount = attemptSnap.exists ? (attemptSnap.get('count') || 0) : 0;
+  const inWindow = nowMs - prevStart < JOIN_WINDOW_MS;
+  const usedInWindow = inWindow ? prevCount : 0;
+
+  if (usedInWindow >= JOIN_MAX_PER_WINDOW) {
     throw new functions.https.HttpsError(
       'resource-exhausted',
       'Too many join attempts. Ask your coach for the code and try again later.',
     );
   }
-  await db.collection('joinAttempts').add({
-    userId: callerId, code: code, at: new Date(), requestedTeamId: teamId,
-  });
+  await attemptRef.set({
+    userId: callerId,
+    count: usedInWindow + 1,
+    windowStartMs: inWindow ? prevStart : nowMs,
+    lastCode: code,
+    lastAttemptMs: nowMs,
+  }, { merge: true });
 
   const userSnap = await db.collection('users').doc(callerId).get();
   const requesterName = userSnap.exists ? (userSnap.get('name') || userSnap.get('displayName') || '') : '';
