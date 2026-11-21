@@ -79,14 +79,29 @@ export default function Portal() {
       const snap = await getDocs(collection(db, 'teams', teamId, 'roster'));
       return { entries: snap.docs.map((d) => ({ id: d.id, ...d.data() })), restricted: false };
     } catch (err) {
+      // A follower may not list the roster, so ask for exactly what is permitted:
+      // entries that name this account, plus any ids the profile links. Querying
+      // guardianUserIds is essential — driving this off linkedPlayerIds alone made
+      // a second child invisible, because that field is client-written and only
+      // ever held the first invitation's entry.
+      const uid = auth.currentUser?.uid;
       const ids = Array.isArray(linkedIds) ? linkedIds : [];
-      const results = await Promise.allSettled(
-        ids.map((entryId) => getDoc(doc(db, 'teams', teamId, 'roster', entryId))),
-      );
-      const entries = results
-        .filter((r) => r.status === 'fulfilled' && r.value.exists())
-        .map((r) => ({ id: r.value.id, ...r.value.data() }));
-      return { entries, restricted: true };
+      const [named, ...individual] = await Promise.all([
+        uid
+          ? getDocs(query(
+              collection(db, 'teams', teamId, 'roster'),
+              where('guardianUserIds', 'array-contains', uid),
+            )).catch(() => null)
+          : null,
+        ...ids.map((entryId) => getDoc(doc(db, 'teams', teamId, 'roster', entryId)).catch(() => null)),
+      ]);
+
+      const byId = new Map();
+      (named?.docs || []).forEach((d) => byId.set(d.id, { id: d.id, ...d.data() }));
+      individual.forEach((snap) => {
+        if (snap && snap.exists()) byId.set(snap.id, { id: snap.id, ...snap.data() });
+      });
+      return { entries: [...byId.values()], restricted: true };
     }
   }, []);
 
