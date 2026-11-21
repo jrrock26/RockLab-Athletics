@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import {
@@ -8,18 +8,22 @@ import {
   signOut,
   updateProfile,
 } from 'firebase/auth';
-import { collection, doc, getDoc, getDocs, query, setDoc, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { auth, db, functions } from '../lib/firebase';
 import {
   VISIBLE_EVENT_TYPES,
+  REQUIREMENT_LABELS,
+  isOutstanding,
+  myAthletes,
   normalizeEmail,
+  outstandingRequirements,
   partitionEvents,
   recordFromGames,
   formatRecord,
   displayName,
   formatWhen,
-  myAthletes,
+  requirementStatus,
   toMillis,
 } from '../lib/portal.mjs';
 
@@ -42,6 +46,14 @@ export default function Portal() {
   const [invitations, setInvitations] = useState([]);
   const [teams, setTeams] = useState([]);
   const [notice, setNotice] = useState('');
+
+  /// Requirements per athlete, keyed `${teamId}:${rosterEntryId}`. One record per
+  /// athlete, never one per team: two children on the same team must not share a
+  /// row, which is the entire point of a multi-athlete view.
+  const [requirements, setRequirements] = useState({});
+  const [signatures, setSignatures] = useState({});
+  const [submitting, setSubmitting] = useState('');
+  const requested = useRef({});
 
   /// Pending invitations addressed to this exact address. The rule permits this
   /// query because it filters on email, matching the invitee clause.
@@ -112,6 +124,83 @@ export default function Portal() {
     setTeams(await Promise.all(ids.map((id) => loadTeam(id, linked))));
   }, [loadTeam]);
 
+  /// One athlete's requirements. The per-player form documents under the roster
+  /// entry ARE the record of what this family owes and has signed, so this needs no
+  /// second read of the team-level submissions collection. A denial is caught here
+  /// and shown per athlete rather than blanking the page.
+  const loadRequirements = useCallback(async (teamId, entryId, key) => {
+    try {
+      const snap = await getDocs(collection(db, 'teams', teamId, 'roster', entryId, 'forms'));
+      const now = Date.now();
+      const rows = snap.docs.map((d) => {
+        const form = { id: d.id, ...d.data() };
+        return {
+          id: d.id,
+          raw: form,
+          label: FORM_LABELS[form.type] || form.type || 'Requirement',
+          status: requirementStatus(form, null, now),
+          dueAt: form.dueDate,
+        };
+      });
+      setRequirements((prev) => ({ ...prev, [key]: { rows, error: '' } }));
+    } catch (err) {
+      setRequirements((prev) => ({
+        ...prev,
+        [key]: { rows: [], error: err?.message || 'Requirements could not be loaded.' },
+      }));
+    }
+  }, []);
+
+  /// Signing is the guardian's own act, so the name is typed rather than defaulted
+  /// from the profile — a prefilled signature is not a signature. The write names
+  /// the guardian's uid, so the stored record says who actually signed; the roster
+  /// form is already the guardian's own document, and the rules pin the status to
+  /// `submitted` so this can never self-approve.
+  const submitRequirement = useCallback(async (teamId, entryId, row, key) => {
+    const signedByName = String(signatures[key] || '').trim();
+    if (!signedByName) {
+      setError('Type your name to sign before completing this requirement.');
+      return;
+    }
+    setSubmitting(key);
+    setError('');
+    try {
+      const isGuardian = profile?.role === 'parent';
+      await setDoc(
+        doc(db, 'teams', teamId, 'roster', entryId, 'forms', row.id),
+        {
+          formId: row.id,
+          rosterEntryId: entryId,
+          teamId,
+          status: 'submitted',
+          signedByName,
+          // Epoch SECONDS, matching how iOS writes signedAt and how toMillis reads it.
+          signedAt: Date.now() / 1000,
+          submittedBy: user.uid,
+          ...(isGuardian ? { parentSignedByName: signedByName } : {}),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+      // Show it immediately: a submission that vanishes until reload looks lost.
+      const reqKey = `${teamId}:${entryId}`;
+      setRequirements((prev) => ({
+        ...prev,
+        [reqKey]: {
+          rows: (prev[reqKey]?.rows || []).map((r) =>
+            r.id === row.id ? { ...r, status: 'pending_approval' } : r,
+          ),
+          error: '',
+        },
+      }));
+      setNotice(`${row.label} submitted. Your coach still has to approve it.`);
+    } catch (err) {
+      setError(err?.message || 'That requirement could not be submitted.');
+    } finally {
+      setSubmitting('');
+    }
+  }, [signatures, profile, user]);
+
   const refresh = useCallback(async (account) => {
     const snap = await getDoc(doc(db, 'users', account.uid));
     const data = snap.exists() ? snap.data() : null;
@@ -139,6 +228,22 @@ export default function Portal() {
       }
     });
   }, [refresh]);
+
+  /// Fetch requirements once per athlete, after the teams resolve. The ref guard
+  /// matters: this effect depends on `teams`, which is a new array on every load,
+  /// so without it each render would start another identical read.
+  useEffect(() => {
+    if (!user || !teams.length) return;
+    teams.forEach((t) => {
+      myAthletes(t.roster, { uid: user.uid, linkedPlayerIds: profile?.linkedPlayerIds })
+        .forEach((a) => {
+          const key = `${t.id}:${a.id}`;
+          if (requested.current[key]) return;
+          requested.current[key] = true;
+          loadRequirements(t.id, a.id, key);
+        });
+    });
+  }, [teams, user, profile, loadRequirements]);
 
 
   async function signIn(e) {
@@ -328,14 +433,83 @@ export default function Portal() {
               {athletes.length > 0 && (
                 <>
                   <h3>Your athlete{athletes.length > 1 ? 's' : ''}</h3>
-                  <ul>
-                    {athletes.map((a) => (
-                      <li key={a.id}>
-                        <strong>{displayName(a)}</strong>
-                        {a.jerseyNumber ? <span className="muted"> · #{a.jerseyNumber}</span> : null}
-                        {a.position ? <span className="muted"> · {a.position}</span> : null}
-                      </li>
-                    ))}
+                  <ul className="athletes">
+                    {athletes.map((a) => {
+                      const reqKey = `${t.id}:${a.id}`;
+                      const reqRecord = requirements[reqKey];
+                      const rows = reqRecord?.rows || [];
+                      const outstanding = outstandingRequirements(rows);
+                      return (
+                        <li key={a.id}>
+                          <strong>{displayName(a)}</strong>
+                          {a.jerseyNumber ? <span className="muted"> · #{a.jerseyNumber}</span> : null}
+                          {a.position ? <span className="muted"> · {a.position}</span> : null}
+
+                          <div className="requirements">
+                            {reqRecord?.error && <p className="error small">{reqRecord.error}</p>}
+                            {!reqRecord && <p className="muted small">Checking requirements…</p>}
+                            {reqRecord && rows.length === 0 && !reqRecord.error && (
+                              <p className="muted small">Nothing to complete right now.</p>
+                            )}
+                            {rows.length > 0 && (
+                              <>
+                                <h4>
+                                  {outstanding.length === 0
+                                    ? 'All requirements complete'
+                                    : `${outstanding.length} still to do`}
+                                </h4>
+                                <ul className="req-list">
+                                  {rows.map((r) => {
+                                    const rowKey = `${reqKey}:${r.id}`;
+                                    return (
+                                      <li key={r.id} className={`req ${r.status}`}>
+                                        <div>
+                                          <strong>{r.label}</strong>{' '}
+                                          <span className={`badge ${r.status}`}>
+                                            {REQUIREMENT_LABELS[r.status]}
+                                          </span>
+                                          {r.dueAt ? (
+                                            <span className="muted small">
+                                              {' · due '}{formatWhen(toMillis(r.dueAt))}
+                                            </span>
+                                          ) : null}
+                                        </div>
+                                        {isOutstanding(r.status) && (
+                                          <form
+                                            onSubmit={(e) => {
+                                              e.preventDefault();
+                                              submitRequirement(t.id, a.id, r, rowKey);
+                                            }}
+                                          >
+                                            <label>
+                                              Sign as
+                                              <input
+                                                value={signatures[rowKey] || ''}
+                                                onChange={(e) =>
+                                                  setSignatures((prev) => ({
+                                                    ...prev,
+                                                    [rowKey]: e.target.value,
+                                                  }))
+                                                }
+                                                placeholder="Your full name"
+                                                autoComplete="name"
+                                              />
+                                            </label>
+                                            <button type="submit" disabled={submitting === rowKey}>
+                                              {submitting === rowKey ? 'Submitting…' : 'Complete'}
+                                            </button>
+                                          </form>
+                                        )}
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              </>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
                   </ul>
                 </>
               )}
@@ -394,6 +568,14 @@ export default function Portal() {
     </>
   );
 }
+
+/// Form types as a family would name them. The stored values are camelCase enum
+/// cases; showing `concussionWaiver` to a parent would be a small insult.
+const FORM_LABELS = {
+  physical: 'Sports physical',
+  codeOfConduct: 'Code of conduct',
+  concussionWaiver: 'Concussion waiver',
+};
 
 /// Firebase auth errors are written for developers. Say what to do instead.
 function humanAuthError(err) {
