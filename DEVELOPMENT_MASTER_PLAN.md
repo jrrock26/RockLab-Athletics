@@ -8,7 +8,7 @@ Status vocabulary: NOT STARTED · DISCOVERY · PLANNED · IMPLEMENTING · TESTIN
 Verified this session by building, deploying and testing:
 
 - iOS app builds; **60 unit tests pass**; installs and launches in the simulator.
-- `functions/`: **31 tests pass** (10 booking, 17 reel planning, 4 reel CLI).
+- `functions/`: **42 tests pass** (31 at baseline; 11 added for the invitation rules).
 - Firestore + Storage rules compile and are **deployed**.
 - Two real accounts created and used to test permissions end to end.
 - Live data inspected through the Firebase MCP server (invitations, schools, teams,
@@ -27,8 +27,8 @@ the same as usability.
 
 | # | Feature | Status | Hard dependency | Reality check |
 |---|---|---|---|---|
-| 1 | Invitations & onboarding | **DISCOVERY DONE / PLANNED** | SMTP credentials | ~70% built; see §2 |
-| 2 | Parent web portal | NOT STARTED | A non-admin web shell | No parent/coach web pages exist |
+| 1 | Invitations & onboarding | **IMPLEMENTING (1–4 done)** | SMTP credentials | Expiry, athlete link, resend tracking, schema tolerance shipped; email half blocked |
+| 2 | Parent web portal | **DISCOVERY DONE / PLANNED** | Web sign-up→accept path | Shell exists; see §2b for the real gaps |
 | 3 | Player web portal | NOT STARTED | #2 (shell + consent model) | Minor-consent rules needed first |
 | 4 | Data imports | NOT STARTED | — | Existing MaxPreps importer must be audited first |
 | 5 | Group chat, media, polls | NOT STARTED | #2 for web; web push | Largest build in the list |
@@ -79,7 +79,63 @@ Inspected live `invitations` documents through the Firebase MCP server.
 completion criterion until it exists.
 
 
-## 3. Industry benchmark (initial pass — re-verify before each feature)
+## 2b. Feature 2 discovery (complete)
+
+Inspected the existing `web/` app, the rules, and the live test data. Feature 2 is
+**not** a from-scratch build: a Next.js 14 static-export app already exists
+(`output: 'export'`, deployed via Hosting from `web/out`), sharing the same Firebase
+project and its `lib/firebase.js` SDK init.
+
+**Already exists**
+
+- Shell: `pages/index.js` (sign-in + `useAuth` hook, reused by other pages),
+  `pages/dashboard.js` (AD-only console), `pages/import.js`, `reports.js`, `audit.js`,
+  `records.js`, `billing.js`, `support.js`, `privacy.js`, `pages/invite.js` (public).
+- `lib/firebase.js` exports `auth`, `db`, `functions`; `httpsCallable` is already used,
+  so the parent portal can call the existing `acceptInvitation` rather than reimplement
+  acceptance on the web.
+- Shared styles in `styles/`; cards/nav conventions in `dashboard.js` to follow.
+
+**What the rules already permit a parent** (membership role `parent` is stored as
+`follower` by `acceptInvitation` — deliberate, not a bug):
+
+| Data | Parent (follower) access |
+|---|---|
+| `teams/{t}` | any signed-in user |
+| `teams/{t}/roster` | allowed for `follower` |
+| `events` | **only** `type in ['game','meeting','meal','travel']` — "followers see the team calendar except practice details (item F)" |
+| `games` | any signed-in user |
+| chat `commBoard` | allowed for `follower`; `parent`/`team` channels are not |
+
+**Hard constraint this creates:** the event rule depends on `resource.data.type`, so a
+plain `where('teamId','==',id)` list query is **rejected** — Firestore cannot prove the
+type predicate. The portal must query
+`where('teamId','==',id).where('type','in',['game','meeting','meal','travel'])`.
+Practice details are withheld architecturally, so the UI must not imply they are
+missing by accident.
+
+**Gaps that block a working portal**
+
+1. **No parent page.** `invite.js` tells a parent to install the app and accept under
+   *Settings → Invitations* — which dead-ends for the Android half of parents. This is
+   the pilot blocker stated in §5.
+2. **No web sign-up → accept path.** Parents invited with no existing account cannot
+   create one and accept on the web; only iOS can.
+3. **The athlete link is not reachable from any UI.** Feature 1 now writes
+   `rosterEntryId` and links `linkedPlayerIds`, but both
+   `createInvitation` call sites (`OnboardingViewModel`, `InviteCoachSheet`) omit it.
+   The mechanism works when the field is present; nothing sets it yet. The natural
+   origin is a roster entry's existing `parentEmail`, which is where an
+   "invite this athlete's guardian" action belongs.
+4. **Test data has no parent relationship.** The test parent account holds only
+   `schoolId` + `role: follower`, with no team membership and no `linkedPlayerIds` —
+   so any portal built against it would render empty and prove nothing.
+
+**Sequencing consequence:** build the smallest honest portal (sign in → accept
+invitation → see linked athlete → upcoming games/events → roster), and seed a real
+guardian↔athlete link first, or the feature cannot be verified as working.
+
+
 
 | Product | What they do well | What to avoid | Where RockLab can beat them |
 |---|---|---|---|
