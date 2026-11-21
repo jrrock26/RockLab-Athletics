@@ -32,28 +32,33 @@ The app's sign-in page links back to the company site, so the two are bidirectio
 
 | File | Source | Used for |
 | --- | --- | --- |
-| `hero-athletics.jpg` | "Rocklab Athletics Stadium Branding" (cropped to the banner, 1200px, 82% JPEG) | hero image on the landing page |
-| `rocklab-athletics-logo.png` | "Rocklab Athletics Mountain Logo" | the RockLab Athletics product card |
+| `rocklab-technologies.jpg` | your lockup, cropped to the art and resized to 620px | header logo |
+| `hero-athletics.jpg` | "Rocklab Athletics Stadium Branding" (left panel, 1200px, 82% JPEG) | hero image |
+| `rocklab-athletics-logo.png` | "Rocklab Athletics Mountain Logo" | RockLab Athletics product card |
 | `rocklab-athletics-icon.png` | "RockLab Athletics Neon App Icon" (180px) | spare app-icon asset, not yet placed |
-| `volleyengine-logo.png` | volleyenginepro.com/images/logo.png | the VolleyEngine Pro product card |
+| `volleyengine-logo.png` | volleyenginepro.com/images/logo.png | VolleyEngine Pro product card |
+| `og-image.jpg` | 1200x630 crop of the lockup art | social/link previews |
 | `favicon.svg` | gradient "R" tile | browser tab icon |
 
-Originals live in `~/Downloads`; only web-sized copies are committed. The hero was
-cropped to the left banner area (the source file is a composite with a white
-product-shot panel on the right) and resized to 1200px wide.
+The originals live in `~/Downloads` and `RockLabAthletics/Assets.xcassets/landing/`;
+only web-sized copies are committed, which is 2.1MB down to 100KB for the logo and
+2.2MB to 363KB for the hero.
 
-**Still missing: the RockLab Technologies LLC lockup** (the pink/blue "R" you sent).
-It has to be saved by hand — an image pasted into chat cannot be written to disk.
-Drop it at:
+Two crops were necessary rather than optional:
 
-```
-landing/assets/rocklab-technologies.png
-```
+- **The logo.** The source is 1536x1024 and mostly neon background. Dropped into a
+  54px-tall header unchanged it reads as a small dark rectangle. Cropping tight to
+  R + ROCKLAB + TECHNOLOGIES LLC + tagline gives a ~1.95:1 lockup that fills the
+  space.
+- **The hero.** The stadium branding file is a composite with a white product-shot
+  panel on the right third. Only the left panel is used; otherwise a white block
+  would have sat in the middle of a dark page.
 
-The header already points at that exact path, so saving the file and running
-`firebase deploy --only hosting:landing` is the whole job. Until then the header
-falls back to a gradient "R" tile with the wordmark, which is deliberate — not a
-broken image.
+> Note: `RockLabAthletics/Assets.xcassets/landing/rocklab-technologies.PNG` is still
+> inside the iOS asset catalog. It is not a valid asset set (no `Contents.json`), so
+> it adds ~2.1MB to the app bundle without being usable in SwiftUI. The build
+> succeeds, but it should be deleted from the catalog now that the web copy exists.
+
 
 ## Custom domain status
 
