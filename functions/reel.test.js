@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
+const path = require('path');
+const fs = require('fs');
+const { execFileSync } = require('child_process');
 const {
   MAX_CLIPS,
   normalizeColor,
@@ -160,4 +163,67 @@ test('render is muted and web-ready', () => {
 test('render refuses a missing source or output', () => {
   assert.throws(() => planRender({ outputPath: 'b.mp4', clips: [clip(0, 5)], fontFile: FONT }), /source video/);
   assert.throws(() => planRender({ sourcePath: 'a.mov', clips: [clip(0, 5)], fontFile: FONT }), /output path/);
+});
+
+
+// --- CLI ----------------------------------------------------------------
+// Runs the real entry point with --dry-run, so argument parsing and the plan it
+// produces are covered without needing ffmpeg installed.
+
+const CLI = path.join(__dirname, 'reel-cli.js');
+
+function makeFakeSource() {
+  const dir = fs.mkdtempSync('/tmp/reel-cli-');
+  const file = path.join(dir, 'game.mov');
+  fs.writeFileSync(file, 'not a real video');
+  return file;
+}
+
+function runCli(args) {
+  try {
+    const stdout = execFileSync('node', [CLI, ...args], { encoding: 'utf8', stdio: 'pipe' });
+    return { status: 0, stdout, stderr: '' };
+  } catch (err) {
+    return { status: err.status, stdout: String(err.stdout || ''), stderr: String(err.stderr || '') };
+  }
+}
+
+test('CLI dry run turns ranges and metadata into a real ffmpeg command', () => {
+  const source = makeFakeSource();
+  const { status, stdout } = runCli([
+    source, '--out', '/tmp/out.mp4',
+    '--clips', '12.5-16.5,105-110',
+    '--team', 'Rockwall', '--opponent', 'Central', '--date', 'Oct 24', '--color', '#0A84FF',
+    '--dry-run',
+  ]);
+
+  assert.strictEqual(status, 0, stdout);
+  assert.match(stdout, /trim=start=12\.500:end=16\.500/);
+  assert.match(stdout, /trim=start=105\.000:end=110\.000/);
+  assert.match(stdout, /ROCKWALL vs CENTRAL/);
+  assert.match(stdout, /concat=n=2:v=1:a=0/);
+  assert.match(stdout, /color=0x0A84FF@0\.88/);
+  // The font must be resolved, or the host render fails for a silly reason.
+  assert.match(stdout, /fontfile=\/.*\.(ttf|ttc)/);
+});
+
+test('CLI rejects a clip range it cannot read', () => {
+  const source = makeFakeSource();
+  const { status, stderr } = runCli([source, '--clips', 'twelve', '--dry-run']);
+  assert.strictEqual(status, 2);
+  assert.match(stderr, /should look like/);
+});
+
+test('CLI refuses more clips than a reel may hold', () => {
+  const source = makeFakeSource();
+  const ranges = Array.from({ length: MAX_CLIPS + 1 }, (_, i) => `${i * 6}-${i * 6 + 5}`).join(',');
+  const { status, stderr } = runCli([source, '--clips', ranges, '--dry-run']);
+  assert.strictEqual(status, 2);
+  assert.match(stderr, /at most 20 clips/);
+});
+
+test('CLI reports a missing source rather than rendering nothing', () => {
+  const { status, stderr } = runCli(['/tmp/definitely-not-here.mov', '--clips', '1-2', '--dry-run']);
+  assert.strictEqual(status, 2);
+  assert.match(stderr, /Source video not found/);
 });

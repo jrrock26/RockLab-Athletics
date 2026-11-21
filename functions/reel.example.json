@@ -1,0 +1,12 @@
+{
+  "_comment": "Template for: node functions/reel-cli.js game.mov --reel reel.json --out reel.mp4",
+  "team": "Rockwall",
+  "opponent": "Central",
+  "date": "Oct 24",
+  "color": "#0A84FF",
+  "clips": [
+    { "startSeconds": 12.5, "endSeconds": 16.5, "playerName": "", "action": "" },
+    { "startSeconds": 105, "endSeconds": 110, "playerName": "Ava Reyes", "action": "Three" },
+    { "startSeconds": 240, "endSeconds": 245, "playerName": "Sam Cole", "action": "Block" }
+  ]
+}
