@@ -1278,12 +1278,38 @@ exports.requestTeamJoin = functions.https.onCall(async (data, context) => {
   const requesterName = userSnap.exists ? (userSnap.get('name') || userSnap.get('displayName') || '') : '';
   const requesterEmail = userSnap.exists ? (userSnap.get('email') || context.auth.token.email || '') : (context.auth.token.email || '');
 
+  // Resolve the TYPED name against this school's players, server-side. The join page
+  // never lists roster names (a leaked code must not become a roster disclosure), so
+  // matching has to happen here: the coach then sees "matched player" and approves, or
+  // "not on roster" and knows a profile needs creating. A single equality filter on
+  // schoolId, matched in memory, avoids the composite index that schoolId+name needs.
+  const normal = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+  const schoolId = teamDoc.get('schoolId') || '';
+  let matchedPlayerId = null;
+  let matchedRosterEntryId = null;
+  if (schoolId) {
+    const playersSnap = await db.collection('players').where('schoolId', '==', schoolId).get();
+    const wanted = normal(athleteName);
+    const hit = playersSnap.docs.find((d) => normal(d.get('name')) === wanted);
+    if (hit) {
+      matchedPlayerId = hit.id;
+      const rosterSnap = await db.collection('teams').doc(teamId).collection('roster')
+        .where('playerId', '==', hit.id).limit(1).get();
+      matchedRosterEntryId = rosterSnap.empty ? null : rosterSnap.docs[0].id;
+    }
+  }
+
   const ref = await db.collection('teams').doc(teamId).collection('joinRequests').add({
     teamId,
     schoolId: teamDoc.get('schoolId') || '',
     code,
     role,
     athleteName,
+    matchedPlayerId,
+    matchedRosterEntryId,
+    matchStatus: matchedPlayerId
+      ? (matchedRosterEntryId ? 'matched' : 'player_without_roster_entry')
+      : 'not_found',
     requesterUserId: callerId,
     requesterName,
     requesterEmail,
