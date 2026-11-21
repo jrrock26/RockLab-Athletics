@@ -86,14 +86,23 @@ export function formatRecord(tally) {
   return `${tally.wins}-${tally.losses}${tally.ties ? `-${tally.ties}` : ''}`;
 }
 
-/// Which roster entries belong to the signed-in account. An invitation links a
-/// guardian by roster entry id; a player claims the entry by userId. Accept both,
-/// because either can be the thing that was recorded.
+/// Which roster entries belong to the signed-in account.
+///
+/// `guardianUserIds` on the roster entry is the primary signal because it is the
+/// one a guardian cannot write: acceptInvitation sets it server-side, and roster
+/// entries are writable only by coaches and ADs. `users.linkedPlayerIds` is
+/// client-writable, so it stays as a fallback for rows written before
+/// guardianUserIds existed — and a guardian who has only that can be shown an
+/// athlete whose data the rules will refuse, which renders as an empty panel
+/// rather than a leak.
 export function myAthletes(rosterEntries, { uid, linkedPlayerIds } = {}) {
   const linked = Array.isArray(linkedPlayerIds) ? linkedPlayerIds : [];
-  return (rosterEntries || []).filter(
-    (entry) => entry && (linked.includes(entry.id) || (uid && entry.userId === uid)),
-  );
+  return (rosterEntries || []).filter((entry) => {
+    if (!entry) return false;
+    if (uid && Array.isArray(entry.guardianUserIds) && entry.guardianUserIds.includes(uid)) return true;
+    if (uid && entry.userId === uid) return true;
+    return linked.includes(entry.id) || Boolean(entry.userId && linked.includes(entry.userId));
+  });
 }
 
 export function displayName(entry) {
@@ -113,6 +122,78 @@ export function formatWhen(ms, { locale, timeZone } = {}) {
     hour: 'numeric', minute: '2-digit',
     ...(timeZone ? { timeZone } : {}),
   });
+}
+
+// --- requirements ---------------------------------------------------------
+
+/// The states a family sees against a requirement — the six buckets the directive
+/// asks for, named the way a parent would say them.
+export const REQUIREMENT_STATUS = {
+  REQUIRED: 'required',
+  COMPLETED: 'completed',
+  PENDING: 'pending_approval',
+  REJECTED: 'rejected',
+  EXPIRED: 'expired',
+  OVERDUE: 'overdue',
+};
+
+export const REQUIREMENT_LABELS = {
+  [REQUIREMENT_STATUS.REQUIRED]: 'Required',
+  [REQUIREMENT_STATUS.COMPLETED]: 'Completed',
+  [REQUIREMENT_STATUS.PENDING]: 'Pending approval',
+  [REQUIREMENT_STATUS.REJECTED]: 'Needs correction',
+  [REQUIREMENT_STATUS.EXPIRED]: 'Expired',
+  [REQUIREMENT_STATUS.OVERDUE]: 'Overdue',
+};
+
+const COMPLETED_STATUSES = ['approved', 'completed', 'verified'];
+const REJECTED_STATUSES = ['rejected', 'needs_correction', 'correction'];
+
+/// One requirement's state, from the form definition and (if there is one) the
+/// submission.
+///
+/// Precedence is deliberate. An approval is final UNLESS the document has since
+/// expired: a lapsed physical makes the athlete ineligible again, so the family
+/// must see "Expired" rather than a reassuring "Completed". For anything not yet
+/// approved, a passed due date outranks the submitted/pending distinction,
+/// because "Pending approval" that is three weeks late is really "Overdue".
+export function requirementStatus(form, submission, nowMs) {
+  const f = form || {};
+  const s = String((submission && submission.status) || f.status || '').toLowerCase().trim();
+  const expiresAt = toMillis(f.expiresAt != null ? f.expiresAt : submission && submission.expiresAt);
+  const dueAt = toMillis(f.dueDate != null ? f.dueDate : submission && submission.dueDate);
+
+  if (COMPLETED_STATUSES.includes(s)) {
+    return expiresAt != null && nowMs >= expiresAt
+      ? REQUIREMENT_STATUS.EXPIRED
+      : REQUIREMENT_STATUS.COMPLETED;
+  }
+  if (s === 'expired') return REQUIREMENT_STATUS.EXPIRED;
+  if (REJECTED_STATUSES.includes(s)) return REQUIREMENT_STATUS.REJECTED;
+  if (dueAt != null && nowMs > dueAt) return REQUIREMENT_STATUS.OVERDUE;
+  if (s === 'submitted') return REQUIREMENT_STATUS.PENDING;
+  return REQUIREMENT_STATUS.REQUIRED;
+}
+
+/// Still the family's problem unless it is approved and current.
+export function isOutstanding(status) {
+  return status !== REQUIREMENT_STATUS.COMPLETED;
+}
+
+/// Only what needs action, soonest deadline first, so the panel leads with the
+/// requirement that will make the athlete ineligible next. Rows with no deadline
+/// sort last rather than jumping the queue.
+export function outstandingRequirements(rows) {
+  return (rows || [])
+    .filter((r) => r && isOutstanding(r.status))
+    .sort((a, b) => {
+      const am = toMillis(a.dueAt);
+      const bm = toMillis(b.dueAt);
+      if (am == null && bm == null) return 0;
+      if (am == null) return 1;
+      if (bm == null) return -1;
+      return am - bm;
+    });
 }
 
 /// Everything the portal needs to decide what to show, in one place, so the page

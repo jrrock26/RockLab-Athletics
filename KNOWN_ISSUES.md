@@ -45,6 +45,16 @@ suspected.
 | 21 | No data import path from DragonFly/FinalForms/MaxPreps | Switching cost blocks deals |
 | 22 | App Store submission not started (UGC app → moderation must be demonstrable) | Cannot ship to parents via TestFlight alone |
 
+## Parent portal blockers (Feature 2 discovery, 2026-11-21)
+
+Both verified by reading the rule and every writer, not by guesswork. Detail and plan:
+`docs/PARENT-PORTAL.md`.
+
+| # | Issue | Where | Impact |
+|---|---|---|---|
+| 23 | **`linkedPlayerIds` is client-writable and holds two different kinds of id** — `acceptInvitation` stores a roster entry id, `linkChild` stores a player UID. Rules now trust only `guardianUserIds` plus a `linkedPlayerIds` entry naming the athlete's own uid; a roster entry id confers nothing, because it is guessable and appears in URLs | `functions/index.js`, `firestore.rules` `linkedToAthlete` | Resolved for authorization. Remaining debt: the field is still client-writable and only partly load-bearing — make it server-written as follow-up |
+| 24 | **Parents were given membership role `follower`**, which `isTeamMember` does not accept, so `forms`/`submissions` were unreadable | `functions/index.js` `acceptInvitation`, `firestore.rules` | **FIXED and VERIFIED** — guardian read on per-athlete forms and submissions via `isGuardianOf`; 6/6 executed cases pass against deployed rules (`docs/PARENT-PORTAL.md`). Athlete-writes-own case not run (no athlete login) |
+
 ## Recorded but out of scope (do not fix mid-feature)
 
 - Opponent plays cannot be logged in scoring (only "Correct score"), so half of a

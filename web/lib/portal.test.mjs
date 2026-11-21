@@ -12,6 +12,11 @@ import {
   displayName,
   formatWhen,
   portalSummary,
+  REQUIREMENT_STATUS,
+  REQUIREMENT_LABELS,
+  requirementStatus,
+  isOutstanding,
+  outstandingRequirements,
 } from './portal.mjs';
 
 const NOW = Date.UTC(2026, 10, 21, 12, 0, 0);
@@ -190,5 +195,136 @@ test('the summary caps lists so a long season cannot flood the page', () => {
   const events = Array.from({ length: 12 }, (_, i) => ({ id: 'e' + i, date: SEC + 3600 * (i + 1) }));
   const summary = portalSummary({ profile: { uid: 'p' }, roster: [], events, games: [], nowMs: NOW });
   assert.strictEqual(summary.upcoming.length, 5);
+});
+
+// --- guardian matching (guardianUserIds first) ----------------------------
+
+test('a guardian is matched by guardianUserIds on the roster entry', () => {
+  // The server-written marker. This is the case that failed before the rules fix:
+  // the account was a guardian but had no linkedPlayerIds at all.
+  const roster = [
+    { id: 'r1', playerName: 'Ada', guardianUserIds: ['parent-uid'] },
+    { id: 'r2', playerName: 'Grace', guardianUserIds: ['someone-else'] },
+  ];
+  const mine = myAthletes(roster, { uid: 'parent-uid' });
+  assert.deepStrictEqual(mine.map((e) => e.id), ['r1']);
+});
+
+test('a stale linkedPlayerIds entry still shows the athlete, but the panel will be empty', () => {
+  // Deliberate consequence of keeping linkedPlayerIds as a fallback: the account
+  // may be shown an athlete whose data firestore.rules will refuse to release.
+  // The failure mode is an empty panel, never a leak — the read is denied, not
+  // widened. Tightening this to guardianUserIds-only would hide the athlete
+  // instead, which is arguably more honest but would strand legacy rows.
+  const roster = [{ id: 'r1', playerName: 'Ada', guardianUserIds: ['other'] }];
+  assert.deepStrictEqual(myAthletes(roster, { uid: 'parent-uid', linkedPlayerIds: ['r1'] }).map((e) => e.id), ['r1']);
+});
+
+test('a linked player uid is still accepted for legacy rows', () => {
+  const roster = [{ id: 'r1', playerName: 'Ada', userId: 'kid-uid' }];
+  const mine = myAthletes(roster, { uid: 'parent-uid', linkedPlayerIds: ['kid-uid'] });
+  assert.deepStrictEqual(mine.map((e) => e.id), ['r1']);
+});
+
+test('an entry with a malformed guardianUserIds does not throw', () => {
+  assert.deepStrictEqual(myAthletes([{ id: 'r1', guardianUserIds: 'nope' }], { uid: 'x' }), []);
+});
+
+// --- requirement status ---------------------------------------------------
+
+test('nothing submitted is Required', () => {
+  assert.strictEqual(requirementStatus({ id: 'f1' }, null, NOW), REQUIREMENT_STATUS.REQUIRED);
+});
+
+test('a submission awaiting review is Pending approval, not Completed', () => {
+  // A family must be able to tell that staff have not yet approved it.
+  assert.strictEqual(
+    requirementStatus({ id: 'f1' }, { status: 'submitted' }, NOW),
+    REQUIREMENT_STATUS.PENDING,
+  );
+});
+
+test('an approved form is Completed', () => {
+  assert.strictEqual(
+    requirementStatus({ id: 'f1' }, { status: 'approved' }, NOW),
+    REQUIREMENT_STATUS.COMPLETED,
+  );
+});
+
+test('an approved form whose document has lapsed is Expired, not Completed', () => {
+  // A lapsed physical makes the athlete ineligible again; showing Completed here
+  // would be the most damaging kind of wrong.
+  const form = { id: 'f1', expiresAt: SEC - 86400 };
+  assert.strictEqual(
+    requirementStatus(form, { status: 'approved' }, NOW),
+    REQUIREMENT_STATUS.EXPIRED,
+  );
+});
+
+test('an approved form expiring in the future stays Completed', () => {
+  const form = { id: 'f1', expiresAt: SEC + 86400 };
+  assert.strictEqual(
+    requirementStatus(form, { status: 'approved' }, NOW),
+    REQUIREMENT_STATUS.COMPLETED,
+  );
+});
+
+test('a rejected submission needs correction', () => {
+  assert.strictEqual(
+    requirementStatus({ id: 'f1' }, { status: 'rejected' }, NOW),
+    REQUIREMENT_STATUS.REJECTED,
+  );
+});
+
+test('a passed due date outranks the pending state', () => {
+  const form = { id: 'f1', dueDate: SEC - 3600 };
+  assert.strictEqual(
+    requirementStatus(form, { status: 'submitted' }, NOW),
+    REQUIREMENT_STATUS.OVERDUE,
+  );
+});
+
+test('a future due date leaves a submitted form Pending approval', () => {
+  const form = { id: 'f1', dueDate: SEC + 3600 };
+  assert.strictEqual(
+    requirementStatus(form, { status: 'submitted' }, NOW),
+    REQUIREMENT_STATUS.PENDING,
+  );
+});
+
+test('an approved form is never Overdue, even past its due date', () => {
+  const form = { id: 'f1', dueDate: SEC - 86400 };
+  assert.strictEqual(
+    requirementStatus(form, { status: 'approved' }, NOW),
+    REQUIREMENT_STATUS.COMPLETED,
+  );
+});
+
+test('every status has a human label', () => {
+  for (const value of Object.values(REQUIREMENT_STATUS)) {
+    assert.ok(REQUIREMENT_LABELS[value], `missing label for ${value}`);
+  }
+});
+
+test('only Completed stops being the family\u2019s problem', () => {
+  assert.strictEqual(isOutstanding(REQUIREMENT_STATUS.COMPLETED), false);
+  for (const value of Object.values(REQUIREMENT_STATUS)) {
+    if (value !== REQUIREMENT_STATUS.COMPLETED) assert.strictEqual(isOutstanding(value), true);
+  }
+});
+
+test('outstanding rows lead with the soonest deadline and drop completed ones', () => {
+  const rows = [
+    { id: 'done', status: REQUIREMENT_STATUS.COMPLETED, dueAt: SEC + 60 },
+    { id: 'later', status: REQUIREMENT_STATUS.REQUIRED, dueAt: SEC + 7200 },
+    { id: 'soon', status: REQUIREMENT_STATUS.OVERDUE, dueAt: SEC - 7200 },
+    { id: 'nodate', status: REQUIREMENT_STATUS.REQUIRED },
+  ];
+  const out = outstandingRequirements(rows);
+  assert.deepStrictEqual(out.map((r) => r.id), ['soon', 'later', 'nodate']);
+});
+
+test('outstandingRequirements tolerates null', () => {
+  assert.deepStrictEqual(outstandingRequirements(null), []);
 });
 

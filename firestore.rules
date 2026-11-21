@@ -58,13 +58,39 @@ service cloud.firestore {
     function rosterEntryData(teamId, entryId) {
       return get(/databases/$(database)/documents/teams/$(teamId)/roster/$(entryId)).data;
     }
+    /// Whether the caller is a guardian of this athlete, judged ONLY on markers a
+    /// client cannot forge.
+    ///
+    ///   - `entry.guardianUserIds` — UIDs, written by acceptInvitation server-side,
+    ///     and roster entries are writable only by coaches/AD. This is the
+    ///     authority.
+    ///   - `users.linkedPlayerIds` — CLIENT-WRITABLE (see the users rule: self
+    ///     update is not field-restricted), so it may only be trusted when it
+    ///     already names the athlete's own uid. That preserves the legacy
+    ///     linkChild path without letting anyone claim an athlete by quoting a
+    ///     roster entry id, which is visible in invite links and page URLs.
+    ///
+    /// Deliberately NOT matched: a roster entry id inside linkedPlayerIds. It is
+    /// what acceptInvitation stores, but it is also the one value a hostile
+    /// account can guess or copy, so it cannot confer standing.
+    function linkedToAthlete(entry) {
+      let playerUid = entry != null && 'userId' in entry ? entry.userId : null;
+      let marked = entry != null && 'guardianUserIds' in entry
+        && request.auth.uid in entry.guardianUserIds;
+      let u = userData();
+      let linked = u != null && 'linkedPlayerIds' in u ? u.linkedPlayerIds : [];
+      return entry != null
+        && (marked || (playerUid != null && linked.hasAny([playerUid])));
+    }
+
+    /// The athlete themselves, or someone authorised for them. Write access to a
+    /// submission hangs off this, and the status pin on the calling rule keeps a
+    /// guardian from marking their own paperwork approved.
     function isRosterAssignee(teamId, entryId) {
       let entry = rosterEntryData(teamId, entryId);
       let playerUid = entry != null && 'userId' in entry ? entry.userId : null;
-      let u = userData();
-      let linked = u != null && 'linkedPlayerIds' in u ? u.linkedPlayerIds : [];
-      return playerUid != null
-        && (request.auth.uid == playerUid || linked.hasAny([playerUid]));
+      return linkedToAthlete(entry)
+        || (playerUid != null && request.auth.uid == playerUid);
     }
 
     /// The guardian of a specific athlete — linked to them, but NOT the athlete
@@ -72,11 +98,8 @@ service cloud.firestore {
     function isGuardianOf(teamId, entryId) {
       let entry = rosterEntryData(teamId, entryId);
       let playerUid = entry != null && 'userId' in entry ? entry.userId : null;
-      let u = userData();
-      let linked = u != null && 'linkedPlayerIds' in u ? u.linkedPlayerIds : [];
-      return playerUid != null
-        && linked.hasAny([playerUid])
-        && request.auth.uid != playerUid;
+      return linkedToAthlete(entry)
+        && (playerUid == null || request.auth.uid != playerUid);
     }
 
     function isMemberRole(t) {
@@ -227,7 +250,12 @@ service cloud.firestore {
         }
 
         match /forms/{formId} {
-          allow read: if signedIn() && (isAd() || isTeamMember(teamId));
+          // A guardian reads their own athlete's requirements even though their
+          // team membership is `follower`: without this the portal can see the
+          // child but never the paperwork, which is the portal's whole purpose.
+          allow read: if signedIn() && (
+            isAd() || isTeamMember(teamId) || isGuardianOf(teamId, entryId)
+          );
           allow write: if signedIn() && (
             canManageTeam(teamId)
             || staffHasPerm(teamId, 'forms')
@@ -242,7 +270,9 @@ service cloud.firestore {
         allow update, delete: if canManageTeam(teamId) || staffHasPerm(teamId, 'forms');
 
         match /submissions/{entryId} {
-          allow read: if signedIn() && (isAd() || isTeamMember(teamId));
+          allow read: if signedIn() && (
+            isAd() || isTeamMember(teamId) || isGuardianOf(teamId, entryId)
+          );
           allow write: if signedIn() && (
             canManageTeam(teamId)
             || staffHasPerm(teamId, 'forms')
