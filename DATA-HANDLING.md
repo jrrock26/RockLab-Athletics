@@ -150,6 +150,11 @@ Crashlytics records expire on the schedule above and are not individually addres
 
 ## 9. Contact
 
-Data requests, deletion, or security questions: **privacy@rocklabathletics.com**
-Security disclosures: **security@rocklabathletics.com**
+Data requests, deletion, or security questions: **info@rocklabtechnologies.com**
+Security disclosures: **info@rocklabtechnologies.com**
+
+RockLab runs on one mailbox; role addresses (privacy@, security@) are labels on
+the public pages, not separate inboxes. `web/lib/contact.js` is the single place
+that holds these values, so they can be pointed at real aliases later without
+touching the pages.
 

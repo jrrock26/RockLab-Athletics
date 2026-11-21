@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { SUPPORT_EMAIL } from '../lib/contact';
 
 export default function Support() {
   return (
@@ -41,7 +42,9 @@ export default function Support() {
       </p>
 
       <h2>Contact</h2>
-      <p><a href="mailto:info@rocklabtechnologies.com">info@rocklabtechnologies.com</a></p>
+      <p>
+        Support: <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>
+      </p>
       <p className="muted small"><Link href="/privacy">Privacy</Link> · <Link href="/">Home</Link></p>
     </main>
   );

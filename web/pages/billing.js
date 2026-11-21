@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { useRouter } from 'next/router';
+import { SUPPORT_EMAIL } from '../lib/contact';
 
 export default function Billing() {
   const router = useRouter();
@@ -43,7 +44,7 @@ export default function Billing() {
 
       <h2>Need help?</h2>
       <p>
-        <a href="mailto:info@rocklabtechnologies.com">info@rocklabtechnologies.com</a>
+        Support: <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>
       </p>
       <p className="muted small">
         <Link href="/dashboard">Dashboard</Link> · <Link href="/privacy">Privacy</Link> ·{' '}

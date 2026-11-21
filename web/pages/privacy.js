@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { PRIVACY_EMAIL } from '../lib/contact';
 
 export default function Privacy() {
   return (
@@ -67,7 +68,10 @@ export default function Privacy() {
       </ul>
 
       <h2>Contact</h2>
-      <p>Questions: <a href="mailto:privacy@rocklabathletics.com">privacy@rocklabathletics.com</a></p>
+      <p>
+        Privacy and data requests:{' '}
+        <a href={`mailto:${PRIVACY_EMAIL}`}>{PRIVACY_EMAIL}</a>
+      </p>
       <p className="muted small"><Link href="/support">Support</Link> · <Link href="/">Home</Link></p>
     </main>
   );
