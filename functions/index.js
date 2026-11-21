@@ -1086,6 +1086,94 @@ exports.acceptAdTransfer = functions.https.onCall(async (data, context) => {
   return { ok: true, schoolId: outcome.schoolId, previousAd: outcome.previousAdId };
 });
 
+/// Join by team code. Writes a REQUEST and nothing else: no membership, no roster
+/// entry. A code is a shared secret in a group chat, so a forwarded or leaked code
+/// must produce a queue item a coach can reject, never a member.
+///
+/// Rate limited per account because the code is short and guessable: without a cap
+/// this endpoint is a free oracle for enumerating every team in the database.
+const JOIN_WINDOW_MS = 60 * 60 * 1000;
+const JOIN_MAX_PER_WINDOW = 5;
+
+exports.requestTeamJoin = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Sign in first.');
+  }
+  const callerId = context.auth.uid;
+  const db = admin.firestore();
+
+  const code = String((data && data.code) || '').trim().toUpperCase();
+  const role = String((data && data.role) || '');
+  const athleteName = String((data && data.athleteName) || '').trim().slice(0, 80);
+
+  if (!/^[A-Z0-9]{4,10}$/.test(code)) {
+    throw new functions.https.HttpsError('invalid-argument', 'That does not look like a team code.');
+  }
+  if (!['parent', 'player'].includes(role)) {
+    throw new functions.https.HttpsError('invalid-argument', 'Choose parent or player.');
+  }
+  // A parent must name their athlete; a player is naming themselves either way.
+  if (athleteName.length < 2) {
+    throw new functions.https.HttpsError('invalid-argument', 'Enter the athlete name.');
+  }
+
+  const teamSnap = await db.collection('teams').where('joinCode', '==', code).limit(1).get();
+  if (teamSnap.empty) {
+    // Deliberately identical to a wrong team: do not confirm which codes exist.
+    throw new functions.https.HttpsError('not-found', 'That code does not match a team.');
+  }
+  const teamDoc = teamSnap.docs[0];
+  const teamId = teamDoc.id;
+
+  const already = await db.collection('teams').doc(teamId).collection('members').doc(callerId).get();
+  if (already.exists) {
+    throw new functions.https.HttpsError('failed-precondition', 'You are already on this team.');
+  }
+
+  const pending = await db.collection('teams').doc(teamId).collection('joinRequests')
+    .where('requesterUserId', '==', callerId)
+    .where('status', '==', 'pending').limit(1).get();
+  if (!pending.empty) {
+    return { ok: true, alreadyPending: true, requestId: pending.docs[0].id };
+  }
+
+  // Attempt cap across ALL teams, so someone cannot walk codes by spraying requests.
+  const since = new Date(Date.now() - JOIN_WINDOW_MS);
+  const recent = await db.collection('joinAttempts')
+    .where('userId', '==', callerId)
+    .where('at', '>=', since).get();
+  if (recent.size >= JOIN_MAX_PER_WINDOW) {
+    throw new functions.https.HttpsError(
+      'resource-exhausted',
+      'Too many join attempts. Ask your coach for the code and try again later.',
+    );
+  }
+  await db.collection('joinAttempts').add({
+    userId: callerId, code: code, at: new Date(), requestedTeamId: teamId,
+  });
+
+  const userSnap = await db.collection('users').doc(callerId).get();
+  const requesterName = userSnap.exists ? (userSnap.get('name') || userSnap.get('displayName') || '') : '';
+  const requesterEmail = userSnap.exists ? (userSnap.get('email') || context.auth.token.email || '') : (context.auth.token.email || '');
+
+  const ref = await db.collection('teams').doc(teamId).collection('joinRequests').add({
+    teamId,
+    schoolId: teamDoc.get('schoolId') || '',
+    code,
+    role,
+    athleteName,
+    requesterUserId: callerId,
+    requesterName,
+    requesterEmail,
+    status: 'pending',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    reviewedBy: '',
+    reviewedAt: null,
+  });
+
+  return { ok: true, requestId: ref.id, teamId, teamName: teamDoc.get('sportName') || '' };
+});
+
 exports.ensurePlayerRosterEntry = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');

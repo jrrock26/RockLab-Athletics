@@ -328,6 +328,17 @@ service cloud.firestore {
         }
       }
 
+      // Join-by-code requests. Created ONLY by the requestTeamJoin callable, so a
+      // client can never mint one; the requester can see their own, and the coach or
+      // AD can read and resolve the queue. Approval itself is a coach action.
+      match /joinRequests/{requestId} {
+        allow read: if signedIn() && (
+          isAd() || isCoachOf(teamId) || resource.data.requesterUserId == request.auth.uid
+        );
+        allow create, delete: if false;
+        allow update: if signedIn() && (isAd() || isCoachOf(teamId));
+      }
+
       match /volunteerShifts/{shiftId} {
         allow read: if signedIn() && (isAd() || isTeamMember(teamId) || memberRole(teamId) == 'follower');
         allow create: if canManageTeam(teamId) || staffHasPerm(teamId, 'concessions');
