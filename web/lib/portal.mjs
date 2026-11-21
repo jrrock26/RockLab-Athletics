@@ -175,17 +175,34 @@ export function requirementStatus(form, submission, nowMs) {
   return REQUIREMENT_STATUS.REQUIRED;
 }
 
-/// Still the family's problem unless it is approved and current.
-export function isOutstanding(status) {
-  return status !== REQUIREMENT_STATUS.COMPLETED;
+/// Whether the FAMILY still has to act. This is deliberately narrower than
+/// "not finished": once a form is submitted, the family's part is done and only
+/// staff can move it, so it must not appear in their to-do count or offer a
+/// Complete button. Found by walking the live portal, where three already-submitted
+/// forms rendered as "3 still to do" with a button each.
+export function isActionable(status) {
+  return status === REQUIREMENT_STATUS.REQUIRED
+    || status === REQUIREMENT_STATUS.OVERDUE
+    || status === REQUIREMENT_STATUS.REJECTED
+    || status === REQUIREMENT_STATUS.EXPIRED;
 }
 
-/// Only what needs action, soonest deadline first, so the panel leads with the
-/// requirement that will make the athlete ineligible next. Rows with no deadline
-/// sort last rather than jumping the queue.
+/// Waiting on staff, not on the family.
+export function isAwaitingReview(status) {
+  return status === REQUIREMENT_STATUS.PENDING;
+}
+
+/// Kept as the name the portal already uses for "needs the family to act".
+export function isOutstanding(status) {
+  return isActionable(status);
+}
+
+/// Only what the family must act on, soonest deadline first, so the panel leads
+/// with the requirement that will make the athlete ineligible next. Rows with no
+/// deadline sort last rather than jumping the queue.
 export function outstandingRequirements(rows) {
   return (rows || [])
-    .filter((r) => r && isOutstanding(r.status))
+    .filter((r) => r && isActionable(r.status))
     .sort((a, b) => {
       const am = toMillis(a.dueAt);
       const bm = toMillis(b.dueAt);

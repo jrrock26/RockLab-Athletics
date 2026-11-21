@@ -306,11 +306,26 @@ test('every status has a human label', () => {
   }
 });
 
-test('only Completed stops being the family\u2019s problem', () => {
+test('a submitted form is no longer the family\u2019s to-do', () => {
+  // Regression from the live walkthrough: three already-submitted forms rendered
+  // as "3 still to do" with a Complete button on each, inviting a parent to
+  // resubmit paperwork they had already done.
+  assert.strictEqual(isOutstanding(REQUIREMENT_STATUS.PENDING), false);
   assert.strictEqual(isOutstanding(REQUIREMENT_STATUS.COMPLETED), false);
-  for (const value of Object.values(REQUIREMENT_STATUS)) {
-    if (value !== REQUIREMENT_STATUS.COMPLETED) assert.strictEqual(isOutstanding(value), true);
+});
+
+test('the family must still act on required, overdue, rejected and expired', () => {
+  for (const key of ['REQUIRED', 'OVERDUE', 'REJECTED', 'EXPIRED']) {
+    assert.strictEqual(isOutstanding(REQUIREMENT_STATUS[key]), true, `${key} should be actionable`);
   }
+});
+
+test('pending rows are excluded from the outstanding list', () => {
+  const rows = [
+    { id: 'sent', status: REQUIREMENT_STATUS.PENDING },
+    { id: 'todo', status: REQUIREMENT_STATUS.REQUIRED },
+  ];
+  assert.deepStrictEqual(outstandingRequirements(rows).map((r) => r.id), ['todo']);
 });
 
 test('outstanding rows lead with the soonest deadline and drop completed ones', () => {
