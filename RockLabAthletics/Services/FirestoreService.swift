@@ -92,6 +92,10 @@ struct FirestoreService {
 
     // MARK: - Invitations
 
+    /// Default lifetime for an invitation. Mirrors DEFAULT_TTL_DAYS in
+    /// functions/invitations.js — keep them in step.
+    static let invitationTtlDays = 14
+
     func createInvitation(
         email: String,
         role: UserRole,
@@ -99,14 +103,42 @@ struct FirestoreService {
         schoolName: String,
         sportNames: [String],
         teamId: String? = nil,
-        teamName: String? = nil
+        teamName: String? = nil,
+        rosterEntryId: String? = nil
     ) async throws -> String {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        // Advisory duplicate guard: reuse a live invitation for the same person,
+        // school, team and role instead of minting a second one. Rules cannot query
+        // for an existing document, so this check lives here and the server still
+        // treats each invitation as independent.
+        if let existing = try? await db.collection("invitations")
+            .whereField("email", isEqualTo: normalizedEmail)
+            .whereField("schoolId", isEqualTo: schoolId)
+            .whereField("status", isEqualTo: "pending")
+            .getDocuments(),
+           let live = existing.documents.first(where: { doc in
+               let data = doc.data()
+               let sameTeam = (data["teamId"] as? String ?? "") == (teamId ?? "")
+               let sameRole = (data["role"] as? String ?? "") == role.rawValue
+               let expiry = data["expiresAt"] as? Double
+               let notExpired = expiry.map { $0 > Date().timeIntervalSince1970 } ?? true
+               return sameTeam && sameRole && notExpired
+           }) {
+            // Count the repeat attempt so an AD can see they have asked twice.
+            try? await live.reference.setData([
+                "sendCount": FieldValue.increment(Int64(1)),
+                "lastSentAt": Date().timeIntervalSince1970,
+            ], merge: true)
+            return live.data()["code"] as? String ?? ""
+        }
+
         let ref = db.collection("invitations").document()
         let code = randomCode()
         var data: [String: Any] = [
             // Stored normalized: invitations are matched by exact string match
             // against the account email, so casing must agree on both sides.
-            "email": email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            "email": normalizedEmail,
             "role": role.rawValue,
             "schoolId": schoolId,
             "schoolName": schoolName,
@@ -114,10 +146,18 @@ struct FirestoreService {
             "code": code,
             "token": UUID().uuidString,
             "status": "pending",
-            "createdAt": FieldValue.serverTimestamp()
+            "sendCount": 0,
+            "createdAt": FieldValue.serverTimestamp(),
+            // Epoch seconds, matching how dates are stored elsewhere. The accept
+            // callable refuses anything past this, so a stale link cannot claim a
+            // roster spot that has since been filled.
+            "expiresAt": Date()
+                .addingTimeInterval(Double(Self.invitationTtlDays) * 86_400)
+                .timeIntervalSince1970,
         ]
         if let teamId { data["teamId"] = teamId }
         if let teamName { data["teamName"] = teamName }
+        if let rosterEntryId { data["rosterEntryId"] = rosterEntryId }
         try await ref.setData(data)
         return code
     }

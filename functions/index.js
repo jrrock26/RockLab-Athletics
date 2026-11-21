@@ -7,6 +7,10 @@ const {
   openHoursViolation,
   partitionCandidates,
 } = require('./booking');
+const {
+  acceptanceBlocker,
+  DEFAULT_TTL_DAYS,
+} = require('./invitations');
 
 admin.initializeApp();
 
@@ -813,8 +817,17 @@ exports.acceptInvitation = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError('not-found', 'Invitation not found.');
   }
   const invData = invSnap.data();
-  if (invData.status !== 'pending') {
-    throw new functions.https.HttpsError('failed-precondition', 'Invitation is not pending.');
+  // One place decides whether an invitation is still acceptable, so the reason
+  // shown to the user matches the rule that refused them (expired, cancelled,
+  // superseded, already accepted).
+  const blocker = acceptanceBlocker(invData, Date.now());
+  if (blocker) {
+    // Record the expiry the first time we notice it, so admins see a true state
+    // instead of an invitation that looks pending forever.
+    if (/expired/i.test(blocker) && invData.status === 'pending') {
+      await invSnap.ref.set({ status: 'expired', expiredAt: Date.now() }, { merge: true });
+    }
+    throw new functions.https.HttpsError('failed-precondition', blocker);
   }
   if ((invData.email || '').toLowerCase() !== callerEmail) {
     throw new functions.https.HttpsError('permission-denied', 'This invitation is for a different account.');
@@ -834,6 +847,20 @@ exports.acceptInvitation = functions.https.onCall(async (data, context) => {
     schoolId: schoolId,
     role: role
   }, { merge: true });
+
+  // Link the accepted person to the athlete the invitation named, so a parent can
+  // see their own child without a second approval round. A player additionally
+  // claims the roster slot, because that entry is them.
+  if (invData.rosterEntryId) {
+    await db.collection('users').doc(callerId).set({
+      linkedPlayerIds: admin.firestore.FieldValue.arrayUnion(invData.rosterEntryId),
+    }, { merge: true });
+
+    if (role === 'player' && teamId) {
+      await db.collection('teams').doc(teamId).collection('roster')
+        .doc(invData.rosterEntryId).set({ userId: callerId }, { merge: true });
+    }
+  }
 
   // Set custom claim
   await admin.auth().setCustomUserClaims(callerId, { role });
