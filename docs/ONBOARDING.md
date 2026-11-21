@@ -76,6 +76,51 @@ rather than duplicating it.
 nothing else, so a leaked or forwarded code produces a queue item a coach can reject —
 never a member.
 
+## Revised: the roster exists first, and the parent picks from it
+
+Owner decision (supersedes the "typed name, matched server-side" approach).
+
+**The order is roster-then-families.** A coach builds the roster before any parent is asked
+to join, so at join time the child already exists as a player and a roster entry. The
+parent types their child's name, the list **filters as they type**, and they select that
+player. No free-text name, no "not on roster" state, no guessing at spelling.
+
+This reverses an objection I raised: I argued a picker would disclose roster names to
+anyone holding the code. The counter is that a filter discloses only names matching what
+was typed, and the parent already knows their own child's name.
+
+### The abuse window this opens, and how to close it
+
+A code in a group chat plus a name filter is an enumeration tool unless constrained. All
+four are required before this ships:
+
+1. **Minimum 3 characters.** One or two letters would return a whole roster.
+2. **Hard cap of 5 results.** Enough to disambiguate two Smiths, not enough to page a team.
+3. **Per-account rate limit**, reusing the counter-document pattern from join attempts.
+4. **Authenticated only**, and first *and* last name required to match — "Michael" alone
+   must not return every Michael in the school.
+
+### What the parent sees
+
+Name plus a non-sensitive disambiguator (grade or graduation year). **Not** jersey number,
+position, injury status, or guardian contact. Each is either school-owned or another
+family's data.
+
+### Resulting callable shape
+
+```
+searchTeamRoster({ code, query })
+  -> up to 5 { playerId, rosterEntryId, displayName, gradYear }
+
+requestTeamJoin({ code, role, rosterEntryId })
+  -> pending request naming a specific player and roster entry
+```
+
+`requestTeamJoin` no longer takes a typed name; it takes an id the parent selected, so the
+coach approves a specific child. The `not_found` / `player_without_roster_entry` states
+disappear, because the roster is guaranteed to exist first — and the `matchStatus` logic
+already written into `requestTeamJoin` becomes dead code to remove rather than leave.
+
 ### Final model (owner, 2026-11-21)
 
 - AD **can** invite anyone, but should not have to; ADs invite coaches.
