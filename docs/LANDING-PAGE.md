@@ -28,13 +28,61 @@ The app's sign-in page links back to the company site, so the two are bidirectio
 
 ## Brand assets
 
-`landing/assets/` needs the real artwork. See `landing/assets/README.txt`:
+`landing/assets/` now holds real artwork:
 
-- `rocklab-technologies.png` — the full pink/blue "R" lockup (header renders at 52px tall)
-- `favicon.svg` — already present, a gradient "R" tile
+| File | Source | Used for |
+| --- | --- | --- |
+| `hero-athletics.jpg` | "Rocklab Athletics Stadium Branding" (cropped to the banner, 1200px, 82% JPEG) | hero image on the landing page |
+| `rocklab-athletics-logo.png` | "Rocklab Athletics Mountain Logo" | the RockLab Athletics product card |
+| `rocklab-athletics-icon.png` | "RockLab Athletics Neon App Icon" (180px) | spare app-icon asset, not yet placed |
+| `volleyengine-logo.png` | volleyenginepro.com/images/logo.png | the VolleyEngine Pro product card |
+| `favicon.svg` | gradient "R" tile | browser tab icon |
 
-Until the PNG is added, `index.html` hides the broken image and shows a gradient
-"R" tile with the wordmark, so the page never looks broken.
+Originals live in `~/Downloads`; only web-sized copies are committed. The hero was
+cropped to the left banner area (the source file is a composite with a white
+product-shot panel on the right) and resized to 1200px wide.
+
+**Still missing: the RockLab Technologies LLC lockup** (the pink/blue "R" you sent).
+It has to be saved by hand — an image pasted into chat cannot be written to disk.
+Drop it at:
+
+```
+landing/assets/rocklab-technologies.png
+```
+
+The header already points at that exact path, so saving the file and running
+`firebase deploy --only hosting:landing` is the whole job. Until then the header
+falls back to a gradient "R" tile with the wordmark, which is deliberate — not a
+broken image.
+
+## Custom domain status
+
+| Domain | State | Serving |
+| --- | --- | --- |
+| `www.rocklabtechnologies.com` | **HOST_ACTIVE** (cert propagating) | the new landing page |
+| `rocklabtechnologies.com` (apex) | **HOST_MISMATCH** | still the old WordPress host |
+
+Only `www` was repointed. Typing `rocklabtechnologies.com` without `www` still
+lands on the old empty WordPress install — which is why the site can look
+"unchanged" even though it is not.
+
+### To finish the apex
+
+At the registrar, for `rocklabtechnologies.com`:
+
+| Type | Name | Value |
+| --- | --- | --- |
+| A | `@` | `199.36.158.100` |
+| TXT | `@` | `hosting-site=rocklab-technologies` |
+
+Keep the existing `v=spf1 ...` TXT untouched or email breaks. The apex is already
+attached to the Firebase site, so it starts serving as soon as the A record
+resolves.
+
+Alternatively, most registrars offer domain forwarding — set the apex to forward
+to `https://www.rocklabtechnologies.com` and skip the A record entirely. Forwarding
+means an extra redirect hop; the A record is the cleaner option.
+
 
 ## Custom domain — read before changing DNS
 

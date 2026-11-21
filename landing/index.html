@@ -104,6 +104,41 @@
   footer.site a { color: var(--muted); text-decoration: none; }
   footer.site a:hover { color: var(--text); }
   .fineprint { margin-top: 14px; font-size: 12px; color: #6e7787; }
+
+  /* --- hero art + primary app links --- */
+  .hero { position: relative; }
+  .heroArt {
+    position: relative; margin: 0 0 40px; border-radius: 20px; overflow: hidden;
+    border: 1px solid var(--line);
+    box-shadow: 0 30px 80px rgba(0,0,0,.55);
+  }
+  .heroArt img { display: block; width: 100%; height: auto; }
+  .heroArt:after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(5,6,10,0) 55%, rgba(5,6,10,.85) 100%);
+  }
+  .ctaRow { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+    font-weight: 800; font-size: 15px; text-decoration: none; color: #fff;
+    padding: 14px 22px; border-radius: 12px; letter-spacing: .01em;
+    border: 1px solid transparent; transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .btn:hover { transform: translateY(-2px); }
+  .btn.pink { background: linear-gradient(100deg, var(--pink), #b8136f); box-shadow: 0 10px 30px rgba(255,45,149,.28); }
+  .btn.blue { background: linear-gradient(100deg, var(--blue-deep), var(--blue)); box-shadow: 0 10px 30px rgba(30,160,255,.28); }
+  .btn.ghost { background: transparent; border-color: var(--line); color: var(--text); }
+  .btn small { display: block; font-size: 11px; font-weight: 600; opacity: .75; letter-spacing: .06em; }
+  .cardHead { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+  .cardHead img { height: 56px; width: 56px; object-fit: contain; border-radius: 12px; }
+  .cardHead.wide img { height: 46px; width: auto; max-width: 130px; border-radius: 0; }
+  .cardHead h3 { margin: 0; }
+  .badge {
+    display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .14em;
+    text-transform: uppercase; color: #05060a; background: linear-gradient(100deg, #ffd23f, #ffb300);
+    padding: 3px 8px; border-radius: 6px; margin-left: 8px; vertical-align: middle;
+  }
+
 </style>
 </head>
   <div class="wrap">
@@ -131,6 +166,18 @@
         the paperwork, the schedules, the scores, and the records that actually
         decide who gets to play.
       </p>
+      <div class="ctaRow">
+        <a class="btn pink" href="https://rocklab-athletics.web.app">
+          Open RockLab Athletics →
+        </a>
+        <a class="btn blue" href="https://www.volleyenginepro.com">
+          Visit VolleyEngine Pro →
+        </a>
+      </div>
+      <div class="heroArt" style="margin-top:34px">
+        <img src="assets/hero-athletics.jpg"
+             alt="RockLab Athletics — high school sports management, built by RockLab Technologies LLC" />
+      </div>
       <div class="pillars">
         <span>Innovate</span><span>Develop</span><span>Empower</span>
       </div>
@@ -140,8 +187,11 @@
       <h2>Our apps</h2>
       <div class="grid">
         <a class="card athletics" href="https://rocklab-athletics.web.app">
-          <h3>RockLab Athletics</h3>
-          <p>High school athletic management for the whole department.</p>
+          <div class="cardHead wide">
+            <img src="assets/rocklab-athletics-logo.png" alt="RockLab Athletics" />
+            <h3>RockLab Athletics</h3>
+          </div>
+          <p>High school sports management for the whole department.</p>
           <ul>
             <li>Rosters, parent linking, and season rollover</li>
             <li>Eligibility paperwork, forms, and signatures</li>
@@ -153,12 +203,15 @@
         </a>
 
         <a class="card" href="https://www.volleyenginepro.com">
-          <h3>VolleyEngine Pro</h3>
-          <p>Built for volleyball — scoring, stats, and match management.</p>
+          <div class="cardHead">
+            <img src="assets/volleyengine-logo.png" alt="VolleyEngine Pro" />
+            <h3>VolleyEngine Pro<span class="badge">AI</span></h3>
+          </div>
+          <p>AI-powered volleyball training and match management.</p>
           <ul>
-            <li>Match and set scoring made simple</li>
-            <li>Player and team statistics</li>
-            <li>Built with volleyball people, for volleyball people</li>
+            <li>AI-assisted coaching, drills, and practice planning</li>
+            <li>Live scoring, rotations, and team statistics</li>
+            <li>Custom drills built around your own team</li>
           </ul>
           <span class="cta">Visit VolleyEngine Pro →</span>
           <span class="domain">volleyenginepro.com</span>
