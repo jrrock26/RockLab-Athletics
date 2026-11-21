@@ -93,6 +93,14 @@ service cloud.firestore {
         || (playerUid != null && request.auth.uid == playerUid);
     }
 
+    /// The athlete themselves. A player MAY e-sign their own forms — but only their
+    /// own signature fields, and only completes a form when it does not require a
+    /// guardian signature or the guardian has already signed.
+    function isAthleteSelf(teamId, entryId) {
+      let entry = rosterEntryData(teamId, entryId);
+      return entry != null && 'userId' in entry && request.auth.uid == entry.userId;
+    }
+
     /// The guardian of a specific athlete — linked to them, but NOT the athlete
     /// themselves. A minor cannot authorise their own release.
     ///
@@ -278,6 +286,25 @@ service cloud.firestore {
             || staffHasPerm(teamId, 'forms')
             || (isGuardianOf(teamId, entryId) && request.resource.data.status == 'submitted')
           );
+          // Dual signature. A player may e-sign their own part without touching
+          // anything else, and may only COMPLETE the form when it does not require a
+          // guardian signature or the guardian has already signed. The gate reads
+          // requiresParentSignature from the STORED document, so a player cannot
+          // clear the requirement in the same write that satisfies it.
+          allow update: if signedIn() && isAthleteSelf(teamId, entryId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'playerSignedByName', 'playerSignedAt', 'playerSignedBy', 'status', 'updatedAt'
+            ])
+            && request.resource.data.status in ['missing', 'submitted']
+            // The guardian gate applies only when the player is COMPLETING the form.
+            // Applied to every write it stopped a player signing their own part while
+            // waiting on a guardian, which is exactly the half-signed state that must
+            // be allowed.
+            && (
+              request.resource.data.status != 'submitted'
+              || resource.data.requiresParentSignature != true
+              || ('signedByName' in request.resource.data && request.resource.data.signedByName != '')
+            );
         }
       }
 
