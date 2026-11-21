@@ -1204,6 +1204,74 @@ exports.importPlayers = functions.https.onCall(async (data, context) => {
 const JOIN_WINDOW_MS = 60 * 60 * 1000;
 const JOIN_MAX_PER_WINDOW = 5;
 
+/// Filtered roster search for the join page. The parent types a name and picks their
+/// child; the page never lists the whole roster.
+///
+/// Guards, because a code in a group chat plus a name filter is an enumeration tool:
+///   - minimum 3 characters, so one or two letters cannot dump a roster
+///   - hard cap of 5 results, so the list cannot be paged
+///   - per-account counter, so a script cannot walk the alphabet
+/// One-word queries are allowed: at 40 searches an hour with a 3-character floor, brute
+/// force is thousands of hours per name, which makes a stricter first-plus-last rule
+/// unnecessary and the page far less annoying to use.
+exports.searchTeamRoster = functions.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in first.');
+  const callerId = context.auth.uid;
+  const db = admin.firestore();
+
+  const code = String((data && data.code) || '').trim().toUpperCase();
+  const query = String((data && data.query) || '').trim();
+  if (!/^[A-Z0-9]{4,10}$/.test(code)) {
+    throw new functions.https.HttpsError('invalid-argument', 'That does not look like a team code.');
+  }
+  if (query.length < 3) {
+    throw new functions.https.HttpsError('invalid-argument', 'Type at least three letters of the name.');
+  }
+
+  // A separate counter from join attempts, so searching cannot exhaust the join budget.
+  const gateRef = db.collection('joinAttempts').doc(`search_${callerId}`);
+  const gate = await gateRef.get();
+  const nowMs = Date.now();
+  const prevStart = gate.exists ? (gate.get('windowStartMs') || 0) : 0;
+  const prevCount = gate.exists ? (gate.get('count') || 0) : 0;
+  const inWindow = nowMs - prevStart < 60 * 60 * 1000;
+  const used = inWindow ? prevCount : 0;
+  if (used >= 40) {
+    throw new functions.https.HttpsError('resource-exhausted', 'Too many searches. Try again later.');
+  }
+  await gateRef.set({
+    userId: callerId, count: used + 1, windowStartMs: inWindow ? prevStart : nowMs, lastQueryMs: nowMs,
+  }, { merge: true });
+
+  const teamSnap = await db.collection('teams').where('joinCode', '==', code).limit(1).get();
+  if (teamSnap.empty) {
+    throw new functions.https.HttpsError('not-found', 'That code does not match a team.');
+  }
+  const teamId = teamSnap.docs[0].id;
+
+  const rosterSnap = await db.collection('teams').doc(teamId).collection('roster').get();
+  const clean = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+  const needle = clean(query);
+
+  const hits = rosterSnap.docs
+    .map((d) => ({
+      rosterEntryId: d.id,
+      playerId: d.get('playerId') || null,
+      name: String(d.get('playerName') || ''),
+      gradYear: d.get('gradYear') || null,
+    }))
+    .filter((r) => r.playerId && clean(r.name).includes(needle))
+    .slice(0, 5)
+    .map((r) => ({
+      rosterEntryId: r.rosterEntryId, playerId: r.playerId,
+      displayName: r.name, gradYear: r.gradYear,
+    }));
+
+  // Returns only these four fields: no jersey, no position, no injury, no guardian
+  // contact. A parent needs a name and a year to recognise their own child.
+  return { ok: true, results: hits, count: hits.length };
+});
+
 exports.requestTeamJoin = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Sign in first.');
