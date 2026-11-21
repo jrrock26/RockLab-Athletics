@@ -53,7 +53,42 @@ who did it and why. This is an exception with a trail, not a silent capability.
 | Coach / AD | ✅ own team/school | ✅ with audit | ❌ | ✅ with audit |
 | Anyone else | ❌ | ❌ | ❌ | ❌ |
 
-## The claim flow
+## Ownership and editing (owner decision, 2026-11-21)
+
+**The school owns player profiles.** They are created only by AD, coach or staff — manual
+entry or import from a sign-up sheet, a CV, or the student directory — so a school can
+onboard profiles that already match the records in its own system.
+
+- One player record, created once, moved team to team. **Consistent and unchanged for the
+  whole school career.** No re-entry at each level, no per-season copies.
+- A parent **claims** a player during onboarding; a coach, AD or staff member approves.
+  Claiming links an account to a profile; it does not create one.
+- A guardian **requests** edits to player information. They do not write it directly.
+- A guardian edits **their own contact details** on their own account. **The player record
+  carries no guardian contact information at all** — only the link to the guardian.
+
+### Consequence: retires the roster edit whitelist
+
+An earlier commit (`b6c0c59`) allowed guardians to write `parentName`, `parentEmail`,
+`parentPhone`, `emergencyContact*`, `allergies` and `medicalNotes` directly onto the roster
+entry. That contradicts this decision on two counts — it lets a guardian write player-side
+data, and it duplicates guardian contact onto the player record.
+
+To be narrowed to: **no guardian write on the roster entry.** Guardian contact lives on
+their user document (already self-editable); player information changes go through a
+request. Anything a family legitimately must supply — allergies, medical notes, emergency
+contact — belongs on the player profile as a staff-approved field, not on a record the
+family can silently rewrite.
+
+### Why this ordering is right
+
+The school's roster is the authority; the platform mirrors it. If families created players,
+a school would end up with two children called "Mikey Smith" and no way to reconcile them
+against its own directory. Creating from the school's source keeps the player id stable
+from kindergarten registration to graduation — which is the whole point of the durable
+profile.
+
+
 
 A child gains ownership of their own profile in one direction only, with approval:
 
