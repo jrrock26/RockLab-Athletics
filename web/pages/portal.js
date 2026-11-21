@@ -306,15 +306,20 @@ export default function Portal() {
         // even when the caller is entitled. A direct get has no such problem.
         const chatSnap = await getDoc(doc(db, 'chats', `${t.id}_commBoard`));
         if (!chatSnap.exists()) return;
+        // Under the "only categorised posts are public" rule, a follower may read
+        // comm-board posts carrying a public category and nothing else. Filtering on
+        // `category` is what makes the query admissible; sorting in memory avoids a
+        // composite index on category + createdAt, which would otherwise fail with a
+        // missing-index error that the catch below would swallow.
         const snap = await getDocs(query(
           collection(db, 'chats', chatSnap.id, 'messages'),
-          orderBy('createdAt', 'desc'),
-          limit(5),
+          where('category', 'in', PUBLIC_COMM_CATEGORIES),
         ));
-        setAnnouncements((prev) => ({
-          ...prev,
-          [t.id]: snap.docs.map((d) => ({ id: d.id, ...d.data() })),
-        }));
+        const rows = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0))
+          .slice(0, 5);
+        setAnnouncements((prev) => ({ ...prev, [t.id]: rows }));
       } catch (err) {
         // Not permitted, or no board yet: the section simply does not appear.
       }
@@ -716,6 +721,12 @@ export default function Portal() {
     </>
   );
 }
+
+/// Comm-board categories a school-level follower may read. Mirrors the follower
+/// branch of `messageReadAllowed` in firestore.rules; drift here is not cosmetic,
+/// because these values become an `in` filter and a value the rule rejects fails
+/// the entire query.
+const PUBLIC_COMM_CATEGORIES = ['liveGame', 'gameday', 'fundraiser'];
 
 /// The exact raw values iOS writes (Models/Event.swift RSVPStatus). Inventing
 /// "going" here would have stored answers the coach's roster could not parse.
