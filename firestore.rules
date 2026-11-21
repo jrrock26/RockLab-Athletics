@@ -95,6 +95,12 @@ service cloud.firestore {
 
     /// The guardian of a specific athlete — linked to them, but NOT the athlete
     /// themselves. A minor cannot authorise their own release.
+    ///
+    /// This is deliberately the ONLY route by which a form can be submitted, and it
+    /// is why `isRosterAssignee` is no longer used for form writes: that predicate is
+    /// true for the athlete too, so a 15-year-old could submit their own physical and
+    /// concussion waiver. The athlete's own act is an acknowledgement, which is a
+    /// different field and a different feature.
     function isGuardianOf(teamId, entryId) {
       let entry = rosterEntryData(teamId, entryId);
       let playerUid = entry != null && 'userId' in entry ? entry.userId : null;
@@ -270,7 +276,7 @@ service cloud.firestore {
           allow write: if signedIn() && (
             canManageTeam(teamId)
             || staffHasPerm(teamId, 'forms')
-            || (isRosterAssignee(teamId, entryId) && request.resource.data.status == 'submitted')
+            || (isGuardianOf(teamId, entryId) && request.resource.data.status == 'submitted')
           );
         }
       }
@@ -287,7 +293,7 @@ service cloud.firestore {
           allow write: if signedIn() && (
             canManageTeam(teamId)
             || staffHasPerm(teamId, 'forms')
-            || (isRosterAssignee(teamId, entryId) && request.resource.data.status == 'submitted')
+            || (isGuardianOf(teamId, entryId) && request.resource.data.status == 'submitted')
           );
         }
       }
