@@ -1272,7 +1272,121 @@ exports.searchTeamRoster = functions.https.onCall(async (data, context) => {
   return { ok: true, results: hits, count: hits.length };
 });
 
-exports.requestTeamJoin = functions.https.onCall(async (data, context) => {
+/// Approve a join request. This is the moment a family becomes attached to an athlete,
+/// so it does the same three writes acceptInvitation does, in one atomic batch:
+///   1. the team membership
+///   2. the guardianship link at players/{id}/guardians/{uid}
+///   3. the roster entry's userId (for a player) or the guardian link (for a parent)
+/// Reusing this shape rather than inventing a second one is deliberate: two definitions
+/// of "attached to an athlete" is what produced defects 23 and 24.
+exports.approveTeamJoin = functions.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Sign in first.');
+  const callerId = context.auth.uid;
+  const db = admin.firestore();
+
+  const teamId = String((data && data.teamId) || '');
+  const requestId = String((data && data.requestId) || '');
+  if (!teamId || !requestId) {
+    throw new functions.https.HttpsError('invalid-argument', 'teamId and requestId are required.');
+  }
+
+  const teamRef = db.collection('teams').doc(teamId);
+  const teamSnap = await teamRef.get();
+  if (!teamSnap.exists) throw new functions.https.HttpsError('not-found', 'Team not found.');
+  const schoolId = teamSnap.get('schoolId') || '';
+
+  // Authorised: this team's coach, or the AD who owns the school. An AD may also help
+  // a child whose guardian is absent -- that is the documented exception, and it is
+  // recorded on the request itself.
+  const memSnap = await teamRef.collection('members').doc(callerId).get();
+  const isCoach = memSnap.exists && memSnap.get('role') === 'coach';
+  let isAd = false;
+  if (!isCoach && schoolId) {
+    const [userSnap, schoolSnap] = await Promise.all([
+      db.collection('users').doc(callerId).get(),
+      db.collection('schools').doc(schoolId).get(),
+    ]);
+    isAd = userSnap.exists && userSnap.get('role') === 'ad'
+      && schoolSnap.exists && schoolSnap.get('adUserId') === callerId;
+  }
+  if (!isCoach && !isAd) {
+    throw new functions.https.HttpsError('permission-denied', 'Only this team\u2019s coach or the AD can approve.');
+  }
+
+  const reqRef = teamRef.collection('joinRequests').doc(requestId);
+  const reqSnap = await reqRef.get();
+  if (!reqSnap.exists) throw new functions.https.HttpsError('not-found', 'Request not found.');
+  if (reqSnap.get('status') !== 'pending') {
+    throw new functions.https.HttpsError('failed-precondition', 'That request was already handled.');
+  }
+
+  const requesterUserId = reqSnap.get('requesterUserId');
+  const role = reqSnap.get('role');
+  const rosterEntryId = reqSnap.get('rosterEntryId') || null;
+  const playerId = reqSnap.get('matchedPlayerId') || null;
+
+  if (!requesterUserId || !rosterEntryId || !playerId) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'This request predates player-linked requests. Ask the family to rejoin.',
+    );
+  }
+
+  const entryRef = teamRef.collection('roster').doc(rosterEntryId);
+  const entrySnap = await entryRef.get();
+  if (!entrySnap.exists) throw new functions.https.HttpsError('not-found', 'That player is no longer on the roster.');
+  if ((entrySnap.get('playerId') || null) !== playerId) {
+    throw new functions.https.HttpsError('failed-precondition', 'That request no longer matches the roster.');
+  }
+
+  const membershipRole = role === 'parent' ? 'follower' : 'player';
+  const batch = db.batch();
+
+  batch.set(teamRef.collection('members').doc(requesterUserId), {
+    role: membershipRole,
+    addedBy: callerId,
+    addedVia: 'joinRequest',
+    addedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  // The guardianship link IS the approval. For a player, the roster entry is claimed.
+  if (role === 'parent') {
+    batch.set(db.collection('players').doc(playerId).collection('guardians').doc(requesterUserId), {
+      addedBy: callerId,
+      addedAt: admin.firestore.FieldValue.serverTimestamp(),
+      via: 'joinRequest',
+    });
+    batch.set(entryRef, {
+      guardianUserIds: admin.firestore.FieldValue.arrayUnion(requesterUserId),
+    }, { merge: true });
+  } else {
+    batch.set(entryRef, { userId: requesterUserId }, { merge: true });
+  }
+
+  batch.set(reqRef, {
+    status: 'approved',
+    reviewedBy: callerId,
+    reviewedByRole: isAd ? 'ad' : 'coach',
+    reviewedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  // Staff approval without a guardian present is the exception worth recording.
+  batch.set(db.collection('auditLogs').doc(), {
+    action: 'approveTeamJoin',
+    actorUserId: callerId,
+    actorRole: isAd ? 'ad' : 'coach',
+    schoolId,
+    teamId,
+    playerId,
+    requesterUserId,
+    approvedAs: role,
+    at: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  await batch.commit();
+  return { ok: true, teamId, playerId, approvedAs: role };
+});
+
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Sign in first.');
   }
@@ -1373,6 +1487,7 @@ exports.requestTeamJoin = functions.https.onCall(async (data, context) => {
     code,
     role,
     athleteName,
+    rosterEntryId: matchedRosterEntryId,
     matchedPlayerId,
     matchedRosterEntryId,
     matchStatus: matchedPlayerId
