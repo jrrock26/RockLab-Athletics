@@ -55,6 +55,8 @@ Both verified by reading the rule and every writer, not by guesswork. Detail and
 | 23 | **`linkedPlayerIds` is client-writable and holds two different kinds of id** — `acceptInvitation` stores a roster entry id, `linkChild` stores a player UID. Rules now trust only `guardianUserIds` plus a `linkedPlayerIds` entry naming the athlete's own uid; a roster entry id confers nothing, because it is guessable and appears in URLs | `functions/index.js`, `firestore.rules` `linkedToAthlete` | Resolved for authorization. Remaining debt: the field is still client-writable and only partly load-bearing — make it server-written as follow-up |
 | 24 | **Parents were given membership role `follower`**, which `isTeamMember` does not accept, so `forms`/`submissions` were unreadable | `functions/index.js` `acceptInvitation`, `firestore.rules` | **FIXED and VERIFIED** — guardian read on per-athlete forms and submissions via `isGuardianOf`; 6/6 executed cases pass against deployed rules (`docs/PARENT-PORTAL.md`). Athlete-writes-own case not run (no athlete login) |
 
+| 25 | **A minor can sign their own consent forms** — `isRosterAssignee` is true for the athlete themselves, and both form write rules pin only `status == 'submitted'`, so a player can submit their own physical, concussion waiver and code of conduct. No acknowledgment concept exists anywhere in the codebase | `firestore.rules:262,279` | Compliance, not cosmetics: the forms exist to record guardian authorisation. Plan and fix in `docs/PLAYER-PORTAL.md` |
+
 ## Recorded but out of scope (do not fix mid-feature)
 
 - Opponent plays cannot be logged in scoring (only "Correct score"), so half of a

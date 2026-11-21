@@ -29,7 +29,7 @@ the same as usability.
 |---|---|---|---|---|
 | 1 | Invitations & onboarding | **IMPLEMENTING (1–4 done)** | SMTP credentials | Expiry, athlete link, resend tracking, schema tolerance shipped; email half blocked |
 | 2 | Parent web portal | **DISCOVERY DONE, PLANNED — see `docs/PARENT-PORTAL.md`** | 2 rules defects (below) before any UI | Portal shell + accept + athlete view live; requirements/submit blocked by rules |
-| 3 | Player web portal | NOT STARTED | #2 (shell + consent model) | Minor-consent rules needed first |
+| 3 | Player web portal | **DISCOVERY DONE, PLANNED — see `docs/PLAYER-PORTAL.md`** | Rules fix (minor-can-consent hole) + an athlete credential | A player can currently sign their own consent forms |
 | 4 | Data imports | NOT STARTED | — | Existing MaxPreps importer must be audited first |
 | 5 | Group chat, media, polls | NOT STARTED | #2 for web; web push | Largest build in the list |
 | 6 | Email + SMS notifications | BLOCKED | SMTP, then an SMS provider | 10DLC/STOP compliance is process, not code |
