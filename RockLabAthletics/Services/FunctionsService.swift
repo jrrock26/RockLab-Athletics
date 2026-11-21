@@ -57,6 +57,28 @@ struct FunctionsService {
         return data
     }
 
+    /// Hands the AD role to a successor. The role moves when *they* accept, not now.
+    func inviteAdSuccessor(email: String) async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("inviteAdSuccessor").call(["email": email])
+        guard let data = result.data as? [String: Any] else {
+            throw NSError(domain: "FunctionsService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Invalid response from inviteAdSuccessor."])
+        }
+        return data
+    }
+
+    /// Accepts an AD handoff: ownership of the school moves to the caller and the
+    /// outgoing AD is demoted, in one server-side transaction.
+    func acceptAdTransfer(invitationId: String) async throws -> [String: Any] {
+        let result = try await functions.httpsCallable("acceptAdTransfer")
+            .call(["invitationId": invitationId])
+        guard let data = result.data as? [String: Any] else {
+            throw NSError(domain: "FunctionsService", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Invalid response from acceptAdTransfer."])
+        }
+        return data
+    }
+
     /// Rejects a pending invitation.
     func rejectInvitation(invitationId: String) async throws -> [String: Any] {
         let result = try await functions.httpsCallable("rejectInvitation").call(["invitationId": invitationId])

@@ -185,7 +185,52 @@ Verified against the deployed rules with two real accounts (11 checks):
 | Coach edits own team | 200 |
 | Follower reads live game and plays | 200 |
 
-Still open: `role` remains client-written, so `coach`/`staff` labels are likewise
-forgeable — they now only unlock same-school data. Moving AD/staff to custom
-claims set by a Cloud Function is the durable fix.
+## Succession: handing the AD role to the next person
+
+ADs move on. The role cannot simply be reassigned, because it *is* ownership of
+the school — so a handoff transfers that ownership.
+
+**Two steps, deliberately.** `inviteAdSuccessor` sends the invitation;
+`acceptAdTransfer` performs the swap when the successor accepts. A one-step
+transfer would let a mistyped email address hand a school to a stranger with no
+way back, and no record of who agreed to what.
+
+On acceptance, one transaction:
+
+- `schools/{id}.adUserId` → the successor
+- successor `users/{uid}` → `role: 'ad'`, `schoolId` set
+- outgoing AD `users/{uid}` → `role: 'follower'`
+
+The outgoing AD keeps the school and **every team membership**, so someone who
+steps down from AD but still coaches keeps coaching. Only organisation-wide access
+ends — that distinction matters, because the alternative (blanking their account)
+would silently take a coach off their own team.
+
+Guardrails:
+
+- A stale invitation is rejected: acceptance verifies the school's `adUserId` still
+  belongs to whoever sent it, so an old invite cannot take a school from the
+  current AD.
+- Only one handoff may be outstanding — sending a new invite supersedes the
+  previous one, otherwise two people could both accept and the second would
+  silently overwrite the first.
+- The invitee must be signed in as the invited email.
+- `acceptInvitation` refuses AD invitations; `manageUserRole` refuses `newRole:
+  'ad'` outright, because there is exactly one AD and it moves by handoff only.
+- Invitations with `role: 'ad'` cannot be created by a client at all — only the
+  function, which verifies the caller owns the school.
+
+Verified against the deployed functions with two live accounts (14 checks):
+invite by the sitting AD, refusal for a non-AD, acceptance, ownership transfer,
+demotion of the outgoing AD, privileges genuinely moving (former AD 403 on the
+school, new AD 200), replay of the accepted invite refused, generic accept
+refused, and handing it back restoring the original state.
+
+UI: **Home → Administration → Hand off AD role** to send; the recipient sees it
+under **Account → Invitations**, labelled with what acceptance costs the current
+AD.
+
+Not done: no email is actually sent. The invitation exists in Firestore and the
+code is shown in-app; wiring a mail provider is a separate job.
+
 

@@ -54,6 +54,13 @@ struct MyInvitationsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                if invitation.adTransfer {
+                    // Make the consequence explicit: this is not a role on a team,
+                    // it takes the school off the person who holds it today.
+                    Text("Takes over as Athletic Director from \(invitation.invitedByName.isEmpty ? "the current AD" : invitation.invitedByName). Accepting ends their AD access.")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
             }
             Spacer()
             if isWorking {
@@ -88,12 +95,18 @@ struct MyInvitationsView: View {
         isWorking = true
         defer { isWorking = false }
         do {
-            let result = try await FunctionsService.shared.acceptInvitation(
-                invitationId: invitation.id,
-                userId: uid,
-                email: email,
-                name: auth.user?.displayName ?? email
-            )
+            if invitation.adTransfer {
+                // Accepting a handoff transfers the school, so it goes through the
+                // dedicated function; the generic path refuses role 'ad'.
+                _ = try await FunctionsService.shared.acceptAdTransfer(invitationId: invitation.id)
+            } else {
+                _ = try await FunctionsService.shared.acceptInvitation(
+                    invitationId: invitation.id,
+                    userId: uid,
+                    email: email,
+                    name: auth.user?.displayName ?? email
+                )
+            }
             await auth.refreshUser()
             await load()
         } catch {

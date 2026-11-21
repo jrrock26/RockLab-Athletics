@@ -12,6 +12,10 @@ struct Invitation: Identifiable, Codable {
     var teamId: String?
     var teamName: String?
     var code: String
+    /// True for an AD handoff: accepting it transfers ownership of the school
+    /// rather than merely granting a role.
+    var adTransfer: Bool
+    var invitedByName: String
 
     init(
         id: String,
@@ -23,7 +27,9 @@ struct Invitation: Identifiable, Codable {
         status: String,
         teamId: String? = nil,
         teamName: String? = nil,
-        code: String = ""
+        code: String = "",
+        adTransfer: Bool = false,
+        invitedByName: String = ""
     ) {
         self.id = id
         self.email = email
@@ -35,6 +41,8 @@ struct Invitation: Identifiable, Codable {
         self.teamId = teamId
         self.teamName = teamName
         self.code = code
+        self.adTransfer = adTransfer
+        self.invitedByName = invitedByName
     }
 
     init?(id: String, data: [String: Any]) {
@@ -49,6 +57,8 @@ struct Invitation: Identifiable, Codable {
         self.teamId = data["teamId"] as? String
         self.teamName = data["teamName"] as? String
         self.code = data["code"] as? String ?? ""
+        self.adTransfer = data["adTransfer"] as? Bool ?? false
+        self.invitedByName = data["invitedByName"] as? String ?? ""
     }
 }
 

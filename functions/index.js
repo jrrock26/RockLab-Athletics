@@ -160,6 +160,7 @@ exports.manageUserRole = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError('not-found', 'User not found.');
   }
   const callerRole = callerSnap.exists ? callerSnap.get('role') : null;
+  const callerSchoolId = callerSnap.exists ? callerSnap.get('schoolId') : null;
   const targetRole = targetSnap.get('role') || 'follower';
 
   const isAd = callerRole === 'ad';
@@ -167,14 +168,24 @@ exports.manageUserRole = functions.https.onCall(async (data, context) => {
   if (!isAd && !isCoach) {
     throw new functions.https.HttpsError('permission-denied', 'Only an AD or coach can manage users.');
   }
+  // Without this an AD could edit users in any school in the database, which is
+  // the same cross-tenant reach the rules now forbid.
+  if (!callerSchoolId || targetSnap.get('schoolId') !== callerSchoolId) {
+    throw new functions.https.HttpsError('permission-denied', 'You can only manage users in your own school.');
+  }
 
   if (action === 'setRole') {
     const allowed = ['ad', 'coach', 'staff', 'player', 'parent', 'follower'];
     if (!allowed.includes(newRole)) {
       throw new functions.https.HttpsError('invalid-argument', 'Invalid role.');
     }
-    if (newRole === 'ad' && !isAd) {
-      throw new functions.https.HttpsError('permission-denied', 'Only an AD can assign the AD role.');
+    if (newRole === 'ad') {
+      // There is exactly one AD per school, and the role carries ownership of the
+      // school. It moves by handoff (inviteAdSuccessor -> acceptAdTransfer), never
+      // by assignment, so two people can never hold it at once.
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'The AD role is handed off, not assigned. Use AD handoff from the current AD account.');
     }
     if (newRole === 'coach' && !isAd) {
       throw new functions.https.HttpsError('permission-denied', 'Only an AD can assign the coach role.');
@@ -808,6 +819,11 @@ exports.acceptInvitation = functions.https.onCall(async (data, context) => {
   if ((invData.email || '').toLowerCase() !== callerEmail) {
     throw new functions.https.HttpsError('permission-denied', 'This invitation is for a different account.');
   }
+  // AD is a handoff, not a role assignment: it moves ownership of the school.
+  // Accepting it here would grant the label without the ownership that backs it.
+  if (invData.role === 'ad') {
+    throw new functions.https.HttpsError('failed-precondition', 'AD invitations are accepted through the AD handoff flow.');
+  }
 
   const schoolId = invData.schoolId;
   const role = invData.role;
@@ -866,6 +882,170 @@ exports.acceptInvitation = functions.https.onCall(async (data, context) => {
 
 // Ensures the calling player has a roster entry on the given team.
 // Self-heals players who were accepted before roster auto-creation existed.
+// ---------------------------------------------------------------------------
+// AD succession.
+//
+// AD standing is ownership of a school (`schools/{id}.adUserId`), so a handoff
+// transfers that field — it is not a role edit. Deliberately two steps: the
+// sitting AD invites, the successor accepts. One-step transfer would let a
+// mistyped address hand a school to a stranger with no way back.
+// ---------------------------------------------------------------------------
+
+exports.inviteAdSuccessor = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const callerId = context.auth.uid;
+  const email = String((data && data.email) || '').trim().toLowerCase();
+  if (!email.includes('@')) {
+    throw new functions.https.HttpsError('invalid-argument', 'A valid email is required.');
+  }
+
+  const db = admin.firestore();
+  const callerSnap = await db.collection('users').doc(callerId).get();
+  const schoolId = callerSnap.exists ? callerSnap.get('schoolId') : null;
+  if (!schoolId) {
+    throw new functions.https.HttpsError('failed-precondition', 'You are not attached to a school.');
+  }
+
+  const schoolRef = db.collection('schools').doc(schoolId);
+  const schoolSnap = await schoolRef.get();
+  if (!schoolSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'School not found.');
+  }
+  if (schoolSnap.get('adUserId') !== callerId) {
+    throw new functions.https.HttpsError('permission-denied', 'Only the current AD can hand off the role.');
+  }
+  if ((context.auth.token.email || '').toLowerCase() === email) {
+    throw new functions.https.HttpsError('invalid-argument', 'That is your own address.');
+  }
+
+  // Only one successor may be outstanding. Without this, two invites could both
+  // be accepted and the second acceptance would silently overwrite the first.
+  const previous = await db.collection('invitations')
+    .where('schoolId', '==', schoolId)
+    .where('adTransfer', '==', true)
+    .where('status', '==', 'pending')
+    .get();
+  await Promise.all(previous.docs.map((doc) => doc.ref.set({ status: 'superseded' }, { merge: true })));
+
+  const code = Math.random().toString(36).slice(2, 8).toUpperCase();
+  const ref = await db.collection('invitations').add({
+    email,
+    role: 'ad',
+    adTransfer: true,
+    schoolId,
+    schoolName: schoolSnap.get('name') || '',
+    sportNames: [],
+    teamId: null,
+    teamName: null,
+    status: 'pending',
+    code,
+    invitedBy: callerId,
+    invitedByName: callerSnap.get('displayName') || '',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  await db.collection('auditLogs').add({
+    schoolId,
+    action: 'ad_invite_sent',
+    actorId: callerId,
+    actorName: callerSnap.get('displayName') || '',
+    targetEmail: email,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  console.log(`[ad] ${callerId} invited ${email} to take over ${schoolId}`);
+  return { ok: true, invitationId: ref.id, code };
+});
+
+exports.acceptAdTransfer = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const callerId = context.auth.uid;
+  const callerEmail = (context.auth.token.email || '').toLowerCase();
+  const { invitationId } = data || {};
+  if (!invitationId) {
+    throw new functions.https.HttpsError('invalid-argument', 'invitationId is required.');
+  }
+
+  const db = admin.firestore();
+  const invRef = db.collection('invitations').doc(invitationId);
+
+  const outcome = await db.runTransaction(async (tx) => {
+    const invSnap = await tx.get(invRef);
+    if (!invSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Invitation not found.');
+    }
+    const inv = invSnap.data();
+    if (inv.role !== 'ad' || !inv.adTransfer) {
+      throw new functions.https.HttpsError('failed-precondition', 'Not an AD handoff invitation.');
+    }
+    if (inv.status !== 'pending') {
+      throw new functions.https.HttpsError('failed-precondition', 'This invitation is no longer open.');
+    }
+    if ((inv.email || '').toLowerCase() !== callerEmail) {
+      throw new functions.https.HttpsError('permission-denied', 'This invitation is for a different account.');
+    }
+
+    const schoolRef = db.collection('schools').doc(inv.schoolId);
+    const schoolSnap = await tx.get(schoolRef);
+    if (!schoolSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'School not found.');
+    }
+    // If the role already moved, this invite is stale. Accepting it would let an
+    // old invitation take a school from whoever holds it now.
+    const sittingAd = schoolSnap.get('adUserId');
+    if (sittingAd !== inv.invitedBy) {
+      throw new functions.https.HttpsError('failed-precondition', 'The AD role has already changed hands.');
+    }
+
+    tx.set(schoolRef, {
+      adUserId: callerId,
+      adTransferredAt: admin.firestore.FieldValue.serverTimestamp(),
+      adTransferredFrom: sittingAd,
+    }, { merge: true });
+
+    tx.set(db.collection('users').doc(callerId), {
+      role: 'ad',
+      schoolId: inv.schoolId,
+    }, { merge: true });
+
+    // The outgoing AD is demoted but keeps the school and every team membership,
+    // so someone who stepped down from AD but still coaches keeps coaching. Only
+    // the organisation-wide powers go.
+    tx.set(db.collection('users').doc(sittingAd), { role: 'follower' }, { merge: true });
+
+    tx.set(invRef, {
+      status: 'accepted',
+      acceptedBy: callerId,
+      acceptedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    return { schoolId: inv.schoolId, previousAdId: sittingAd };
+  });
+
+  // The users trigger also syncs claims, but doing it here means the successor
+  // is effective on their very next rule evaluation rather than one hop later.
+  await Promise.all([
+    admin.auth().setCustomUserClaims(callerId, { role: 'ad' }),
+    admin.auth().setCustomUserClaims(outcome.previousAdId, { role: 'follower' }),
+  ]);
+
+  await db.collection('auditLogs').add({
+    schoolId: outcome.schoolId,
+    action: 'ad_transferred',
+    actorId: callerId,
+    actorEmail: callerEmail,
+    previousAdId: outcome.previousAdId,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  console.log(`[ad] ${callerId} took over ${outcome.schoolId} from ${outcome.previousAdId}`);
+  return { ok: true, schoolId: outcome.schoolId, previousAd: outcome.previousAdId };
+});
+
 exports.ensurePlayerRosterEntry = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');

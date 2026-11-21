@@ -159,6 +159,9 @@ struct HomeView: View {
             NavigationLink { ADDirectoryView() } label: {
                 Label("AD Directory", systemImage: "building.columns")
             }
+            NavigationLink { AdHandoffView() } label: {
+                Label("Hand off AD role", systemImage: "arrow.left.arrow.right.circle")
+            }
         }
     }
 
@@ -499,6 +502,7 @@ extension FollowedOrgSection {
 
     private func search() async {
         do {
+
             results = try await FirestoreService.shared.searchSchools(matching: searchTerm)
         } catch {
             errorMessage = error.localizedDescription
@@ -536,3 +540,82 @@ extension FollowedOrgSection {
     }
 }
 
+/// Hands the AD role to a successor.
+///
+/// The role does not move when this is sent — it moves when the successor
+/// accepts. That two-step shape exists so a mistyped address cannot hand a school
+/// to a stranger, and so the handoff is always recorded against a real acceptance.
+struct AdHandoffView: View {
+    @Environment(AuthViewModel.self) private var auth
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var email = ""
+    @State private var busy = false
+    @State private var sentCode = ""
+    @State private var errorMessage = ""
+
+    private var canSend: Bool {
+        !busy && email.contains("@") && email.contains(".")
+            && email.lowercased() != (auth.user?.email ?? "").lowercased()
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Text("The new athletic director takes over this school when they accept the invitation. Until then nothing changes and you keep full control.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Successor email") {
+                TextField("name@school.org", text: $email)
+                    .keyboardType(.emailAddress)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+
+            Section {
+                Button(busy ? "Sending…" : "Send handoff invitation") {
+                    Task { await send() }
+                }
+                .disabled(!canSend)
+
+                if !sentCode.isEmpty {
+                    Label("Invitation sent. Code \(sentCode)", systemImage: "checkmark.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.green)
+                    Text("Ask them to sign in and accept it under Account → Invitations.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if !errorMessage.isEmpty {
+                    Text(errorMessage).font(.footnote).foregroundStyle(.red)
+                }
+            }
+
+            Section {
+                Text("When they accept you become a follower of this school. Any team you still coach keeps its coaching powers — only the organisation-wide access ends.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("Hand off AD role")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func send() async {
+        busy = true
+        errorMessage = ""
+        sentCode = ""
+        do {
+            let result = try await FunctionsService.shared.inviteAdSuccessor(
+                email: email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+            sentCode = result["code"] as? String ?? ""
+            email = ""
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        busy = false
+    }
+}

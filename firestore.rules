@@ -480,7 +480,10 @@ service cloud.firestore {
         // The team's coach or staff, for their own team only.
         || ('teamId' in resource.data && (isCoachOf(resource.data.teamId) || isStaffOf(resource.data.teamId)))
       );
-      allow create: if signedIn() && (isAd() || ('teamId' in request.resource.data && isCoachOf(request.resource.data.teamId)));
+      // AD invitations carry ownership of the school, so they are minted by the
+      // Cloud Function (which verifies the caller owns it), never by a client.
+      allow create: if signedIn() && request.resource.data.role != 'ad'
+        && (isAd() || ('teamId' in request.resource.data && isCoachOf(request.resource.data.teamId)));
       allow update, delete: if signedIn() && (isAd() || ('teamId' in resource.data && isCoachOf(resource.data.teamId)));
     }
 
