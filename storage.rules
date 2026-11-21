@@ -11,13 +11,38 @@ service firebase.storage {
 
     function signedIn() { return request.auth != null; }
 
-    function role() {
-      return request.auth.token.role;
+    /// Authorisation reads the SAME source as firestore.rules: the user document.
+    ///
+    /// This used to read `request.auth.token.role`. Custom claims are refreshed only
+    /// when the token is minted, so a demoted or re-scoped account kept Storage
+    /// access Firestore would already refuse. Reading the document removes the drift
+    /// by construction, at the cost of one lookup per check.
+    function userData() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
     }
 
+    function role() { return userData().role; }
+
+    function mySchoolId() {
+      return ('schoolId' in userData() && userData().schoolId is string) ? userData().schoolId : '';
+    }
+
+    /// AD standing requires OWNING the school, mirroring firestore.rules. Without
+    /// this, any token carrying role 'ad' passed the old check, so the escalation
+    /// fix applied to Firestore was never applied to Storage.
+    function ownsSchool() {
+      return signedIn()
+        && mySchoolId() != ''
+        && firestore.exists(/databases/(default)/documents/schools/$(mySchoolId()))
+        && firestore.get(/databases/(default)/documents/schools/$(mySchoolId())).data.adUserId
+             == request.auth.uid;
+    }
+
+    function isAd() { return signedIn() && role() == 'ad' && ownsSchool(); }
+
     function membership(teamId) {
-      return exists(/databases/(default)/documents/teams/$(teamId)/members/$(request.auth.uid))
-        ? get(/databases/(default)/documents/teams/$(teamId)/members/$(request.auth.uid)).data
+      return firestore.exists(/databases/(default)/documents/teams/$(teamId)/members/$(request.auth.uid))
+        ? firestore.get(/databases/(default)/documents/teams/$(teamId)/members/$(request.auth.uid)).data
         : null;
     }
 
@@ -30,12 +55,12 @@ service firebase.storage {
     }
 
     function isFollower(teamId) { return memberRole(teamId) == 'follower'; }
-    function isAd() { return role() == 'ad'; }
     function isCoachOf(teamId) { return memberRole(teamId) == 'coach'; }
 
     function isSchoolAd(schoolId) {
-      return signedIn() && exists(/databases/(default)/documents/schools/$(schoolId))
-        && get(/databases/(default)/documents/schools/$(schoolId)).data.adUserId == request.auth.uid;
+      return signedIn() && firestore.exists(/databases/(default)/documents/schools/$(schoolId))
+        && firestore.get(/databases/(default)/documents/schools/$(schoolId)).data.adUserId
+             == request.auth.uid;
     }
 
     // Profile photos: only the owner writes; anyone signed in can read.
