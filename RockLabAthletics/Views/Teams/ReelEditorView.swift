@@ -63,17 +63,27 @@ struct ReelEditorView: View {
                 } label: {
                     Label("Add clip from game film", systemImage: "scissors")
                 }
+                .disabled(!reel.canAddClip)
             } header: {
                 HStack {
                     Text("Clips")
                     Spacer()
+                    Text("\(reel.clips.count)/\(HighlightReel.maxClips)")
+                        .font(.caption2)
+                        .foregroundStyle(reel.canAddClip ? Color.secondary : Color.orange)
                     if reel.durationSeconds > 0 {
                         Text(reel.durationText).font(.caption2)
                     }
                 }
             } footer: {
-                Text("Drag to reorder · swipe to delete · tap a clip to edit the player or action.")
-                    .font(.caption)
+                if reel.canAddClip {
+                    Text("Drag to reorder · swipe to delete · tap a clip to edit the player or action.")
+                        .font(.caption)
+                } else {
+                    Text("That's the 20-clip limit — about a 2-minute reel. Delete a clip to swap one out.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
 
             publishSection
@@ -112,12 +122,16 @@ struct ReelEditorView: View {
                             clip: clip) { saved in
                 if let index = reel.clips.firstIndex(where: { $0.id == saved.id }) {
                     reel.clips[index] = saved
-                } else {
+                } else if reel.canAddClip {
                     reel.clips.append(saved)
                     AnalyticsService.log(AnalyticsService.Event.clipAdded, [
                         "play_tag": saved.playTag,
                         "is_external": saved.isExternal,
                     ])
+                } else {
+                    // Guard here as well as on the button: the sheet can be open
+                    // while the reel is already at the limit.
+                    errorMessage = "This reel already has \(HighlightReel.maxClips) clips."
                 }
                 Task { await save() }
             }

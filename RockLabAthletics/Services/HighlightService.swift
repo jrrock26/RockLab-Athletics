@@ -24,17 +24,25 @@ struct HighlightService {
             .sorted { $0.createdAt > $1.createdAt }
     }
 
+    /// Largest single file the app will send.
+    ///
+    /// 4 GB covers a two-hour 1080p game with room to spare. Kept in step with the
+    /// size cap in `storage.rules`; raising one without the other just moves the
+    /// rejection from the app to the server.
+    static let maxUploadBytes: Int64 = 4 * 1024 * 1024 * 1024
+
     /// Uploads a video file from the device, then records it in the library.
     func uploadVideo(fileURL: URL,
                      teamId: String,
                      title: String,
                      uploadedByName: String,
-                     provider: VideoProvider = .upload) async throws -> TeamVideo {
+                     provider: VideoProvider = .upload,
+                     onProgress: ((Double) -> Void)? = nil) async throws -> TeamVideo {
         let values = try? fileURL.resourceValues(forKeys: [.fileSizeKey])
         let size = Double(values?.fileSize ?? 0)
-        if size > 600 * 1024 * 1024 {
+        if Int64(size) > Self.maxUploadBytes {
             throw NSError(domain: "HighlightService", code: -1, userInfo: [
-                NSLocalizedDescriptionKey: "That video is larger than 600 MB. Trim or export it first, then upload."
+                NSLocalizedDescriptionKey: "That video is larger than 4 GB. Export a trimmed copy, or upload one half at a time."
             ])
         }
 
@@ -47,7 +55,8 @@ struct HighlightService {
         _ = try await FunctionsService.shared.consumeVideoQuota(bytes: Int64(size))
 
         let path = "teams/\(teamId)/videos/\(UUID().uuidString).\(ext)"
-        let url = try await StorageService.shared.uploadFile(from: fileURL, path: path, contentType: contentType)
+        let url = try await StorageService.shared.uploadFile(
+            from: fileURL, path: path, contentType: contentType, onProgress: onProgress)
 
         let video = TeamVideo(id: UUID().uuidString,
                               teamId: teamId,

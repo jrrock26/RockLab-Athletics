@@ -192,8 +192,17 @@ service cloud.firestore {
 
       match /reels/{reelId} {
         allow read: if signedIn() && (isAd() || isTeamMember(teamId) || memberRole(teamId) == 'follower');
-        allow create, delete: if canManageTeam(teamId) || isStaffOf(teamId);
-        allow update: if canManageTeam(teamId) || isStaffOf(teamId)
+        // 20 clips is the reel limit the app shows; enforced here too so a
+        // modified client cannot store a 200-clip reel that no renderer will
+        // accept and no viewer will watch.
+        allow create: if (canManageTeam(teamId) || isStaffOf(teamId))
+          && request.resource.data.clips.size() <= 20;
+        allow delete: if canManageTeam(teamId) || isStaffOf(teamId);
+        allow update: if ((canManageTeam(teamId) || isStaffOf(teamId))
+            && (request.resource.data.clips.size() <= 20
+                // An older reel may already be over the limit; allow it to be
+                // trimmed back down, otherwise it is stuck and cannot be fixed.
+                || request.resource.data.clips.size() < resource.data.clips.size()))
           || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['views'])
               && request.resource.data.views == resource.data.views + 1);
       }

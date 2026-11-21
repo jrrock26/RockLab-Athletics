@@ -22,13 +22,23 @@ struct StorageService {
         return try await ref.downloadURL().absoluteString
     }
 
-    func uploadFile(from url: URL, path: String, contentType: String) async throws -> String {
+    /// Uploads a file, optionally reporting progress as a 0…1 fraction.
+    ///
+    /// Progress is not cosmetic here: game film can be several gigabytes, and an
+    /// upload with no feedback looks like a frozen app, so people kill it halfway.
+    func uploadFile(from url: URL,
+                    path: String,
+                    contentType: String,
+                    onProgress: ((Double) -> Void)? = nil) async throws -> String {
         let metadata = StorageMetadata()
         metadata.contentType = contentType
         let ref = storage.reference().child(path)
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-        _ = try await ref.putFileAsync(from: url, metadata: metadata)
+        _ = try await ref.putFileAsync(from: url, metadata: metadata) { progress in
+            guard let progress, progress.totalUnitCount > 0 else { return }
+            onProgress?(Double(progress.completedUnitCount) / Double(progress.totalUnitCount))
+        }
         return try await ref.downloadURL().absoluteString
     }
 

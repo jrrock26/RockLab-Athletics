@@ -62,12 +62,14 @@ service firebase.storage {
       allow delete: if signedIn() && (isAd() || isCoachOf(teamId) || memberRole(teamId) == 'staff');
     }
 
-    // Game film: same audience, larger cap (600 MB matches the app's limit).
+    // Game film: same audience, larger cap. 4 GB matches maxUploadBytes in
+    // HighlightService - a full 1080p game is roughly 2 GB, so a smaller cap
+    // would reject the very footage this feature exists for.
     match /teams/{teamId}/videos/{fileName} {
       allow read: if signedIn() && (isAd() || isTeamMember(teamId) || isFollower(teamId));
       allow write: if signedIn()
         && (isAd() || isCoachOf(teamId) || memberRole(teamId) == 'staff')
-        && request.resource.size < 600 * 1024 * 1024;
+        && request.resource.size < 4096 * 1024 * 1024;
       allow delete: if signedIn() && (isAd() || isCoachOf(teamId) || memberRole(teamId) == 'staff');
     }
 

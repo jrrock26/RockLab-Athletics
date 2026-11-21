@@ -234,6 +234,16 @@ struct HighlightReel: Identifiable, Codable {
 
     var durationSeconds: Double { clips.reduce(0) { $0 + $1.duration } }
 
+    /// A reel is a highlight package, not the game.
+    ///
+    /// 20 clips at 4–6 seconds each is roughly a 90–120 second reel — the length
+    /// that actually holds attention on social. It also bounds render time and
+    /// storage, which is why the limit is enforced server-side as well.
+    static let maxClips = 20
+
+    var canAddClip: Bool { clips.count < HighlightReel.maxClips }
+    var clipsRemaining: Int { max(0, HighlightReel.maxClips - clips.count) }
+
     var matchupText: String { "\(homeTeam) vs \(awayTeam)" }
 
     var gameDateText: String { gameDate.formatted(date: .abbreviated, time: .omitted) }

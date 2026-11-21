@@ -227,7 +227,14 @@ extension VideoSourceSheet {
                 teamId: teamId,
                 title: title.trimmingCharacters(in: .whitespacesAndNewlines),
                 uploadedByName: auth.user?.displayName ?? "",
-                provider: provider)
+                provider: provider,
+                onProgress: { fraction in
+                    // A multi-gigabyte upload with no number on screen reads as a
+                    // hung app, and people kill it before it finishes.
+                    Task { @MainActor in
+                        statusText = "Uploading \(url.lastPathComponent)… \(Int(fraction * 100))%"
+                    }
+                })
             onAdded(video)
             dismiss()
         } catch {
