@@ -243,6 +243,17 @@ service cloud.firestore {
               && request.auth.uid in resource.data.guardianUserIds)
         );
         allow write: if canManageTeam(teamId);
+        // A guardian may correct their own contact details and supply emergency and
+        // medical information — the things only a family knows. They may NOT touch
+        // anything the school owns: playerName, jerseyNumber, position, teamId,
+        // userId, guardianUserIds, or ANY injury* field. hasOnly() refuses every
+        // field not named here, so the list is the whole permission.
+        allow update: if signedIn() && isGuardianOf(teamId, entryId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'parentName', 'parentEmail', 'parentPhone',
+            'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelationship',
+            'allergies', 'medicalNotes', 'updatedAt'
+          ]);
         // Injury history is staff-only; writes go through Cloud Functions.
         match /injuryReports/{reportId} {
           allow read: if signedIn() && (isAd() || isCoachOf(teamId) || isStaffOf(teamId));
