@@ -186,6 +186,60 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Durable player identities. ONE record per child for their whole school career,
+    // created by the school (AD/coach/staff, manual or imported) and never by a family:
+    // the school's directory is the authority and the platform mirrors it.
+    //
+    // Not enumerable. There is no list or search path for ordinary users, because a
+    // searchable directory of children is a safeguarding problem, not a feature.
+    match /players/{playerId} {
+      function isMySchool() {
+        return signedIn() && mySchoolId() != ''
+          && 'schoolId' in resource.data && resource.data.schoolId == mySchoolId();
+      }
+      function isGuardian() {
+        return signedIn() && exists(
+          /databases/$(database)/documents/players/$(playerId)/guardians/$(request.auth.uid));
+      }
+
+      allow read: if signedIn() && (
+        isAd()
+        || isGuardian()
+        || ('claimedByUserId' in resource.data && resource.data.claimedByUserId == request.auth.uid)
+        || (role() in ['coach', 'staff'] && isMySchool())
+      );
+
+      // Creation mirrors the school: staff may only mint a player inside their own
+      // school, so one school cannot create profiles in another.
+      allow create: if signedIn() && role() in ['ad', 'coach', 'staff']
+        && mySchoolId() != ''
+        && request.resource.data.schoolId == mySchoolId();
+
+      // Guardians REQUEST profile changes; they never write the player record. Their
+      // own contact details live on their user document, which they already edit.
+      allow update: if signedIn() && (isAd() || (role() in ['coach', 'staff'] && isMySchool()));
+      allow delete: if false;
+
+      // Guardianship is granted by the school, not claimed by the guardian: the link is
+      // the approval, so a parent cannot add themselves to a child.
+      match /guardians/{guardianId} {
+        allow read: if signedIn() && (
+          guardianId == request.auth.uid || isAd() || (role() in ['coach', 'staff'] && isMySchool())
+        );
+        allow create, delete: if signedIn() && (isAd() || role() in ['coach', 'staff'])
+          && mySchoolId() != ''
+          && get(/databases/$(database)/documents/players/$(playerId)).data.schoolId == mySchoolId();
+        allow update: if false;
+      }
+    }
+
+    // Legacy identity keys mapped onto a durable player. Server-written only, so the
+    // alias table that stitches a child's history together cannot be forged.
+    match /playerAliases/{aliasKey} {
+      allow read: if false;
+      allow write: if false;
+    }
+
     match /schools/{schoolId} {
       allow read: if signedIn();
       allow create: if signedIn() && request.resource.data.adUserId == uid();
