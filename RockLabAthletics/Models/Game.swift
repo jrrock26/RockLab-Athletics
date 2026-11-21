@@ -18,13 +18,19 @@ struct Game: Identifiable, Codable {
     var opponentTeamId: String?
     var period: Int
     var clockSeconds: Int
+    /// True while the game clock is running. Written by the scorer so a spectator's
+    /// device can work out the time remaining without polling.
+    var clockRunning: Bool
+    /// When the clock was last started. With `clockSeconds` this is enough for any
+    /// other device to compute the live reading.
+    var clockStartedAt: Date?
     /// Volleyball-style set results: [{ "us": 25, "them": 20 }, …]. A match is
     /// decided by sets won, so the running score alone cannot express it.
     var sets: [[String: Int]]
     /// unverified | verified — only verified stats reach career totals.
     var statsStatus: String
 
-    init(id: String, teamId: String, opponent: String, isHome: Bool, date: Date, status: GameStatus, teamScore: Int, opponentScore: Int, isDistrictGame: Bool = false, opponentTeamId: String? = nil, period: Int = 0, clockSeconds: Int = 0, sets: [[String: Int]] = [], statsStatus: String = "unverified") {
+    init(id: String, teamId: String, opponent: String, isHome: Bool, date: Date, status: GameStatus, teamScore: Int, opponentScore: Int, isDistrictGame: Bool = false, opponentTeamId: String? = nil, period: Int = 0, clockSeconds: Int = 0, clockRunning: Bool = false, clockStartedAt: Date? = nil, sets: [[String: Int]] = [], statsStatus: String = "unverified") {
         self.id = id
         self.teamId = teamId
         self.opponent = opponent
@@ -37,6 +43,8 @@ struct Game: Identifiable, Codable {
         self.opponentTeamId = opponentTeamId
         self.period = period
         self.clockSeconds = clockSeconds
+        self.clockRunning = clockRunning
+        self.clockStartedAt = clockStartedAt
         self.sets = sets
         self.statsStatus = statsStatus
     }
@@ -57,12 +65,28 @@ struct Game: Identifiable, Codable {
         self.opponentTeamId = data["opponentTeamId"] as? String
         self.period = data["period"] as? Int ?? 0
         self.clockSeconds = data["clockSeconds"] as? Int ?? 0
+        self.clockRunning = data["clockRunning"] as? Bool ?? false
+        self.clockStartedAt = (data["clockStartedAt"] as? Double).map { Date(timeIntervalSince1970: $0) }
         self.sets = (data["sets"] as? [[String: Any]])?.compactMap { raw in
             guard let us = raw["us"] as? Int, let them = raw["them"] as? Int else { return nil }
             return ["us": us, "them": them]
         } ?? []
         self.statsStatus = data["statsStatus"] as? String ?? "unverified"
     }
+
+    /// The clock reading right now, on any device.
+    ///
+    /// A spectator never receives every tick — that would be a write per second.
+    /// Instead the scorer writes the remaining time plus the moment the clock
+    /// started, and everyone else subtracts the elapsed wall-clock time.
+    func liveClockSeconds(now: Date = Date()) -> Int {
+        guard clockRunning, let started = clockStartedAt else { return clockSeconds }
+        return max(0, clockSeconds - Int(now.timeIntervalSince(started)))
+    }
+
+    /// Sets won / lost, for set-based sports where the running total is meaningless.
+    var setsWon: Int { sets.filter { ($0["us"] ?? 0) > ($0["them"] ?? 0) }.count }
+    var setsLost: Int { sets.filter { ($0["them"] ?? 0) > ($0["us"] ?? 0) }.count }
 }
 
 /// One logged play: the play-by-play line that gives the audience something to

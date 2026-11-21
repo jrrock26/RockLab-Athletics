@@ -265,13 +265,20 @@ struct FollowedOrgSection: View {
         Dictionary(teams.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// Next few games from today onward, soonest first.
+    /// Next few games from today onward, soonest first. Live games are excluded
+    /// because they get their own section — showing one game in two places makes
+    /// the list look stale.
     private var upcoming: [Game] {
         let cutoff = Date().addingTimeInterval(-3600)
         return Array(games
-            .filter { $0.status != .final && $0.date >= cutoff }
+            .filter { $0.status != .final && $0.status != .live && $0.date >= cutoff }
             .sorted { $0.date < $1.date }
             .prefix(6))
+    }
+
+    /// Games in progress right now, across every followed school.
+    private var liveGames: [Game] {
+        games.filter { $0.status == .live }.sorted { $0.date < $1.date }
     }
 
     /// Finals from the last seven days, most recent first.
@@ -293,6 +300,7 @@ struct FollowedOrgSection: View {
                 Section { ProgressView() }
             } else {
                 schoolSection
+                if !liveGames.isEmpty { liveSection }
                 if !upcoming.isEmpty { upcomingSection }
                 if !recentResults.isEmpty { resultsSection }
                 if !activeFundraisers.isEmpty { fundraiserSection }
@@ -376,15 +384,38 @@ extension FollowedOrgSection {
     private var upcomingSection: some View {
         Section("Upcoming games") {
             ForEach(upcoming) { game in
-                gameRow(game, showScore: false)
+                spectatorLink(game, showScore: false)
             }
+        }
+    }
+
+    private var liveSection: some View {
+        Section("Live now") {
+            ForEach(liveGames) { game in
+                spectatorLink(game, showScore: true)
+            }
+        }
+    }
+
+    /// Opens the read-only live view. A follower has no scoring rights, so sending
+    /// them to the scorer's screen showed a wall of disabled controls.
+    @ViewBuilder
+    private func spectatorLink(_ game: Game, showScore: Bool) -> some View {
+        if let team = teamLookup[game.teamId] {
+            NavigationLink {
+                SpectatorGameView(game: game, sportId: team.sportId, ourName: team.title)
+            } label: {
+                gameRow(game, showScore: showScore)
+            }
+        } else {
+            gameRow(game, showScore: showScore)
         }
     }
 
     private var resultsSection: some View {
         Section("This week's results") {
             ForEach(recentResults) { game in
-                gameRow(game, showScore: true)
+                spectatorLink(game, showScore: true)
             }
         }
     }

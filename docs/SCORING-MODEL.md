@@ -247,3 +247,39 @@ apart deliberately:
 Position is chosen per target team rather than copied: `QB` on a basketball
 roster is worse than blank, since coaches read that column.
 
+## The spectator view
+
+`SpectatorGameView` is the read-only game: score, live clock, period, and the same
+play-by-play the scorer sees. No controls at all.
+
+Before this, a follower's only path was the scorer's screen with every control
+disabled — which reads as an app that is broken rather than one that is
+read-only.
+
+**The clock is the interesting part.** A spectator cannot be sent a write every
+second, so the game document carries `clockRunning` and `clockStartedAt` next to
+the remaining `clockSeconds`. Any device computes:
+
+```
+remaining = clockSeconds - (now - clockStartedAt)
+```
+
+The scorer writes those fields when it starts, pauses, or hits zero; the spectator
+ticks locally through `Game.liveClockSeconds(now:)`. Nothing polls, and there is
+no write per second. The trade-off is trusting device clocks to agree within a few
+seconds, which is fine for a scoreboard.
+
+Entry points:
+
+- **Home → Live now**, above Upcoming, listing every in-progress game across
+  followed schools. Live games are excluded from Upcoming so one game cannot
+  appear in two sections.
+- **Team page → LIVE NOW banner** for anyone who is not AD, coach, or staff.
+
+Plays stream through `listenToPlays`, so a basket reaches a parent's phone without
+a refresh.
+
+Known gap: the Home list is loaded on open rather than listened to, so a game that
+flips to live while a parent is already sitting on Home appears on the next open,
+not instantly.
+

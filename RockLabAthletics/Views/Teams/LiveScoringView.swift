@@ -282,6 +282,8 @@ struct LiveScoringView: View {
                 clockRemaining -= 1
             } else {
                 clockRunning = false
+                // Persist the expiry, or spectators keep counting past zero.
+                persistClock()
             }
         }
         .onDisappear { vm.stopWatchingGame() }
@@ -303,6 +305,9 @@ struct LiveScoringView: View {
             persistClock()
         } else if clockRemaining > 0 {
             clockRunning = true
+            // Tell every spectator's device when this started; without it they can
+            // only show a frozen reading.
+            persistClock()
         }
     }
 
@@ -342,7 +347,10 @@ struct LiveScoringView: View {
 
     private func persistClock() {
         let g = vm.selectedGame ?? game
-        Task { await vm.updateClock(gameId: g.id, period: g.period, clockSeconds: clockRemaining) }
+        Task {
+            await vm.updateClock(
+                gameId: g.id, period: g.period, clockSeconds: clockRemaining, running: clockRunning)
+        }
     }
 }
 

@@ -935,8 +935,32 @@ struct FirestoreService {
         try await db.collection("games").document(gameId).setData(["status": status.rawValue], merge: true)
     }
 
-    func updateGameClock(gameId: String, period: Int, clockSeconds: Int) async throws {
-        try await db.collection("games").document(gameId).setData(["period": period, "clockSeconds": clockSeconds], merge: true)
+    func updateGameClock(gameId: String, period: Int, clockSeconds: Int, running: Bool) async throws {
+        var data: [String: Any] = [
+            "period": period,
+            "clockSeconds": clockSeconds,
+            "clockRunning": running,
+        ]
+        // Clients read these two together to compute the live reading. A running
+        // clock with no start time is unusable, so they are always written as a pair.
+        if running {
+            data["clockStartedAt"] = Date().timeIntervalSince1970
+        } else {
+            data["clockStartedAt"] = NSNull()
+        }
+        try await db.collection("games").document(gameId).setData(data, merge: true)
+    }
+
+    /// Live play-by-play, newest first. Spectators get a listener so a play appears
+    /// without refreshing.
+    func listenToPlays(gameId: String, limit: Int = 25, onChange: @escaping ([GamePlay]) -> Void) -> ListenerRegistration {
+        db.collection("games").document(gameId).collection("plays")
+            .order(by: "createdAt", descending: true)
+            .limit(to: limit)
+            .addSnapshotListener { snapshot, _ in
+                guard let snapshot else { return }
+                onChange(snapshot.documents.compactMap { GamePlay(data: $0.data(), id: $0.documentID) })
+            }
     }
 
     // MARK: - Play by play

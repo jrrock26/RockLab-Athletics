@@ -403,7 +403,23 @@ struct TeamDetailView: View {
 
     @ViewBuilder
     private func liveScoringDestination(for game: Game) -> some View {
-        ScoringView(game: game, teamId: team.id, sportId: team.sportId, vm: scoringVM)
+        // Staff get the scorer's screen; everyone else gets the read-only view.
+        // Sending a parent into a screen of disabled controls looked like a bug.
+        if canOperateScoring {
+            ScoringView(game: game, teamId: team.id, sportId: team.sportId, vm: scoringVM)
+        } else {
+            SpectatorGameView(game: game, sportId: team.sportId, ourName: team.title)
+        }
+    }
+
+    /// True for the people who could plausibly be at the table: the AD, coaches,
+    /// and staff (a staff statistician holds the scoring permission).
+    private var canOperateScoring: Bool {
+        guard let role = myMembership?.role ?? auth.user?.role else { return false }
+        switch role {
+        case .ad, .coach, .staff: return true
+        case .player, .parent, .follower: return false
+        }
     }
 
     private func toggleFollow() async {

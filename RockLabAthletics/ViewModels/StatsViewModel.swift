@@ -116,16 +116,19 @@ final class StatsViewModel {
         }
     }
 
-    func updateClock(gameId: String, period: Int, clockSeconds: Int) async {
+    func updateClock(gameId: String, period: Int, clockSeconds: Int, running: Bool = false) async {
         guard var game = selectedGame else { return }
         game.period = period
         game.clockSeconds = clockSeconds
+        game.clockRunning = running
+        game.clockStartedAt = running ? Date() : nil
         selectedGame = game
         if let index = games.firstIndex(where: { $0.id == gameId }) {
             games[index] = game
         }
         do {
-            try await FirestoreService.shared.updateGameClock(gameId: gameId, period: period, clockSeconds: clockSeconds)
+            try await FirestoreService.shared.updateGameClock(
+                gameId: gameId, period: period, clockSeconds: clockSeconds, running: running)
         } catch {
             errorMessage = error.localizedDescription
         }

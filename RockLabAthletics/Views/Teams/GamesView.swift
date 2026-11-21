@@ -1,4 +1,5 @@
 import SwiftUI
+import FirebaseFirestore
 
 struct GamesView: View {
     let teamId: String
@@ -322,5 +323,163 @@ struct AddGameSheet: View {
                 }
             }
         }
+    }
+}
+
+
+/// Read-only live game view for anyone who is not scoring it: parents following
+/// the school, players on the bench, an AD checking in from the office.
+///
+/// Deliberately has no controls at all. The old path sent followers into the
+/// scorer's screen, where every control was disabled — which reads as broken
+/// rather than read-only.
+struct SpectatorGameView: View {
+    @State private var current: Game
+    private let sportId: String
+    private let ourName: String
+
+    @State private var plays: [GamePlay] = []
+    @State private var gameListener: ListenerRegistration?
+    @State private var playsListener: ListenerRegistration?
+    @State private var now = Date()
+
+    /// Re-renders the countdown once a second without touching the network.
+    private let ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    init(game: Game, sportId: String, ourName: String) {
+        _current = State(initialValue: game)
+        self.sportId = sportId
+        self.ourName = ourName
+    }
+
+    private var clock: ClockConfig? { SportDefinitions.clock(for: sportId) }
+    private var isSets: Bool {
+        if case .sets = SportDefinitions.scoreModel(for: sportId) { return true }
+        return false
+    }
+
+    private var remaining: Int { current.liveClockSeconds(now: now) }
+
+    var body: some View {
+        List {
+            Section { scoreboard }
+
+            Section("Play by play") {
+                if plays.isEmpty {
+                    Text(current.status == .live
+                         ? "Waiting for the first play."
+                         : "No plays were logged for this game.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(plays) { play in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(play.stampLabel(clock))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 62, alignment: .leading)
+                        Text(play.summary)
+                            .font(.footnote)
+                            .foregroundStyle(play.isOurs ? .primary : .secondary)
+                        Spacer()
+                        if !play.isOurs {
+                            Text("them")
+                                .font(.caption2.bold())
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Live")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            let gameId = current.id
+            gameListener = FirestoreService.shared.listenToGame(gameId: gameId) { game in
+                guard let game else { return }
+                Task { @MainActor in current = game }
+            }
+            playsListener = FirestoreService.shared.listenToPlays(gameId: gameId) { latest in
+                Task { @MainActor in plays = latest }
+            }
+        }
+        .onReceive(ticker) { time in now = time }
+        .onDisappear {
+            gameListener?.remove()
+            playsListener?.remove()
+        }
+    }
+
+    // MARK: Subviews
+
+    private var scoreboard: some View {
+        VStack(spacing: 10) {
+            HStack {
+                HStack(spacing: 6) {
+                    if current.status == .live {
+                        Circle().fill(.red).frame(width: 8, height: 8)
+                    }
+                    Text(current.status == .live ? "LIVE" : current.status.rawValue.uppercased())
+                        .font(.caption2.bold())
+                        .foregroundStyle(current.status == .live ? Color.red : Color.secondary)
+                }
+                Spacer()
+                if let clock {
+                    Text(clock.label(forPeriod: current.period))
+                        .font(.caption2.bold())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            HStack(alignment: .top, spacing: 4) {
+                side(name: ourName.isEmpty ? "Us" : ourName,
+                     value: isSets ? current.setsWon : current.teamScore,
+                     leads: oursLead)
+                Text("–").font(.title3).foregroundStyle(.secondary)
+                side(name: current.opponent,
+                     value: isSets ? current.setsLost : current.opponentScore,
+                     leads: theirsLead)
+            }
+
+            if let clock {
+                Text(clockString(remaining))
+                    .font(.system(size: 44, weight: .bold, design: .monospaced))
+                    .foregroundStyle(remaining == 0 ? Color.red : Color.primary)
+            }
+
+            if isSets, let latest = current.sets.last {
+                Text("Set \(current.sets.count): \(latest["us"] ?? 0)–\(latest["them"] ?? 0)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var oursLead: Bool {
+        isSets ? current.setsWon > current.setsLost : current.teamScore > current.opponentScore
+    }
+
+    private var theirsLead: Bool {
+        isSets ? current.setsLost > current.setsWon : current.opponentScore > current.teamScore
+    }
+
+    private func side(name: String, value: Int, leads: Bool) -> some View {
+        VStack(spacing: 2) {
+            Text(name.uppercased())
+                .font(.caption2.bold())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text("\(value)")
+                .font(.system(size: 46, weight: .heavy, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(leads ? Color.accentColor : Color.primary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func clockString(_ seconds: Int) -> String {
+        String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 }
