@@ -9,8 +9,15 @@ rocklab-technologies.jpg   RockLab Technologies LLC lockup, cropped tight to the
                            1536x1024 2.1MB PNG that was mostly background - at
                            header size the uncropped art read as a tiny dark
                            rectangle, so it is cropped instead.
-hero-athletics.jpg         RockLab Athletics stadium banner (left panel only),
-                           1200px / 82% JPEG / 363KB.
+hero-technologies.jpg      RockLab Technologies lockup art, 1200px / 80% JPEG / 330KB,
+                           used as the hero image. Full art (R mark + ROCKLAB +
+                           TECHNOLOGIES LLC + Innovate/Develop/Empower tagline).
+                           The container is ~2.2:1 against a 3:2 image, so CSS
+                           crops it at object-position 28% to keep the lockup
+                           clear of both edges.
+brand/hero-athletics.jpg   The RockLab Athletics stadium banner, moved to /brand/
+                           because the hero no longer uses it. Kept out of
+                           landing/assets so it is not uploaded on every deploy.
 rocklab-athletics-logo.png Mountain logo for the Athletics product card.
 rocklab-athletics-icon.png Neon app icon, 180px, spare.
 volleyengine-logo.png      VolleyEngine Pro logo, from their own site.

@@ -33,7 +33,7 @@ The app's sign-in page links back to the company site, so the two are bidirectio
 | File | Source | Used for |
 | --- | --- | --- |
 | `rocklab-technologies.jpg` | your lockup, cropped to the art and resized to 620px | header logo |
-| `hero-athletics.jpg` | "Rocklab Athletics Stadium Branding" (left panel, 1200px, 82% JPEG) | hero image |
+| `hero-technologies.jpg` | your lockup art, 1200px / 80% JPEG | hero image |
 | `rocklab-athletics-logo.png` | "Rocklab Athletics Mountain Logo" | RockLab Athletics product card |
 | `rocklab-athletics-icon.png` | "RockLab Athletics Neon App Icon" (180px) | spare app-icon asset, not yet placed |
 | `volleyengine-logo.png` | volleyenginepro.com/images/logo.png | VolleyEngine Pro product card |
@@ -46,13 +46,21 @@ only web-sized copies are committed, which is 2.1MB down to 100KB for the logo a
 
 Two crops were necessary rather than optional:
 
-- **The logo.** The source is 1536x1024 and mostly neon background. Dropped into a
-  54px-tall header unchanged it reads as a small dark rectangle. Cropping tight to
-  R + ROCKLAB + TECHNOLOGIES LLC + tagline gives a ~1.95:1 lockup that fills the
-  space.
-- **The hero.** The stadium branding file is a composite with a white product-shot
-  panel on the right third. Only the left panel is used; otherwise a white block
-  would have sat in the middle of a dark page.
+- **The logo in the header.** The source is 1536x1024 and mostly neon background.
+  Dropped into a 54px-tall header unchanged it reads as a small dark rectangle.
+  Cropping tight to R + ROCKLAB + TECHNOLOGIES LLC + tagline gives a ~1.95:1
+  lockup that fills the space.
+- **The hero.** The hero container is about 2.2:1 while the art is 3:2, so `cover`
+  always trims top and bottom. `object-position: center 28%` was chosen by
+  working out which window keeps the whole lockup visible — the naive centre
+  position clipped the top of the R.
+
+The Innovate / Develop / Empower pill row was removed from the markup when the
+hero switched to this art: the tagline is already set into the image, and
+repeating it directly underneath looked like a mistake.
+
+`brand/hero-athletics.jpg` holds the stadium banner the hero used to show. It
+lives outside `landing/` so it is preserved but not re-uploaded on every deploy.
 
 > Note: `RockLabAthletics/Assets.xcassets/landing/rocklab-technologies.PNG` is still
 > inside the iOS asset catalog. It is not a valid asset set (no `Contents.json`), so
