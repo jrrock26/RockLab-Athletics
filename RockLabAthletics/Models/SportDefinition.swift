@@ -20,6 +20,57 @@ struct SportDefinition: Hashable {
 struct ClockConfig: Hashable {
     let periods: [String]
     let minutesPerPeriod: Int
+    /// Length of an overtime period. Untimed sports never reach this.
+    var overtimeMinutes: Int = 5
+
+    /// Name of any period index, including ones past the configured list.
+    ///
+    /// Overtime is not pre-declared per sport because the number of OTs is not
+    /// knowable — a game can go to a second or third. Anything beyond the
+    /// regulation periods is labelled OT1, OT2, …
+    func label(forPeriod index: Int) -> String {
+        if index < periods.count { return periods[index] }
+        return "OT\(index - periods.count + 1)"
+    }
+
+    func isOvertime(_ index: Int) -> Bool { index >= periods.count }
+
+    func seconds(forPeriod index: Int) -> Int {
+        (isOvertime(index) ? overtimeMinutes : minutesPerPeriod) * 60
+    }
+}
+
+/// One way a play can put points on the board.
+///
+/// This is what makes live scoring meaningful to someone watching: "Ava Reyes —
+/// Three (+3)" tells the story, "+3 to us" does not. Each action also names the
+/// stat it credits, so logging a play updates the scoreboard and the box score
+/// from one tap instead of two.
+struct ScoringAction: Identifiable, Hashable {
+    let key: String
+    let name: String
+    /// Points this play puts on the board.
+    let points: Int
+    /// Stat column to credit, if any.
+    let statKey: String?
+    /// Volleyball and tennis: an error gives the point to the OTHER side. The
+    /// scorer still logs it against our player, which is the honest record.
+    let awardsOpponent: Bool
+
+    var id: String { key }
+
+    init(key: String, name: String, points: Int, statKey: String? = nil, awardsOpponent: Bool = false) {
+        self.key = key
+        self.name = name
+        self.points = points
+        self.statKey = statKey
+        self.awardsOpponent = awardsOpponent
+    }
+
+    /// "+3" / "+1 to them" — short label for a button.
+    var shortLabel: String {
+        awardsOpponent ? "+\(points) them" : "+\(points)"
+    }
 }
 
 /// Golf-specific scoring rules.
@@ -49,6 +100,50 @@ enum SportDefinitions {
         case "ice_hockey": return ClockConfig(periods: ["1st Period", "2nd Period", "3rd Period"], minutesPerPeriod: 17)
         case "water_polo": return ClockConfig(periods: ["Q1", "Q2", "Q3", "Q4"], minutesPerPeriod: 7)
         default: return nil
+        }
+    }
+
+    /// The plays a scorer can log for this sport, and what each is worth.
+    ///
+    /// Kept separate from `stats` on purpose: stats describe what a player
+    /// accumulated over a season, while these describe a moment in one game.
+    /// "Kill" is a stat *and* a point; "Dig" is a stat and worth nothing.
+    static func scoringActions(for sportId: String) -> [ScoringAction] {
+        switch sportId {
+        case "basketball":
+            return [
+                ScoringAction(key: "ft", name: "Free throw", points: 1, statKey: "points"),
+                ScoringAction(key: "two", name: "Two", points: 2, statKey: "points"),
+                ScoringAction(key: "three", name: "Three", points: 3, statKey: "points"),
+            ]
+        case "football":
+            return [
+                ScoringAction(key: "td", name: "Touchdown", points: 6, statKey: "touchdowns"),
+                ScoringAction(key: "xp", name: "Extra point", points: 1),
+                ScoringAction(key: "two_pt", name: "2-pt conversion", points: 2),
+                ScoringAction(key: "fg", name: "Field goal", points: 3),
+                ScoringAction(key: "safety", name: "Safety", points: 2),
+            ]
+        case "volleyball":
+            return [
+                ScoringAction(key: "kill", name: "Kill", points: 1, statKey: "kills"),
+                ScoringAction(key: "ace", name: "Ace", points: 1, statKey: "aces"),
+                ScoringAction(key: "block", name: "Block", points: 1, statKey: "blocks"),
+                ScoringAction(key: "error", name: "Error", points: 1, statKey: "errors", awardsOpponent: true),
+            ]
+        case "soccer":
+            return [
+                ScoringAction(key: "goal", name: "Goal", points: 1, statKey: "goals"),
+                ScoringAction(key: "own_goal", name: "Own goal", points: 1, awardsOpponent: true),
+            ]
+        case "lacrosse", "water_polo":
+            return [ScoringAction(key: "goal", name: "Goal", points: 1, statKey: "goals")]
+        case "field_hockey", "ice_hockey":
+            return [ScoringAction(key: "goal", name: "Goal", points: 1, statKey: "goals")]
+        case "baseball", "softball":
+            return [ScoringAction(key: "run", name: "Run scored", points: 1, statKey: "runs")]
+        default:
+            return [ScoringAction(key: "point", name: "Point", points: 1)]
         }
     }
 

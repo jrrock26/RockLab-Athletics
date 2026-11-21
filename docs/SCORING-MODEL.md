@@ -187,3 +187,63 @@ Still to build:
 
 Done: wrestling (`DualMeetScoringView`) and tennis (`TennisScoringView`). Both
 derive the team score from their line/bout list and feed the career ledger.
+
+## Play by play
+
+A scoreboard that only shows two numbers tells an audience nothing, and a scorer
+asked to do two things (log the stat, then nudge the score) does the second one
+wrong. Both problems have one fix: **log the play, not the point.**
+
+- `SportDefinitions.scoringActions(for:)` lists each sport's plays with their
+  point value and the stat they credit — basketball 1/2/3, football TD/FG/safety/
+  XP/2-pt, volleyball kill/ace/block/error, soccer and hockey goal, etc.
+- `GamePlay` is one line: period, clock, player, action, points, and the side the
+  points went to. Stored in `games/{gameId}/plays`.
+- Tapping an action writes three things in **one batch** (`FirestoreService
+  .recordPlay`): the play document, the game score, and the player's stat. A play
+  that scores without crediting the stat corrupts the season line; a score that
+  moves without a play cannot be undone.
+- **Errors credit the opponent.** `ScoringAction.awardsOpponent` is the only place
+  that decides, so a volleyball error logged against our player adds the point to
+  their side — the honest record.
+- Simple-mode volunteers (`scoringMode == "simple"`) still log plays for the
+  scoreboard, but `creditStats: false` keeps them out of the box score. The plays
+  feed shows the audience what happened; the stat sheet stays the coach's.
+- **Undo** deletes the newest play and reverses both the score and the stat.
+  A mis-tap is the most common thing a volunteer does.
+
+Volleyball passes `movesScore: false`: its score lives in `sets`, so a play writes
+the play and the stat but leaves the running total alone.
+
+## Clocks, overtime, and time correction
+
+`ClockConfig` now labels any period index, not just the declared ones — past the
+regulation list it returns `OT1`, `OT2`, … with `overtimeMinutes` per period.
+Nothing pre-declares how many overtimes a game needs, because nobody knows.
+
+The scorer can also move time without ending a period (−1:00 / −10 s / +10 s /
++1:00). Gym clocks are wrong more often than they are right, and resetting a
+period to fix a two-second drift is not a fix.
+
+## Handing the job to a volunteer
+
+`requestGameStatistician` already existed, but the only entry point was a swipe
+action on a game row, so coaches who did not know it was there never found it.
+There is now a visible **Ask for a volunteer scorer** row in the Scoring help
+section, listing the games still open. The grant stays per-game
+(`games/{gameId}/scorers/{uid}`), so a parent who helps once does not keep scoring
+rights all season.
+
+## Moving a player between rosters
+
+`TransferPlayerSheet` (roster swipe → Transfer) puts an existing entry on another
+team's roster, in any sport. Two different needs look identical here and are kept
+apart deliberately:
+
+- **Transfer** — they moved from JV to varsity; the entry leaves the old roster.
+- **Multi-sport athlete** — they belong on both, linked by the same account. This
+  is the default, because deleting a player is the destructive branch.
+
+Position is chosen per target team rather than copied: `QB` on a basketball
+roster is worse than blank, since coaches read that column.
+

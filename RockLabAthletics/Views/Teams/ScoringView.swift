@@ -46,6 +46,8 @@ struct SetsScoringView: View {
     @State private var access = TeamAccess()
     @State private var vm = StatsViewModel()
     @State private var statEntry: RosterEntry?
+    /// Player the next logged play belongs to; nil means "Team".
+    @State private var playPlayer: RosterEntry?
     @State private var scoringMode = "simple"
     @State private var isGameScorer = false
     @State private var errorMessage = ""
@@ -91,6 +93,22 @@ struct SetsScoringView: View {
                 }
             }
 
+            if !vm.plays.isEmpty {
+                Section("Play by play") {
+                    ForEach(vm.plays.prefix(10)) { play in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(play.summary).font(.footnote)
+                            Spacer()
+                            if !play.isOurs {
+                                Text("them")
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                }
+            }
+
             if canTrackPlayerStats && !vm.roster.isEmpty {
                 Section("Player stats") {
                     ForEach(vm.roster) { entry in
@@ -126,6 +144,42 @@ struct SetsScoringView: View {
                 }
             } else {
                 Section("Set \(sets.count + 1)") {
+                    Menu {
+                        Button("Team (no player)") { playPlayer = nil }
+                        ForEach(vm.roster) { entry in
+                            Button(rosterLabel(entry)) { playPlayer = entry }
+                        }
+                    } label: {
+                        HStack {
+                            Text("Player")
+                            Spacer()
+                            Text(playPlayer.map(rosterLabel) ?? "Team")
+                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 8)], spacing: 8) {
+                        ForEach(SportDefinitions.scoringActions(for: sportId)) { action in
+                            Button {
+                                Task { await logPlay(action) }
+                            } label: {
+                                VStack(spacing: 1) {
+                                    Text(action.name).font(.footnote.weight(.semibold))
+                                    Text(action.shortLabel).font(.caption2).opacity(0.8)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(action.awardsOpponent ? .orange : .accentColor)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .disabled(!canScore)
+
                     Stepper("Us: \(usScore)", value: $usScore, in: 0...99)
                     Stepper("\(game.opponent): \(themScore)", value: $themScore, in: 0...99)
                     Button(busy ? "Saving…" : "Save set") { Task { await saveSet() } }
@@ -154,6 +208,7 @@ struct SetsScoringView: View {
         }
         .task {
             sets = game.sets
+            await vm.loadPlays(gameId: game.id)
             access = await FirestoreService.shared.teamAccess(
                 teamId: teamId, userId: auth.user?.id, isAd: auth.user?.role == .ad)
             await vm.beginGame(game, teamId: teamId)
@@ -169,6 +224,31 @@ struct SetsScoringView: View {
         let current = vm.stats[entry.id] ?? [:]
         let stats = SportDefinitions.definition(for: sportId).stats
         return stats.prefix(2).map { "\(current[$0.key] ?? 0) \($0.name)" }.joined(separator: " · ")
+    }
+
+    private func rosterLabel(_ entry: RosterEntry) -> String {
+        entry.jerseyNumber.isEmpty ? entry.playerName : "#\(entry.jerseyNumber) \(entry.playerName)"
+    }
+
+    /// Logs a volleyball play into the current set.
+    ///
+    /// The point lands on the live set score, not on the game's running total —
+    /// a set-based match has no meaningful running total, so `movesScore` is off
+    /// and the set score is carried by the Steppers and "Save set".
+    private func logPlay(_ action: ScoringAction) async {
+        if action.awardsOpponent {
+            themScore += action.points
+        } else {
+            usScore += action.points
+        }
+        await vm.recordPlay(
+            gameId: game.id,
+            action: action,
+            entry: playPlayer,
+            period: sets.count,
+            clockSeconds: 0,
+            creditStats: canTrackPlayerStats,
+            movesScore: false)
     }
 
     private func saveSet() async {

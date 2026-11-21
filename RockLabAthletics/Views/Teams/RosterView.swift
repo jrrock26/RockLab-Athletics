@@ -58,6 +58,8 @@ struct RosterView: View {
     @State private var editingEntry: RosterEntry?
     @State private var injuryEntry: RosterEntry?
     @State private var promoteEntry: RosterEntry?
+    /// Player being added to a different team or sport.
+    @State private var transferEntry: RosterEntry?
 
     /// Eligibility is visible only to AD, coaches, and staff — never to
     /// players, parents, or followers.
@@ -122,6 +124,12 @@ struct RosterView: View {
                 .swipeActions(edge: .trailing) {
                     if access.canManageTeam {
                         Button {
+                            transferEntry = entry
+                        } label: {
+                            Label("Transfer", systemImage: "arrow.left.arrow.right")
+                        }
+                        .tint(.indigo)
+                        Button {
                             promoteEntry = entry
                         } label: {
                             Label("Move", systemImage: "arrow.up.forward.circle")
@@ -176,6 +184,17 @@ struct RosterView: View {
         }
         .sheet(item: $promoteEntry) { entry in
             PromotePlayerSheet(entry: entry, fromTeamId: teamId, sportId: sportId) {
+                Task { await vm.loadRoster(teamId: teamId, includeEligibility: canViewEligibility) }
+            }
+        }
+        .sheet(item: $transferEntry) { entry in
+            TransferPlayerSheet(
+                entry: entry,
+                fromTeamId: teamId,
+                schoolId: auth.user?.schoolId,
+                userId: auth.user?.id ?? "",
+                teamIds: auth.user?.teamIds ?? []
+            ) {
                 Task { await vm.loadRoster(teamId: teamId, includeEligibility: canViewEligibility) }
             }
         }
@@ -398,6 +417,7 @@ private struct PromotePlayerSheet: View {
                 fromTeamId: fromTeamId,
                 toTeamId: team.id)
             let existed = result["existed"] as? Bool ?? false
+
             if !existed { onDone() }
             dismiss()
         } catch {
@@ -407,3 +427,141 @@ private struct PromotePlayerSheet: View {
     }
 }
 
+/// Puts an existing player onto another team's roster.
+///
+/// Two different needs look the same on this screen and must not be conflated:
+/// a **transfer** (they left the JV team for varsity) removes them from this
+/// roster, while a **multi-sport athlete** belongs on both. The toggle decides,
+/// and defaults to keeping both because deleting a player from a roster is the
+/// destructive branch.
+struct TransferPlayerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let entry: RosterEntry
+    let fromTeamId: String
+    let schoolId: String?
+    let userId: String
+    let teamIds: [String]
+    let onDone: () -> Void
+
+    @State private var teams: [Team] = []
+    @State private var targetId = ""
+    @State private var position = ""
+    @State private var keepOriginal = true
+    @State private var busy = false
+    @State private var errorMessage = ""
+
+    private var target: Team? { teams.first { $0.id == targetId } }
+
+    private var targetPositions: [String] {
+        guard let target else { return [] }
+        return SportDefinitions.definition(for: target.sportId).positions
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Player") {
+                    Text(entry.playerName)
+                    if !entry.jerseyNumber.isEmpty {
+                        Text("Jersey #\(entry.jerseyNumber)").foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Add to") {
+                    if teams.isEmpty {
+                        Text("No other teams available.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(teams) { team in
+                        Button {
+                            targetId = team.id
+                            position = ""
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("\(team.sportName) — \(team.level)")
+                                        .foregroundStyle(.primary)
+                                    Text(team.season)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if targetId == team.id {
+                                    Image(systemName: "checkmark").foregroundStyle(.tint)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if target != nil {
+                    Section("Position on the new team") {
+                        Picker("Position", selection: $position) {
+                            Text("None").tag("")
+                            ForEach(targetPositions, id: \.self) { name in
+                                Text(name).tag(name)
+                            }
+                        }
+                    }
+
+                    Section {
+                        Toggle("Keep on this roster too", isOn: $keepOriginal)
+                    } footer: {
+                        Text(keepOriginal
+                             ? "For a multi-sport athlete: the same player appears on both rosters and signs in once."
+                             : "The player is removed from this roster once added to the new one.")
+                    }
+                }
+
+                if !errorMessage.isEmpty {
+                    Section { Text(errorMessage).font(.footnote).foregroundStyle(.red) }
+                }
+            }
+            .navigationTitle("Add to another team")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(busy ? "Saving…" : "Add") {
+                        Task { await transfer() }
+                    }
+                    .disabled(busy || target == nil)
+                }
+            }
+            .task { await loadTeams() }
+        }
+    }
+
+    private func loadTeams() async {
+        var loaded: [Team] = []
+        if let schoolId, !schoolId.isEmpty {
+            loaded = (try? await FirestoreService.shared.fetchTeams(schoolId: schoolId)) ?? []
+        }
+        if loaded.isEmpty {
+            loaded = (try? await FirestoreService.shared.fetchTeams(forUser: userId, teamIds: teamIds)) ?? []
+        }
+        teams = loaded.filter { $0.id != fromTeamId }
+        targetId = teams.first?.id ?? ""
+    }
+
+    private func transfer() async {
+        guard let target else { return }
+        busy = true
+        errorMessage = ""
+        do {
+            try await FirestoreService.shared.transferRosterEntry(
+                entry: entry,
+                fromTeamId: fromTeamId,
+                toTeamId: target.id,
+                newPosition: position,
+                keepOriginal: keepOriginal)
+            onDone()
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        busy = false
+    }
+}

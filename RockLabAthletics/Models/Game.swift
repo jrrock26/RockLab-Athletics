@@ -65,6 +65,114 @@ struct Game: Identifiable, Codable {
     }
 }
 
+/// One logged play: the play-by-play line that gives the audience something to
+/// follow. Stored in `games/{gameId}/plays` so a single play can be deleted again
+/// when a scorer mis-taps, without rewriting an array on the game document.
+struct GamePlay: Identifiable, Codable, Hashable {
+    let id: String
+    /// Period index at the time of the play.
+    var period: Int
+    var clockSeconds: Int
+    /// Which side the points went to: "us" or "them".
+    var side: String
+    var actionKey: String
+    var actionName: String
+    var points: Int
+    var rosterEntryId: String
+    var playerName: String
+    /// Stat column this play credits, if any. Stored on the play so an undo can
+    /// reverse exactly what the play wrote.
+    var statKey: String?
+    var createdAt: Date
+
+    init(id: String = UUID().uuidString,
+         period: Int,
+         clockSeconds: Int,
+         side: String,
+         actionKey: String,
+         actionName: String,
+         points: Int,
+         rosterEntryId: String = "",
+         playerName: String = "",
+         statKey: String? = nil,
+         createdAt: Date = Date()) {
+        self.id = id
+        self.period = period
+        self.clockSeconds = clockSeconds
+        self.side = side
+        self.actionKey = actionKey
+        self.actionName = actionName
+        self.points = points
+        self.rosterEntryId = rosterEntryId
+        self.playerName = playerName
+        self.statKey = statKey
+        self.createdAt = createdAt
+    }
+
+    /// Builds a play from a sport action without the caller negating points by
+    /// hand — `awardsOpponent` is the single place that decides whose column
+    /// moves, so an error can never be credited to the wrong team.
+    init(action: ScoringAction, entry: RosterEntry?, period: Int, clockSeconds: Int) {
+        self.init(
+            period: period,
+            clockSeconds: clockSeconds,
+            side: action.awardsOpponent ? "them" : "us",
+            actionKey: action.key,
+            actionName: action.name,
+            points: action.points,
+            rosterEntryId: entry?.id ?? "",
+            playerName: entry?.playerName ?? "",
+            statKey: action.statKey)
+    }
+
+    init?(data: [String: Any], id: String) {
+        guard let actionName = data["actionName"] as? String else { return nil }
+        self.id = id
+        self.period = data["period"] as? Int ?? 0
+        self.clockSeconds = data["clockSeconds"] as? Int ?? 0
+        self.side = data["side"] as? String ?? "us"
+        self.actionKey = data["actionKey"] as? String ?? ""
+        self.actionName = actionName
+        self.points = data["points"] as? Int ?? 0
+        self.rosterEntryId = data["rosterEntryId"] as? String ?? ""
+        self.playerName = data["playerName"] as? String ?? ""
+        self.statKey = data["statKey"] as? String
+        self.createdAt = (data["createdAt"] as? Double).map { Date(timeIntervalSince1970: $0) } ?? Date()
+    }
+
+    var asDictionary: [String: Any] {
+        var data: [String: Any] = [
+            "period": period,
+            "clockSeconds": clockSeconds,
+            "side": side,
+            "actionKey": actionKey,
+            "actionName": actionName,
+            "points": points,
+            "rosterEntryId": rosterEntryId,
+            "playerName": playerName,
+            "createdAt": createdAt.timeIntervalSince1970,
+        ]
+        if let statKey { data["statKey"] = statKey }
+        return data
+    }
+
+    var isOurs: Bool { side == "us" }
+
+    /// "Q2 4:32" — the clock reading at the moment of the play.
+    func stampLabel(_ clock: ClockConfig?) -> String {
+        let periodLabel = clock?.label(forPeriod: period) ?? "P\(period + 1)"
+        let mm = clockSeconds / 60
+        let ss = clockSeconds % 60
+        return String(format: "%@ %d:%02d", periodLabel, mm, ss)
+    }
+
+    /// "Ava Reyes — Three +3"
+    var summary: String {
+        let who = playerName.isEmpty ? "Team" : playerName
+        return "\(who) — \(actionName) +\(points)"
+    }
+}
+
 /// A single line in a tennis team match.
 ///
 /// A team match is decided by lines, not by a running score: each singles or

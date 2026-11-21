@@ -264,6 +264,15 @@ service cloud.firestore {
         allow read: if signedIn();
         allow write: if false;
       }
+
+      // Play by play. Readable by any signed-in user so a follower can watch the
+      // game unfold; written only by the people allowed to score it.
+      match /plays/{playId} {
+        allow read: if signedIn();
+        allow create, delete: if isAd() || isCoachOf(gameTeam(gameId))
+          || staffHasPerm(gameTeam(gameId), 'statistician')
+          || isGameScorer(gameId);
+      }
     }
 
     // Organization-owned assets (facilities, fields, buses) and their bookings.

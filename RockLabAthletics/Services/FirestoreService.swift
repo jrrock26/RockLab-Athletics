@@ -433,6 +433,52 @@ struct FirestoreService {
         try await db.collection("teams").document(teamId).collection("roster").document(entryId).delete()
     }
 
+    /// Puts a player on another team's roster — the same school, a different team
+    /// or a different sport.
+    ///
+    /// `keepOriginal` is true for a multi-sport athlete: one person, two rosters,
+    /// linked by the same account. False is a transfer, where the entry leaves the
+    /// old roster.
+    ///
+    /// `newPosition` is passed in rather than copied because positions do not
+    /// transfer: "QB" on a basketball roster is worse than a blank, since coaches
+    /// read that column.
+    func transferRosterEntry(
+        entry: RosterEntry,
+        fromTeamId: String,
+        toTeamId: String,
+        newPosition: String,
+        keepOriginal: Bool
+    ) async throws {
+        let batch = db.batch()
+
+        let targetRef = db.collection("teams").document(toTeamId).collection("roster").document()
+        var data: [String: Any] = [
+            "teamId": toTeamId,
+            "playerName": entry.playerName,
+            "jerseyNumber": entry.jerseyNumber,
+            "position": newPosition,
+            "parentEmail": entry.parentEmail,
+            "parentName": entry.parentName,
+            "parentPhone": entry.parentPhone,
+            "movedFromTeamId": fromTeamId,
+            "createdAt": FieldValue.serverTimestamp(),
+        ]
+        if let userId = entry.userId {
+            data["userId"] = userId
+        } else {
+            data["userId"] = NSNull()
+        }
+        batch.setData(data, forDocument: targetRef)
+
+        if !keepOriginal {
+            batch.deleteDocument(
+                db.collection("teams").document(fromTeamId).collection("roster").document(entry.id))
+        }
+
+        try await batch.commit()
+    }
+
     func updateRosterEntry(teamId: String, entryId: String, playerName: String, jerseyNumber: String, position: String) async throws {
         try await db.collection("teams").document(teamId).collection("roster").document(entryId).setData([
             "playerName": playerName,
@@ -891,6 +937,88 @@ struct FirestoreService {
 
     func updateGameClock(gameId: String, period: Int, clockSeconds: Int) async throws {
         try await db.collection("games").document(gameId).setData(["period": period, "clockSeconds": clockSeconds], merge: true)
+    }
+
+    // MARK: - Play by play
+
+    /// Logs one play: creates the play document, moves the score, and credits the
+    /// stat — in a single batch.
+    ///
+    /// These three have to move together. A play that scores without crediting the
+    /// stat silently corrupts the player's season line, and a score that moves
+    /// without a play leaves the scorer unable to undo a mis-tap.
+    ///
+    /// `teamScore`/`opponentScore` are nil for set-based sports: volleyball's score
+    /// lives in the `sets` array, so writing the running total from a play would
+    /// overwrite a value nobody is reading with one that is wrong mid-set.
+    func recordPlay(
+        gameId: String,
+        play: GamePlay,
+        teamScore: Int?,
+        opponentScore: Int?,
+        statEntryId: String?,
+        statKey: String?,
+        playerName: String
+    ) async throws {
+        let batch = db.batch()
+
+        let gameRef = db.collection("games").document(gameId)
+        if let teamScore, let opponentScore {
+            batch.setData([
+                "teamScore": teamScore,
+                "opponentScore": opponentScore,
+                "status": GameStatus.live.rawValue,
+            ], forDocument: gameRef, merge: true)
+        }
+
+        let playRef = gameRef.collection("plays").document(play.id)
+        batch.setData(play.asDictionary, forDocument: playRef)
+
+        if let statEntryId, let statKey {
+            let statRef = gameRef.collection("stats").document(statEntryId)
+            batch.setData([
+                "gameId": gameId,
+                "rosterEntryId": statEntryId,
+                "playerName": playerName,
+                statKey: FieldValue.increment(Int64(play.points)),
+            ], forDocument: statRef, merge: true)
+        }
+
+        try await batch.commit()
+    }
+
+    /// Removes a play and rolls the score (and stat) back.
+    func deletePlay(
+        gameId: String,
+        play: GamePlay,
+        teamScore: Int,
+        opponentScore: Int,
+        statKey: String?
+    ) async throws {
+        let batch = db.batch()
+        let gameRef = db.collection("games").document(gameId)
+
+        batch.setData([
+            "teamScore": teamScore,
+            "opponentScore": opponentScore,
+        ], forDocument: gameRef, merge: true)
+        batch.deleteDocument(gameRef.collection("plays").document(play.id))
+
+        if let statKey, !play.rosterEntryId.isEmpty {
+            batch.setData([
+                statKey: FieldValue.increment(Int64(-play.points)),
+            ], forDocument: gameRef.collection("stats").document(play.rosterEntryId), merge: true)
+        }
+
+        try await batch.commit()
+    }
+
+    func fetchPlays(gameId: String, limit: Int = 40) async throws -> [GamePlay] {
+        let snapshot = try await db.collection("games").document(gameId).collection("plays")
+            .order(by: "createdAt", descending: true)
+            .limit(to: limit)
+            .getDocuments()
+        return snapshot.documents.compactMap { GamePlay(data: $0.data(), id: $0.documentID) }
     }
 
     func setGolfHoles(gameId: String, rosterEntryId: String, playerName: String, holes: [Int]) async throws {

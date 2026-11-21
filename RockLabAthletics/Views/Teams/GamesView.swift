@@ -22,8 +22,26 @@ struct GamesView: View {
 
     var body: some View {
         List {
-            if !openRequests.isEmpty || !myClaims.isEmpty {
+            if access.canManageTeam || !openRequests.isEmpty || !myClaims.isEmpty {
                 Section("Scoring help") {
+                    // The request used to live only in a swipe action, which meant
+                    // coaches who did not already know it existed never found it.
+                    if access.canManageTeam {
+                        Menu {
+                            let candidates = vm.games.filter { $0.status != .final }
+                            if candidates.isEmpty {
+                                Text("No games to request scoring for.")
+                            }
+                            ForEach(candidates) { game in
+                                Button("\(game.isHome ? "vs" : "@") \(game.opponent) · \(game.date.formatted(date: .abbreviated, time: .omitted))") {
+                                    Task { await askForScorer(game) }
+                                }
+                            }
+                        } label: {
+                            Label("Ask for a volunteer scorer", systemImage: "person.badge.clock")
+                        }
+                        .disabled(!scorerBusy.isEmpty)
+                    }
                     ForEach(openRequests) { req in
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
