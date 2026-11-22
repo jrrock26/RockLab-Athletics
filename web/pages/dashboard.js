@@ -5,6 +5,7 @@ import { db, functions } from '../lib/firebase';
 import { useAuth } from './index';
 import AppShell from '../components/AppShell';
 import AddTeam from '../components/AddTeam';
+import DashboardSummary from '../components/DashboardSummary';
 import Link from 'next/link';
 
 export default function Dashboard() {
@@ -66,8 +67,9 @@ export default function Dashboard() {
 
   return (
     <AppShell title={profile.schoolName || 'Your school'} profile={profile} user={user}>
-      <h1>{profile.schoolName || 'Your school'}</h1>
-      <p className="muted">
+      <DashboardSummary schoolId={profile.schoolId} teams={teams} profile={profile} />
+
+      <p className="muted small">
         Plan: <strong>{entitlement?.plan || 'free'}</strong>
         {entitlement && ` · ${teams.length}/${entitlement.limits.teams} teams`}
       </p>

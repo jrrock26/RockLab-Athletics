@@ -443,6 +443,51 @@ a { color: var(--accent); }
 .school-main { flex: 1; min-width: 0; }
 .school-main strong { font-size: 15px; }
 
+/* ---- Dashboard: exceptions first, inventory below ---- */
+
+.dash-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.dash-head h1 { margin: 0; font-size: 28px; letter-spacing: -0.02em; }
+.dash-logo {
+  width: 58px; height: 58px;
+  border-radius: 14px;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  background: #1e2634;
+}
+.dash-logo.placeholder {
+  display: grid; place-items: center;
+  font-size: 24px; font-weight: 800; color: #c3ccdb;
+}
+
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.stat-card {
+  display: grid;
+  gap: 2px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(21, 26, 35, 0.85);
+  color: var(--text);
+  text-decoration: none;
+}
+.stat-card strong { font-size: 26px; letter-spacing: -0.02em; }
+.stat-card.attention { border-color: #4a3a1e; background: rgba(36, 28, 15, 0.86); }
+.stat-card.attention strong { color: #ffb057; }
+
+.attention-card { border-color: #4a3a1e; }
+
 @media (max-width: 560px) {
   .cal-cell { min-height: 48px; padding: 4px; }
   .cal-date { font-size: 11px; }
