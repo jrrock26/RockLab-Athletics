@@ -3,6 +3,7 @@ import { collection, getDocs, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../lib/firebase';
 import { useAuth } from './index';
+import AppShell from '../components/AppShell';
 import Link from 'next/link';
 
 export default function Dashboard() {
@@ -60,7 +61,7 @@ export default function Dashboard() {
   }
 
   return (
-    <main className="page">
+    <AppShell title={profile.schoolName || 'Your school'} profile={profile} user={user}>
       <h1>{profile.schoolName || 'Your school'}</h1>
       <p className="muted">
         Plan: <strong>{entitlement?.plan || 'free'}</strong>
@@ -81,15 +82,18 @@ export default function Dashboard() {
       <section className="card">
         <h2>Teams</h2>
         {teams.length === 0 && <p className="muted">No teams yet. Coaches who start a team will show up here.</p>}
-        <ul>
+        <ul className="team-grid">
           {teams.map((t) => (
             <li key={t.id}>
-              <strong>{t.sportName} {t.level}</strong>
-              <span className="muted"> · {t.season} {t.gender}</span>
+              <Link className="team-card" href={`/team/${t.id}`}>
+                <strong>{t.sportName} {t.level}</strong>
+                <span className="muted"> · {t.season} {t.gender}</span>
+                <span className="small accent">Open team →</span>
+              </Link>
             </li>
           ))}
         </ul>
       </section>
-    </main>
+    </AppShell>
   );
 }
