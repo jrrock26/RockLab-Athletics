@@ -159,8 +159,15 @@ service cloud.firestore {
       // Self-signup may claim an unprivileged role. Claiming 'ad' requires the
       // school in the same write to already name this user as its AD — which is
       // exactly what onboarding creates a moment earlier.
+      //
+      // `schoolId` may NOT be asserted by a self-signup. It is the field several rules use
+      // to decide what a stranger may read, and a client that chooses its own schoolId can
+      // claim membership of any school in the list. Membership of a school is assigned by
+      // that school — through an invitation, an approved join request, or an AD — never
+      // written by the account itself.
       allow create: if signedIn() && uid() == userId && (
-        request.resource.data.role in ['follower','player','parent','coach']
+        (request.resource.data.role in ['follower','player','parent','coach']
+          && (!('schoolId' in request.resource.data) || request.resource.data.schoolId == ''))
         || (request.resource.data.role == 'ad'
             && request.resource.data.schoolId is string
             && exists(/databases/$(database)/documents/schools/$(request.resource.data.schoolId))
@@ -170,16 +177,27 @@ service cloud.firestore {
       // A role may only become 'ad' when the write proves school ownership. The
       // check reads the incoming schoolId because onboarding sets role and
       // schoolId together, before the stored document has a school at all.
+      //
+      // For every other self-edit `schoolId` is frozen. This is the fix for a real
+      // escalation: the role list below allows an account to call itself a coach, and
+      // `role() in ['coach','staff'] && mySchoolId() == resource.data.schoolId` is what
+      // grants reading users and players in a school. Without this clause, any signed-in
+      // account could set role coach AND a victim school's id in one write and read that
+      // school's children.
       allow update: if signedIn() && (
         (uid() == userId && (
-          !('role' in request.resource.data)
-          || request.resource.data.role == resource.data.role
-          || request.resource.data.role in ['follower','player','parent','coach']
-          || (request.resource.data.role == 'ad'
-              && request.resource.data.schoolId is string
-              && request.resource.data.schoolId != ''
-              && exists(/databases/$(database)/documents/schools/$(request.resource.data.schoolId))
-              && get(/databases/$(database)/documents/schools/$(request.resource.data.schoolId)).data.adUserId == uid())
+          (request.resource.data.get('role', resource.data.get('role', '')) == 'ad'
+            && request.resource.data.schoolId is string
+            && request.resource.data.schoolId != ''
+            && exists(/databases/$(database)/documents/schools/$(request.resource.data.schoolId))
+            && get(/databases/$(database)/documents/schools/$(request.resource.data.schoolId)).data.adUserId == uid())
+          || (
+            (!('role' in request.resource.data)
+              || request.resource.data.role == resource.data.get('role', '')
+              || request.resource.data.role in ['follower','player','parent','coach'])
+            && (!('schoolId' in request.resource.data)
+              || request.resource.data.schoolId == resource.data.get('schoolId', ''))
+          )
         ))
         || isAd()
       );
