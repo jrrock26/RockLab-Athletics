@@ -426,6 +426,23 @@ a { color: var(--accent); }
 
 .cal-more { font-size: 10px; color: var(--muted); }
 
+/* ---- Directory ---- */
+
+.search input { width: 100%; }
+
+.school-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: rgba(21, 26, 35, 0.82);
+}
+
+.school-main { flex: 1; min-width: 0; }
+.school-main strong { font-size: 15px; }
+
 @media (max-width: 560px) {
   .cal-cell { min-height: 48px; padding: 4px; }
   .cal-date { font-size: 11px; }
