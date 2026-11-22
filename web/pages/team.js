@@ -5,7 +5,7 @@ import { collection, doc, getDoc, getDocs, limit, query, where } from 'firebase/
 import { db } from '../lib/firebase';
 import { useAuth } from './index';
 import AppShell from '../components/AppShell';
-import { personName } from '../lib/portal.mjs';
+import { personName, activeRoster } from '../lib/portal.mjs';
 
 /// A team, as the AD sees it on the web.
 ///
@@ -43,7 +43,10 @@ export default function TeamPage() {
           getDocs(query(collection(db, 'events'), where('teamId', '==', id), limit(50))).catch(() => null),
         ]);
         if (!alive) return;
-        setRoster((r?.docs || []).map((d) => ({ id: d.id, ...d.data() })));
+        // A closed season archives entries rather than deleting them, so the roster this
+        // page means is the unarchived one. Without this, September opens on last
+        // season's names alongside this season's.
+        setRoster(activeRoster((r?.docs || []).map((d) => ({ id: d.id, ...d.data() }))));
         setForms((f?.docs || []).map((d) => ({ id: d.id, ...d.data() })));
         setEvents((e?.docs || []).map((d) => ({ id: d.id, ...d.data() })));
       } catch (err) {

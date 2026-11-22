@@ -28,6 +28,7 @@ import {
   recordFromGames,
   formatRecord,
   displayName,
+  activeRoster,
   formatWhen,
   personName,
   requirementStatus,
@@ -116,7 +117,10 @@ export default function Portal() {
   const loadRoster = useCallback(async (teamId, linkedIds) => {
     try {
       const snap = await getDocs(collection(db, 'teams', teamId, 'roster'));
-      return { entries: snap.docs.map((d) => ({ id: d.id, ...d.data() })), restricted: false };
+      return {
+        entries: activeRoster(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+        restricted: false,
+      };
     } catch (err) {
       // A follower may not list the roster, so ask for exactly what is permitted:
       // entries that name this account, plus any ids the profile links. Querying
@@ -140,7 +144,7 @@ export default function Portal() {
       individual.forEach((snap) => {
         if (snap && snap.exists()) byId.set(snap.id, { id: snap.id, ...snap.data() });
       });
-      return { entries: [...byId.values()], restricted: true };
+      return { entries: activeRoster([...byId.values()]), restricted: true };
     }
   }, []);
 

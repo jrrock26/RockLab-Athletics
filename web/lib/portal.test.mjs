@@ -15,6 +15,8 @@ import {
   myAthletes,
   displayName,
   personName,
+  isArchivedEntry,
+  activeRoster,
   formatWhen,
   portalSummary,
   REQUIREMENT_STATUS,
@@ -144,6 +146,39 @@ test('a guardian with no link sees nobody, and nothing crashes', () => {
 test('a nameless roster entry still renders something honest', () => {
   assert.strictEqual(displayName({ id: 'r1' }), 'Unnamed athlete');
   assert.strictEqual(displayName({ id: 'r1', playerName: '  ' }), 'Unnamed athlete');
+});
+
+// --- roster archival (a closed season marks, never deletes) ----------------
+
+test('an archived entry is not on the roster', () => {
+  const entries = [
+    { id: 'r1', playerName: 'Ada', state: 'active' },
+    { id: 'r2', playerName: 'Grace', state: 'archived', archivedAt: 1 },
+  ];
+  assert.deepStrictEqual(activeRoster(entries).map((e) => e.id), ['r1']);
+});
+
+test('an entry with no state field is still on the roster', () => {
+  // THE load-bearing case. Every roster entry written before seasons existed has no
+  // state at all. If absence meant archived, deploying this would empty every roster
+  // in every school -- and the backfill has never been run.
+  const entries = [{ id: 'r1', playerName: 'Ada' }, { id: 'r2', playerName: 'Grace', state: 'archived' }];
+  assert.deepStrictEqual(activeRoster(entries).map((e) => e.id), ['r1']);
+  assert.strictEqual(isArchivedEntry({ id: 'r1' }), false);
+});
+
+test('only the explicit archived marker counts', () => {
+  assert.strictEqual(isArchivedEntry({ state: 'archived' }), true);
+  assert.strictEqual(isArchivedEntry({ state: 'active' }), false);
+  assert.strictEqual(isArchivedEntry({ state: 'anything else' }), false);
+  assert.strictEqual(isArchivedEntry(null), false);
+  assert.strictEqual(isArchivedEntry(undefined), false);
+});
+
+test('activeRoster tolerates nulls and a missing list', () => {
+  assert.deepStrictEqual(activeRoster(null), []);
+  assert.deepStrictEqual(activeRoster(undefined), []);
+  assert.deepStrictEqual(activeRoster([null, { id: 'r1' }]).map((e) => e.id), ['r1']);
 });
 
 // --- one name from four document shapes ------------------------------------

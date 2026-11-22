@@ -465,9 +465,20 @@ struct FirestoreService {
         return ref.documentID
     }
 
+    /// The roster as the app means it: the people on the team now.
+    ///
+    /// A closed season archives entries instead of deleting them, because stats, injuries,
+    /// form submissions and RSVPs point at those ids. So every read that says "the roster"
+    /// has to exclude the archived ones. Filtering here rather than with
+    /// `whereField("state", isNotEqualTo: "archived")` is deliberate: that query drops any
+    /// document missing the field, and every entry created before seasons existed has no
+    /// `state` at all. Missing means active.
     func fetchRoster(teamId: String) async throws -> [RosterEntry] {
         let snapshot = try await db.collection("teams").document(teamId).collection("roster").getDocuments()
-        return snapshot.documents.compactMap { RosterEntry(id: $0.documentID, data: $0.data()) }
+        return snapshot.documents.compactMap { document in
+            if (document.data()["state"] as? String) == "archived" { return nil }
+            return RosterEntry(id: document.documentID, data: document.data())
+        }
     }
 
     func removeRosterEntry(teamId: String, entryId: String) async throws {
@@ -772,25 +783,135 @@ struct FirestoreService {
             .sorted { $0.date < $1.date }
     }
 
+    /// Live schedule. A coach adding, moving or cancelling an event must land on
+    /// every signed-in family without a refresh — the schedule is the thing parents
+    /// open the app to read.
+    func listenToEvents(teamId: String, onChange: @escaping ([Event]) -> Void) -> ListenerRegistration {
+        db.collection("events")
+            .whereField("teamId", isEqualTo: teamId)
+            .addSnapshotListener { snapshot, _ in
+                guard let snapshot else { return }
+                onChange(snapshot.documents
+                    .compactMap { Event(id: $0.documentID, data: $0.data()) }
+                    .sorted { $0.date < $1.date })
+            }
+    }
+
+    /// The follower counterpart: followers may only read game documents, so their
+    /// listener must carry the type filter or the whole query is rejected.
+    func listenToGameEvents(teamId: String, onChange: @escaping ([Event]) -> Void) -> ListenerRegistration {
+        db.collection("events")
+            .whereField("teamId", isEqualTo: teamId)
+            .whereField("type", isEqualTo: EventType.game.rawValue)
+            .addSnapshotListener { snapshot, _ in
+                guard let snapshot else { return }
+                onChange(snapshot.documents
+                    .compactMap { Event(id: $0.documentID, data: $0.data()) }
+                    .sorted { $0.date < $1.date })
+            }
+    }
+
+    /// Live team forms. Publishing a form is the moment a family becomes obligated,
+    /// so it has to arrive the same way an announcement does.
+    func listenToTeamForms(teamId: String, publishedOnly: Bool = false, onChange: @escaping ([TeamForm]) -> Void) -> ListenerRegistration {
+        var query: Query = db.collection("teams").document(teamId).collection("forms")
+        if publishedOnly {
+            query = query.whereField("published", isEqualTo: true)
+        }
+        return query.addSnapshotListener { snapshot, _ in
+            guard let snapshot else { return }
+            onChange(snapshot.documents.compactMap { TeamForm(id: $0.documentID, data: $0.data()) })
+        }
+    }
+
+    /// Live answers for one event, keyed by athlete entry id. Keeps a coach's tally
+    /// and every guardian's own choice in step with the other client.
+    func listenToRSVPs(eventId: String, onChange: @escaping ([String: RSVPStatus]) -> Void) -> ListenerRegistration {
+        db.collection("events").document(eventId).collection("rsvps")
+            .addSnapshotListener { snapshot, _ in
+                guard let snapshot else { return }
+                var answers: [String: RSVPStatus] = [:]
+                for doc in snapshot.documents {
+                    guard let raw = doc.data()["status"] as? String,
+                          let status = RSVPStatus(rawValue: raw) else { continue }
+                    let key = (doc.data()["athleteEntryId"] as? String)
+                        ?? (doc.data()["userId"] as? String)
+                        ?? doc.documentID
+                    answers[key] = status
+                }
+                onChange(answers)
+            }
+    }
+
     func deleteEvent(eventId: String) async throws {
         try await db.collection("events").document(eventId).delete()
     }
 
     // MARK: - RSVP
 
-    func setRSVP(eventId: String, userId: String, status: RSVPStatus) async throws {
-        try await db.collection("events").document(eventId).collection("rsvps").document(userId).setData([
-            "eventId": eventId,
-            "userId": userId,
-            "status": status.rawValue,
-            "updatedAt": FieldValue.serverTimestamp()
-        ])
+    /// The one document id both clients must use for an answer.
+    ///
+    /// A guardian answers per child, so the id has to carry the athlete: web has
+    /// always written `${uid}__${rosterEntryId}` while iOS wrote a bare `uid`.
+    /// That mismatch meant each client wrote somewhere the other never read, so a
+    /// parent's answer was invisible to every coach. This builder is the fix.
+    static func rsvpDocumentId(userId: String, athleteEntryId: String?) -> String {
+        guard let athleteEntryId, !athleteEntryId.isEmpty else { return userId }
+        return "\(userId)__\(athleteEntryId)"
     }
 
-    func fetchRSVP(eventId: String, userId: String) async throws -> RSVPStatus? {
-        let snapshot = try await db.collection("events").document(eventId).collection("rsvps").document(userId).getDocument()
-        guard let data = snapshot.data(), let raw = data["status"] as? String else { return nil }
+    func setRSVP(eventId: String, userId: String, athleteEntryId: String? = nil, status: RSVPStatus) async throws {
+        var data: [String: Any] = [
+            "eventId": eventId,
+            "userId": userId,
+            // respondentsUserId is what firestore.rules uses to authorise a write
+            // to a composite id, so it must be present on every new row.
+            "respondentUserId": userId,
+            "status": status.rawValue,
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+        if let athleteEntryId, !athleteEntryId.isEmpty {
+            data["athleteEntryId"] = athleteEntryId
+        }
+        try await db.collection("events").document(eventId)
+            .collection("rsvps")
+            .document(Self.rsvpDocumentId(userId: userId, athleteEntryId: athleteEntryId))
+            .setData(data)
+    }
+
+    /// Reads this account's answer for one athlete, tolerating both historical
+    /// shapes: the composite id, and the legacy bare-uid document.
+    func fetchRSVP(eventId: String, userId: String, athleteEntryId: String? = nil) async throws -> RSVPStatus? {
+        let composed = try await db.collection("events").document(eventId)
+            .collection("rsvps")
+            .document(Self.rsvpDocumentId(userId: userId, athleteEntryId: athleteEntryId))
+            .getDocument()
+        if let raw = composed.data()?["status"] as? String, let status = RSVPStatus(rawValue: raw) {
+            return status
+        }
+        guard composed.documentID != userId else { return nil }
+        let legacy = try await db.collection("events").document(eventId)
+            .collection("rsvps").document(userId).getDocument()
+        guard let raw = legacy.data()?["status"] as? String else { return nil }
         return RSVPStatus(rawValue: raw)
+    }
+
+    /// Every answer for an event, keyed by athlete entry id (falling back to the
+    /// answering account). This is the reader that never existed: parents answered
+    /// and nothing coach-facing ever read the answers back.
+    func fetchRSVPTally(eventId: String) async throws -> [String: RSVPStatus] {
+        let snapshot = try await db.collection("events").document(eventId)
+            .collection("rsvps").getDocuments()
+        var answers: [String: RSVPStatus] = [:]
+        for doc in snapshot.documents {
+            guard let raw = doc.data()["status"] as? String,
+                  let status = RSVPStatus(rawValue: raw) else { continue }
+            let key = (doc.data()["athleteEntryId"] as? String)
+                ?? (doc.data()["userId"] as? String)
+                ?? doc.documentID
+            answers[key] = status
+        }
+        return answers
     }
 
     // MARK: - Attendance

@@ -6,7 +6,7 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../lib/firebase';
 import { useAuth } from './index';
 import AppShell from '../components/AppShell';
-import { personName } from '../lib/portal.mjs';
+import { personName, isArchivedEntry } from '../lib/portal.mjs';
 
 /// One athlete, from the team roster.
 ///
@@ -145,6 +145,14 @@ export default function PlayerPage() {
       {missing && <p className="error">That athlete is not on this team.</p>}
       {error && <p className="error">{error}</p>}
       {notice && <p className="notice">{notice}</p>}
+      {/* An archived athlete is still reachable by link -- a bookmark, a stat, an injury
+          report. Hiding them would break those; saying so keeps the page honest. */}
+      {player && isArchivedEntry(player) && (
+        <p className="notice">
+          Archived with a closed season. Their history is still readable, but they are not
+          on the active roster.
+        </p>
+      )}
 
       {player && (
         <>

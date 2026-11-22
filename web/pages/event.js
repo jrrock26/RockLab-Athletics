@@ -5,7 +5,7 @@ import { collection, doc, getDoc, getDocs, orderBy, query, serverTimestamp, setD
 import { db } from '../lib/firebase';
 import { useAuth } from './index';
 import AppShell from '../components/AppShell';
-import { personName } from '../lib/portal.mjs';
+import { personName, activeRoster } from '../lib/portal.mjs';
 
 /// Taking attendance at one event.
 ///
@@ -53,7 +53,9 @@ export default function EventAttendance() {
         const map = {};
         (attSnap?.docs || []).forEach((d) => { map[d.id] = d.data().status; });
         if (!alive) return;
-        setRoster(rosterSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        // Attendance is taken against the current roster. An archived entry belongs to a
+        // closed season and cannot be marked present at today's game.
+        setRoster(activeRoster(rosterSnap.docs.map((d) => ({ id: d.id, ...d.data() }))));
         setMarks(map);
       } catch (err) {
         if (alive) setError(err?.message || 'Could not open that event.');

@@ -134,6 +134,30 @@ export function myAthletes(rosterEntries, { uid, linkedPlayerIds } = {}) {
   });
 }
 
+/// Whether a roster entry has been archived by a closed season.
+///
+/// Absence is not archive. Every entry created before seasons existed has no `state`
+/// field at all, and treating a missing field as archived would empty every roster in
+/// the school on deploy. Only the explicit marker counts.
+export function isArchivedEntry(entry) {
+  return Boolean(entry) && entry.state === 'archived';
+}
+
+/// The roster as every screen means it: the people on the team now.
+///
+/// A closed season does not delete entries -- stats, injuries, forms and RSVPs point at
+/// them -- it marks them archived. So "the roster" must filter, and until this existed
+/// every view that said "the roster" quietly included last season's athletes. In
+/// September that is a coach seeing twenty-eight names for a fourteen-player team.
+///
+/// Deliberately client-side rather than `where('state', '==', 'active')`: that equality
+/// returns nothing for the documents written before the field existed, and Firestore's
+/// `!=` drops documents missing the field too. Filtering here means a roster that has
+/// never been archived behaves exactly as it did yesterday.
+export function activeRoster(entries) {
+  return (entries || []).filter((entry) => entry && !isArchivedEntry(entry));
+}
+
 /// A human's name, from whichever document happens to hold it.
 ///
 /// Three collections describe a person and none of them agrees on the field:
