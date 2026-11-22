@@ -307,6 +307,39 @@ service cloud.firestore {
       // All writes go through the callables, which verify the approver against guardians,
       // AD ownership and staff membership. `create` is false so a client cannot file a
       // request naming a player it could not otherwise see.
+      // School records: a directory of best-ever marks, and the custom stats a school
+      // invents for itself.
+      //
+      // Reads are open to any signed-in account. A record book is a public-facing thing --
+      // it is the page a school puts in the gym lobby -- so there is nothing here that needs
+      // hiding, and an open read keeps list queries authorisable without a document lookup.
+      //
+      // Writes are the school's: AD, coach or staff of THIS school. `schoolId` is compared
+      // against the path rather than read from the document, so the check cannot be fooled
+      // by a document that names another school.
+      match /recordStats/{statKey} {
+        allow read: if signedIn();
+        allow create, update: if signedIn() && (
+          isAd() || (role() in ['coach','staff'] && userData().schoolId == schoolId)
+        );
+        allow delete: if signedIn() && (
+          isAd() || (role() in ['coach','staff'] && userData().schoolId == schoolId)
+        );
+      }
+
+      match /records/{recordId} {
+        allow read: if signedIn();
+        allow create, update: if signedIn() && (
+          isAd() || (role() in ['coach','staff'] && userData().schoolId == schoolId)
+        ) && request.resource.data.schoolId == schoolId;
+        // A delete has no request.resource, so the stored document is what gets checked --
+        // otherwise delete would be denied to everyone, and a wrong record would be
+        // permanent.
+        allow delete: if signedIn() && (
+          isAd() || (role() in ['coach','staff'] && userData().schoolId == schoolId)
+        ) && resource.data.schoolId == schoolId;
+      }
+
       match /playerClaimRequests/{requestId} {
         allow read: if signedIn() && (
           isAd()
