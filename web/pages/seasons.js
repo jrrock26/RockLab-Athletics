@@ -123,7 +123,7 @@ export default function Seasons() {
             <li key={s.id} className="roster-row">
               <span className={s.state === 'closed' ? 'pill' : 'pill warn'}>{s.state}</span>
               <span>
-                <strong>{s.name || s.id}</strong>
+                <Link href={`/season?id=${s.id}`}><strong>{s.name || s.id}</strong></Link>
                 {s.startsAt?.toDate ? (
                   <span className="muted small">
                     {' · '}
