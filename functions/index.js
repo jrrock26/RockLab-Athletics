@@ -4814,6 +4814,56 @@ exports.createSeason = functions.https.onCall(async (data, context) => {
 /// It archives roster entries -- it never deletes them, because stats, injuries, form
 /// submissions and RSVPs all point at those documents. Batches are chunked because a
 /// school with many teams would exceed the 500-write limit in one commit.
+/// Every roster entry belongs to a season, whoever wrote it.
+///
+/// Patching the eight `roster.add()` call sites would have been eight chances to forget,
+/// and would still miss anything the iOS client writes directly. A trigger covers them
+/// all, including code written next month.
+///
+/// Additive: it only fills `seasonId` and `state` when they are absent, so an entry that
+/// already carries a season is never moved between seasons by a late write.
+///
+/// If the team has no season yet, the season is derived from the team's own label -- the
+/// same rule the backfill script uses, so both paths agree. The team is stamped too, so
+/// the next entry does not have to derive anything.
+function termOfLabel(label) {
+  const s = String(label || '').toLowerCase();
+  if (s.includes('fall')) return 'fall';
+  if (s.includes('winter')) return 'winter';
+  if (s.includes('spring')) return 'spring';
+  const month = new Date().getMonth();
+  if (month >= 7) return 'fall';
+  if (month <= 1) return 'winter';
+  return 'spring';
+}
+
+exports.onRosterEntryCreated = functions.firestore
+  .document('teams/{teamId}/roster/{entryId}')
+  .onCreate(async (snap, context) => {
+    const data = snap.data() || {};
+    if (data.seasonId) return null;
+
+    const db = admin.firestore();
+    const teamRef = db.collection('teams').doc(context.params.teamId);
+    const teamSnap = await teamRef.get();
+    if (!teamSnap.exists) return null;
+
+    let seasonId = teamSnap.get('seasonId');
+    if (!seasonId) {
+      const label = teamSnap.get('season');
+      const yearMatch = String(label || '').match(/(19|20)\d{2}/);
+      const year = yearMatch ? Number(yearMatch[0]) : new Date().getFullYear();
+      seasonId = `${year}-${termOfLabel(label)}`;
+      await teamRef.update({ seasonId });
+    }
+
+    await snap.ref.update({
+      seasonId,
+      state: data.state || 'active',
+    });
+    return null;
+  });
+
 exports.closeSeason = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
