@@ -51,6 +51,19 @@ export default function Import() {
   const rows = parseCsv(csv);
   const withEmail = rows.filter((r) => r.email).length;
 
+  // Gender first: "Basketball Varsity" is two different teams at a school that fields
+  // boys and girls. Without it the second one is impossible to pick.
+  const [gender, setGender] = useState('all');
+
+  const teamLabel = (t) => {
+    const g = t.gender ? `${t.gender.charAt(0).toUpperCase()}${t.gender.slice(1)}` : 'Team';
+    return [g, t.level, t.sportName].filter(Boolean).join(' · ');
+  };
+  const visibleTeams = teams
+    .filter((t) => gender === 'all' || (t.gender || '').toLowerCase() === gender)
+    .sort((a, b) => teamLabel(a).localeCompare(teamLabel(b)));
+  const picked = teams.find((t) => t.id === teamId);
+
   async function send() {
     setBusy(true);
     setError('');
@@ -78,13 +91,52 @@ export default function Import() {
 
       <div className="card">
         <label>
+          Who
+          <select
+            value={gender}
+            onChange={(e) => {
+              const next = e.target.value;
+              setGender(next);
+              // Keep the pick valid: a team filtered out must not stay selected, or the
+              // invites go to the wrong roster while the screen shows another.
+              const still = teams.find(
+                (t) => t.id === teamId && (next === 'all' || (t.gender || '').toLowerCase() === next),
+              );
+              if (!still) {
+                const first = teams.find((t) => next === 'all' || (t.gender || '').toLowerCase() === next);
+                setTeamId(first ? first.id : '');
+              }
+            }}
+          >
+            <option value="all">All teams</option>
+            <option value="boys">Boys</option>
+            <option value="girls">Girls</option>
+            <option value="coed">Coed</option>
+          </select>
+        </label>
+
+        <label>
           Team
-          <select value={teamId} onChange={(e) => setTeamId(e.target.value)}>
-            {teams.map((t) => (
-              <option key={t.id} value={t.id}>{t.sportName} {t.level}</option>
+          <select value={teamId} onChange={(e) => setTeamId(e.target.value)} disabled={visibleTeams.length === 0}>
+            {visibleTeams.length === 0 && <option value="">No {gender === 'all' ? '' : `${gender} `}team yet</option>}
+            {visibleTeams.map((t) => (
+              <option key={t.id} value={t.id}>{teamLabel(t)}</option>
             ))}
           </select>
         </label>
+
+        {visibleTeams.length === 0 && (
+          <p className="small muted">
+            No team matches that. A coach or the athletic director has to start the team
+            before a roster can be imported into it.
+          </p>
+        )}
+        {picked && (
+          <p className="small muted">
+            Importing into <strong>{teamLabel(picked)}</strong>
+            {picked.season ? ` · ${picked.season}` : ''}
+          </p>
+        )}
         <label>
           CSV
           <textarea rows={10} value={csv} onChange={(e) => setCsv(e.target.value)}
