@@ -59,6 +59,11 @@ export default function Claim() {
           Your coach or guardian has a claim code for your athlete profile. Enter it here to
           ask them to link the profile to this account.
         </p>
+        <p className="small muted">
+          A parent or guardian can use this page too, to hold a profile for a child who does
+          not have an account yet. That claim is recorded as a guardian claim, and the athlete
+          can take ownership themselves later — it is not a permanent handover.
+        </p>
 
         <form onSubmit={submit} className="row">
           <label>

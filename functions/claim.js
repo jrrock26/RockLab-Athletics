@@ -49,18 +49,89 @@ function claimCodeMatches(typed, stored) {
   return a.length > 0 && a === normalizeClaimCode(stored);
 }
 
-/// Who may approve a claim for this player.
+/// Decides whether this caller may grant a claim, and in what capacity.
 ///
-/// - A guardian always may. They are the responsible adult for a minor, and the doc is
-///   explicit that claiming does not revoke their access afterwards.
-/// - The school may, when there is no guardian -- the realistic case of a child raised by
-///   a grandparent with no account. That path is audited rather than blocked, because
-///   blocking it strands the child.
-/// - The athlete may NOT approve their own claim. This is the whole point: a claim that
-///   approves itself is not a claim.
-function canApproveClaim({ isGuardian, isAdOfSchool, isStaffOfSchool }) {
-  return Boolean(isGuardian || isAdOfSchool || isStaffOfSchool);
+/// Returns `{ allowed, role, withoutGuardian, reason }` rather than a boolean, because the
+/// interesting part is not whether the approval happens but WHICH authority justified it.
+/// That distinction goes into the audit row, and getting it wrong is not cosmetic: a
+/// coach who is also the child's parent is approving as a parent, and a log that calls them
+/// staff overstates the school's involvement in a family decision.
+///
+/// The four roles, in order of authority:
+///
+/// - **guardian**: always may, whatever else they are. This is the parent case, and it is
+///   checked FIRST so that a coach-parent is recorded as a guardian rather than as staff.
+/// - **ad**: may, including as an override when a guardian exists but cannot be reached.
+///   The override is explicit and audited, because a stale guardian record would otherwise
+///   lock a child out of their own profile forever.
+/// - **staff**: may only when no guardian exists. The doc is specific -- staff act "when no
+///   guardian is present" -- and a coach approving over a reachable parent is exactly the
+///   silent capability that decision was written to prevent.
+/// - **nobody else**, including the athlete. A claim that approves itself is not a claim.
+function decideClaimApproval({
+  isGuardian = false,
+  hasGuardians = false,
+  isAdOfSchool = false,
+  isStaffOfSchool = false,
+  force = false,
+} = {}) {
+  if (isGuardian) {
+    return { allowed: true, role: 'guardian', withoutGuardian: false, overrodeGuardian: false, reason: '' };
+  }
+  if (isAdOfSchool && (!hasGuardians || force)) {
+    return {
+      allowed: true,
+      role: 'ad',
+      withoutGuardian: !hasGuardians,
+      // Recorded separately from `withoutGuardian`: reaching past a guardian who exists is a
+      // different act from acting where none does, and only one of them needs explaining later.
+      overrodeGuardian: hasGuardians && force,
+      reason: '',
+    };
+  }
+  if (isStaffOfSchool && !hasGuardians) {
+    return { allowed: true, role: 'staff', withoutGuardian: true, overrodeGuardian: false, reason: '' };
+  }
+  if (isStaffOfSchool && hasGuardians) {
+    return {
+      allowed: false,
+      role: '',
+      withoutGuardian: false,
+      reason: 'This athlete has a guardian on file. A guardian has to approve this claim; '
+        + 'an athletic director can override if that guardian cannot be reached.',
+    };
+  }
+  if (isAdOfSchool && hasGuardians && !force) {
+    return {
+      allowed: false,
+      role: '',
+      withoutGuardian: false,
+      reason: 'This athlete has a guardian on file. Ask them to approve, or repeat this as '
+        + 'an override if they cannot be reached.',
+    };
+  }
+  return {
+    allowed: false,
+    role: '',
+    withoutGuardian: false,
+    reason: 'Only a guardian of this athlete, or staff of their school, can approve a claim.',
+  };
 }
+
+/// Whether an existing claim can be replaced by a new one.
+///
+/// A guardian may hold the account for a child who has none -- a seven-year-old on their
+/// parent's login. That must not be the last word: when the child is old enough for their
+/// own account, their claim has to supersede it, or they inherit a profile they can never
+/// own. A claim by an ATHLETE is final, because that is the real thing.
+///
+/// A missing `claimedByKind` is treated as an athlete claim: the only claims that existed
+/// before this distinction did were athlete claims, and guessing the other way would let a
+/// stale document be taken over without approval.
+function canSupersedeClaim(claimedByKind) {
+  return claimedByKind === 'guardian';
+}
+
 
 module.exports = {
   CLAIM_ALPHABET,
@@ -69,5 +140,6 @@ module.exports = {
   isValidClaimCode,
   makeClaimCode,
   claimCodeMatches,
-  canApproveClaim,
+  decideClaimApproval,
+  canSupersedeClaim,
 };

@@ -15,7 +15,8 @@ const {
   makeClaimCode,
   normalizeClaimCode,
   isValidClaimCode,
-  canApproveClaim,
+  decideClaimApproval,
+  canSupersedeClaim,
 } = require('./claim');
 
 admin.initializeApp();
@@ -5336,7 +5337,10 @@ exports.requestPlayerClaim = functions.https.onCall(async (data, context) => {
   }
 
   const player = matches.docs[0];
-  if (player.get('claimedByUserId')) {
+  // A profile claimed by a GUARDIAN may still be claimed by the athlete later -- a parent
+  // holding the login for a seven-year-old must not be the last word at thirteen. A profile
+  // claimed by the athlete is final.
+  if (player.get('claimedByUserId') && !canSupersedeClaim(player.get('claimedByKind'))) {
     throw new functions.https.HttpsError(
       'failed-precondition',
       'That profile has already been claimed. Ask your school for help if this is wrong.',
@@ -5363,11 +5367,19 @@ exports.requestPlayerClaim = functions.https.onCall(async (data, context) => {
     }
   }
 
+  // Whether the requester is this athlete's guardian is recorded now, at request time,
+  // because it decides what kind of claim this is. A parent claiming for a child who has no
+  // account of their own is a GUARDIAN claim: legitimate, but supersedable later when the
+  // child is old enough. An athlete claiming their own profile is the final kind.
+  const requesterGuardianSnap = await db.collection('players').doc(player.id)
+    .collection('guardians').doc(uid).get();
+
   await requestRef.set({
     playerId: player.id,
     playerName: player.get('name') || '',
     schoolId,
     requesterUserId: uid,
+    requesterIsGuardian: requesterGuardianSnap.exists,
     // Shown to the approver so a guardian can recognise a request they did not make.
     requesterDisplayName: (context.auth.token && context.auth.token.name) || '',
     requesterEmail: (context.auth.token && context.auth.token.email) || '',
@@ -5422,14 +5434,28 @@ exports.approvePlayerClaim = functions.https.onCall(async (data, context) => {
   const isAdOfSchool = sameSchool && caller.role === 'ad';
   const isStaffOfSchool = sameSchool && ['coach', 'staff'].includes(caller.role);
 
-  if (!canApproveClaim({ isGuardian: guardianSnap.exists, isAdOfSchool, isStaffOfSchool })) {
-    throw new functions.https.HttpsError(
-      'permission-denied',
-      'Only a guardian of this athlete, or staff of their school, can approve a claim.',
-    );
+  // Does this athlete have a guardian at all? That single fact separates the two legitimate
+  // cases: a family deciding for their own child, and staff acting because nobody else can.
+  // A limit(1) read of the subcollection needs no index.
+  const anyGuardian = await db.collection('players').doc(playerId)
+    .collection('guardians').limit(1).get();
+  const hasGuardians = !anyGuardian.empty;
+
+  const decision = decideClaimApproval({
+    isGuardian: guardianSnap.exists,
+    hasGuardians,
+    isAdOfSchool,
+    isStaffOfSchool,
+    // Only consulted on the AD branch; a coach passing it changes nothing.
+    force: Boolean(data && data.force),
+  });
+  if (!decision.allowed) {
+    throw new functions.https.HttpsError('permission-denied', decision.reason);
   }
 
-  if (playerSnap.get('claimedByUserId') && playerSnap.get('claimedByUserId') !== requesterUserId) {
+  if (playerSnap.get('claimedByUserId')
+      && playerSnap.get('claimedByUserId') !== requesterUserId
+      && !canSupersedeClaim(playerSnap.get('claimedByKind'))) {
     throw new functions.https.HttpsError(
       'failed-precondition',
       'That profile has already been claimed by another account.',
@@ -5448,13 +5474,15 @@ exports.approvePlayerClaim = functions.https.onCall(async (data, context) => {
     );
   }
 
-  const approvedByRole = guardianSnap.exists && !isAdOfSchool && !isStaffOfSchool
-    ? 'guardian'
-    : (isAdOfSchool ? 'ad' : 'staff');
+  // What kind of claim this is, decided by who asked. A guardian asking on behalf of a child
+  // with no account is a guardian claim, which the athlete can later take over. Anyone else
+  // claiming is an athlete claiming their own profile, which is final.
+  const claimKind = requestSnap.get('requesterIsGuardian') ? 'guardian' : 'athlete';
 
   await db.runTransaction(async (tx) => {
     tx.update(playerRef, {
       claimedByUserId: requesterUserId,
+      claimedByKind: claimKind,
       claimedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     tx.set(aliasRef, {
@@ -5466,7 +5494,10 @@ exports.approvePlayerClaim = functions.https.onCall(async (data, context) => {
     tx.update(requestRef, {
       status: 'approved',
       decidedBy: uid,
-      decidedByRole: approvedByRole,
+      // The capacity that authorised this, not the caller's widest role: a coach who is the
+      // child's parent is recorded as a guardian.
+      decidedByRole: decision.role,
+      claimKind,
       decidedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
   });
@@ -5478,15 +5509,18 @@ exports.approvePlayerClaim = functions.https.onCall(async (data, context) => {
     action: 'player.claimed',
     playerId,
     claimedByUserId: requesterUserId,
+    claimKind,
     approvedBy: uid,
-    approvedByRole,
-    // Staff approving without a guardian is the exception path from the identity doc, and
-    // the audit row is what makes it an exception with a trail rather than a capability.
-    withoutGuardian: approvedByRole !== 'guardian',
+    approvedByRole: decision.role,
+    // Staff approving where no guardian exists is the exception path from the identity doc;
+    // an AD reaching past a guardian who does exist is a different, heavier act. Both are
+    // recorded, neither is silent.
+    withoutGuardian: decision.withoutGuardian,
+    overrodeGuardian: decision.overrodeGuardian,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
-  return { approved: true, playerId, approvedByRole };
+  return { approved: true, playerId, approvedByRole: decision.role, claimKind };
 });
 
 
@@ -5523,7 +5557,10 @@ exports.denyPlayerClaim = functions.https.onCall(async (data, context) => {
   const isAdOfSchool = sameSchool && caller.role === 'ad';
   const isStaffOfSchool = sameSchool && ['coach', 'staff'].includes(caller.role);
 
-  if (!canApproveClaim({ isGuardian: guardianSnap.exists, isAdOfSchool, isStaffOfSchool })) {
+  // Declining is the safe direction, so it is deliberately easier than approving: staff can
+  // decline even when a guardian exists. A suspicious request should be able to die without
+  // waiting for a parent who may not be reachable -- nothing is granted by saying no.
+  if (!(guardianSnap.exists || isAdOfSchool || isStaffOfSchool)) {
     throw new functions.https.HttpsError('permission-denied', 'Only a guardian or school staff can decline.');
   }
 

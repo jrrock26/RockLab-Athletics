@@ -137,6 +137,42 @@ is not.
 - A stranger cannot find a child by name (no enumerate path).
 - Staff acting without a guardian produce an audit entry naming them and the reason.
 
+## When the adult is also staff (decided 2026-11-22)
+
+A coach, AD or staff member is often a child's actual parent. This is not an edge case;
+it is most of a small school's coaching staff. Three consequences, now enforced:
+
+**Authority is by relationship first, role second.** A coach-parent approving their own
+child's claim is recorded as `approvedByRole: 'guardian'`, not `'staff'`. Calling it staff
+would overstate the school's part in a family decision and would mark the audit row
+`withoutGuardian` — a false statement about whether a guardian was involved.
+
+**Staff may not approve over a guardian who exists.** The rule above is "a guardian
+approves, or staff when no guardian exists", and that second half is now checked rather
+than assumed. A coach approving a claim for a child whose parent is reachable is exactly
+the silent capability this document was written to prevent.
+
+**An AD may override, explicitly.** If a guardian is on file but cannot be reached, a stale
+guardian record would otherwise lock the child out of their own profile forever. The AD can
+pass `force`; the audit row then records `overrodeGuardian: true`, which is a different and
+heavier act than acting where no guardian exists. A coach cannot use the override.
+
+### Guardian claims are supersedable
+
+`claimedByUserId` names the account currently holding the profile. When a parent claims on
+behalf of a seven-year-old who has no account, that is a **guardian claim**
+(`claimedByKind: 'guardian'`): legitimate, and deliberately **not final**. At thirteen the
+athlete claims the same profile and takes it over — the guardian rows stay, so the parent
+keeps read access.
+
+An **athlete claim** (`claimedByKind: 'athlete'`) is final. A missing `claimedByKind` is
+treated as an athlete claim, because every claim made before this distinction was one, and
+guessing the other way would let a stale document be taken over without approval.
+
+Declining is deliberately easier than approving: staff may decline even when a guardian
+exists, because nothing is granted by saying no and a suspicious request should be able to
+die without waiting for someone unreachable.
+
 ## Sequencing
 
 1. `players` + `playerAliases` rules and the `playerId` field on roster entries.

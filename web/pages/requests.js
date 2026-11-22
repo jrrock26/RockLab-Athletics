@@ -141,11 +141,25 @@ export default function Requests() {
     setNotice('');
     try {
       if (approve) {
-        await httpsCallable(functions, 'approvePlayerClaim')({
-          schoolId: row.schoolId,
-          requestId: row.id,
-        });
-        setNotice(`${row.playerName || 'That athlete'} linked to their account.`);
+        const approveCall = httpsCallable(functions, 'approvePlayerClaim');
+        let overrideUsed = false;
+        try {
+          await approveCall({ schoolId: row.schoolId, requestId: row.id });
+        } catch (err) {
+          // The one refusal worth offering a second attempt for: an athlete with a guardian
+          // on file needs that guardian to approve, and an AD can override when they cannot
+          // be reached. Offered only when the server says "override", never guessed at.
+          if (!/override/i.test(err?.message || '')) throw err;
+          const go = window.confirm(`${err.message}\n\nOverride and link the account anyway?`);
+          if (!go) throw err;
+          await approveCall({ schoolId: row.schoolId, requestId: row.id, force: true });
+          overrideUsed = true;
+        }
+        setNotice(
+          overrideUsed
+            ? `${row.playerName || 'That athlete'} linked over an existing guardian — recorded in the audit log.`
+            : `${row.playerName || 'That athlete'} linked to their account.`,
+        );
       } else {
         const reason = window.prompt('Why is this claim being declined?') || '';
         await httpsCallable(functions, 'denyPlayerClaim')({

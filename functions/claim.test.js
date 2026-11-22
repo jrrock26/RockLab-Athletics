@@ -8,7 +8,8 @@ const {
   isValidClaimCode,
   makeClaimCode,
   claimCodeMatches,
-  canApproveClaim,
+  decideClaimApproval,
+  canSupersedeClaim,
 } = require('./claim');
 
 test('a code read off a screen survives being typed by a human', () => {
@@ -56,19 +57,77 @@ test('matching tolerates formatting but not a different code', () => {
 });
 
 test('a guardian can approve a claim for their own child', () => {
-  assert.equal(canApproveClaim({ isGuardian: true }), true);
+  assert.equal(decideClaimApproval({ isGuardian: true }).allowed, true);
 });
 
-test('the school can approve when no guardian exists', () => {
-  // A child raised by a grandparent with no account, or a family whose guardian account
-  // is gone. Blocking this strands the child; allowing it is audited instead.
-  assert.equal(canApproveClaim({ isAdOfSchool: true }), true);
-  assert.equal(canApproveClaim({ isStaffOfSchool: true }), true);
+test('a coach who is also the parent approves as a PARENT, not as staff', () => {
+  // The case that prompted this: staff, coach or AD who is the child's actual guardian.
+  // Recording them as staff would overstate the school's part in a family decision, and
+  // `withoutGuardian: true` would be a false audit row on the one path that needs to be
+  // exact.
+  const decision = decideClaimApproval({
+    isGuardian: true,
+    hasGuardians: true,
+    isStaffOfSchool: true,
+    isAdOfSchool: true,
+  });
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.role, 'guardian');
+  assert.equal(decision.withoutGuardian, false);
+  assert.equal(decision.overrodeGuardian, false);
+});
+
+test('staff cannot approve over a guardian who exists', () => {
+  // The identity decision is explicit: staff act when no guardian is PRESENT. A coach
+  // approving a claim for a child whose parent is reachable is the silent capability that
+  // decision was written to prevent.
+  const decision = decideClaimApproval({ hasGuardians: true, isStaffOfSchool: true });
+  assert.equal(decision.allowed, false);
+  assert.match(decision.reason, /guardian on file/i);
+});
+
+test('staff can approve when there is no guardian at all', () => {
+  // Grandparent with no account, or a family whose guardian record is gone. Blocking this
+  // strands the child, so it is allowed and audited.
+  const decision = decideClaimApproval({ hasGuardians: false, isStaffOfSchool: true });
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.role, 'staff');
+  assert.equal(decision.withoutGuardian, true);
+});
+
+test('an AD cannot reach past a guardian without asking to', () => {
+  const blocked = decideClaimApproval({ hasGuardians: true, isAdOfSchool: true });
+  assert.equal(blocked.allowed, false);
+
+  // The explicit override exists because a stale guardian record would otherwise lock a
+  // child out of their own profile permanently.
+  const forced = decideClaimApproval({ hasGuardians: true, isAdOfSchool: true, force: true });
+  assert.equal(forced.allowed, true);
+  assert.equal(forced.role, 'ad');
+  assert.equal(forced.overrodeGuardian, true);
+  assert.equal(forced.withoutGuardian, false);
+});
+
+test('a coach cannot use the AD override', () => {
+  // `force` is only consulted on the AD branch, so passing it as staff changes nothing.
+  const decision = decideClaimApproval({ hasGuardians: true, isStaffOfSchool: true, force: true });
+  assert.equal(decision.allowed, false);
 });
 
 test('nobody else can approve, including the athlete themselves', () => {
-  // The athlete is not a guardian, not AD and not staff of their own school, so this is
-  // the case that stops self-claim. A claim that approves itself is not a claim.
-  assert.equal(canApproveClaim({}), false);
-  assert.equal(canApproveClaim({ isGuardian: false, isAdOfSchool: false, isStaffOfSchool: false }), false);
+  // The athlete is not a guardian, not AD and not staff of their own school. A claim that
+  // approves itself is not a claim.
+  assert.equal(decideClaimApproval({}).allowed, false);
+  assert.equal(decideClaimApproval({ isGuardian: false, isStaffOfSchool: false }).allowed, false);
+});
+
+test('a guardian-held account can be superseded by the athlete later', () => {
+  // A parent claims on behalf of a seven-year-old. At thirteen the child must be able to
+  // take it over, or they inherit a profile they can never own.
+  assert.equal(canSupersedeClaim('guardian'), true);
+  assert.equal(canSupersedeClaim('athlete'), false);
+  // Absent means the older, stricter case: the only claims that predate this distinction
+  // were made by athletes, and guessing the other way would let a stale doc be taken over.
+  assert.equal(canSupersedeClaim(undefined), false);
+  assert.equal(canSupersedeClaim(null), false);
 });
