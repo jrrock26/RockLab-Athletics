@@ -104,8 +104,14 @@ export default function Import() {
     setError('');
     setRosterResult(null);
     try {
-      const names = rows.map((r) => r.name).filter((n) => n && n.trim().length >= 2);
-      const res = await httpsCallable(functions, 'importPlayers')({ teamId, names });
+      const players = rows
+        .filter((r) => r.name && String(r.name).trim().length >= 2)
+        .map((r) => ({
+          name: String(r.name).trim(),
+          jerseyNumber: String(r.jersey ?? r.jerseyNumber ?? '').trim(),
+          position: String(r.position ?? '').trim(),
+        }));
+      const res = await httpsCallable(functions, 'importPlayers')({ teamId, players });
       setRosterResult(res.data);
     } catch (err) {
       setError(err?.message || 'Those players could not be added.');
@@ -136,8 +142,11 @@ export default function Import() {
 
   return (
     <main className="page">
-      <h1>Import &amp; invite</h1>
-      <p className="muted">Paste a CSV: Name, Jersey, Position, Parent Email</p>
+      <h1>Import</h1>
+      <p className="muted">
+        Step 1 puts players on the roster. Step 2 emails their parents. Do them in that
+        order — an invitation needs a roster entry to point at.
+      </p>
 
       <div className="card">
         <label>
@@ -213,7 +222,7 @@ export default function Import() {
         {rosterResult && (
           <p className="ok">
             Roster updated: {rosterResult.created ?? 0} added
-            {rosterResult.duplicates ? `, ${rosterResult.duplicates} already there` : ''}.
+            {rosterResult.skipped ? `, ${rosterResult.skipped} already on the roster` : ''}.
           </p>
         )}
         {error && <p className="error">{error}</p>}

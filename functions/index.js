@@ -1125,7 +1125,19 @@ exports.importPlayers = functions.https.onCall(async (data, context) => {
   const db = admin.firestore();
 
   const teamId = String((data && data.teamId) || '');
-  const rawNames = Array.isArray(data && data.names) ? data.names : [];
+  // Two accepted shapes: `names` (bare strings, what the iOS client sends) and `players`
+  // (objects with jersey and position, what a CSV import carries). Keeping both means the
+  // app did not need changing for the web to get richer rows.
+  const rawRows = Array.isArray(data && data.players) && data.players.length
+    ? data.players.map((p) => ({
+      name: String((p && p.name) || ''),
+      jerseyNumber: String((p && p.jerseyNumber) || '').trim(),
+      position: String((p && p.position) || '').trim(),
+    }))
+    : (Array.isArray(data && data.names) ? data.names : [])
+      .map((n) => ({ name: String(n || ''), jerseyNumber: '', position: '' }));
+
+  const rawNames = rawRows.map((r) => r.name);
   if (!teamId) throw new functions.https.HttpsError('invalid-argument', 'teamId is required.');
   if (!rawNames.length) throw new functions.https.HttpsError('invalid-argument', 'Paste at least one name.');
   if (rawNames.length > 200) throw new functions.https.HttpsError('invalid-argument', 'Import 200 names at a time or fewer.');
@@ -1170,6 +1182,14 @@ exports.importPlayers = functions.https.onCall(async (data, context) => {
   });
   const onRoster = new Set(rosterSnap.docs.map((d) => normal(d.get('playerName'))));
 
+  // Jersey and position travel with the name so a CSV import produces a usable roster
+  // instead of twelve names. Keyed on the same normalised name used for deduplication.
+  const metaByName = new Map();
+  rawRows.forEach((r) => {
+    const key = normal(r.name);
+    if (key) metaByName.set(key, { jerseyNumber: r.jerseyNumber, position: r.position });
+  });
+
   const created = [];
   const skipped = [];
   const batch = db.batch();
@@ -1200,12 +1220,15 @@ exports.importPlayers = functions.https.onCall(async (data, context) => {
     }
 
     const entryRef = teamRef.collection('roster').doc();
+    const meta = metaByName.get(key) || { jerseyNumber: '', position: '' };
     batch.set(entryRef, {
       teamId,
       playerId,
       playerName: name,
-      jerseyNumber: '',
-      position: '',
+      // seasonId and state are added by the onRosterEntryCreated trigger, so every writer
+      // -- this one and the iOS client -- stamps the same way.
+      jerseyNumber: meta.jerseyNumber || '',
+      position: meta.position || '',
       userId: null,
       guardianUserIds: [],
       importedBy: callerId,
