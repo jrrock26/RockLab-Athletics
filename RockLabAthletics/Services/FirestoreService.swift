@@ -1,4 +1,5 @@
 import Foundation
+import FirebaseAuth
 import FirebaseFirestore
 
 /// Thin wrapper around Firestore for the core collections.
@@ -655,6 +656,38 @@ struct FirestoreService {
     }
 
     func submitTeamForm(teamId: String, formId: String, rosterEntryId: String, playerName: String, signerName: String, userId: String, responses: [String: String] = [:], requiresParentSignature: Bool = false, parentSignerName: String? = nil) async throws {
+        // Two different acts, two different documents.
+        //
+        // When the ATHLETE signs, this is an acknowledgement, not consent: the write goes
+        // to the roster form with playerSigned* fields and no `status`. firestore.rules
+        // only permits an athlete to move `status` when the form needs no guardian
+        // signature or the guardian has already signed -- so sending status here would
+        // be refused with permission-denied, which is what happened before this split.
+        //
+        // When anyone else signs (guardian, coach, staff) it is the consenting signature
+        // and keeps writing the team-level submission with `status`.
+        //
+        // `merge: true` is required: the rule checks that ONLY the player fields changed,
+        // and a full overwrite would report every other field as affected and fail.
+        let isAthleteSigning = Auth.auth().currentUser?.uid == userId
+
+        if isAthleteSigning {
+            let ref = db.collection("teams").document(teamId)
+                .collection("roster").document(rosterEntryId)
+                .collection("forms").document(formId)
+            try await ref.setData([
+                "formId": formId,
+                "rosterEntryId": rosterEntryId,
+                "teamId": teamId,
+                "playerName": playerName,
+                "playerSignedByName": signerName,
+                "playerSignedAt": Date().timeIntervalSince1970,
+                "playerSignedBy": userId,
+                "updatedAt": FieldValue.serverTimestamp()
+            ], merge: true)
+            return
+        }
+
         let ref = db.collection("teams").document(teamId).collection("forms")
             .document(formId).collection("submissions").document(rosterEntryId)
         try await ref.setData([
