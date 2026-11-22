@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
+import AppShell from '../components/AppShell';
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
@@ -555,13 +556,10 @@ export default function Portal() {
 
   return (
     <>
-      <Head><title>Your teams · RockLab Athletics</title></Head>
-      <main className="page">
+      <AppShell title="Your teams" profile={profile} user={user}>
         <h1>{profile?.name || user.displayName || 'Your account'}</h1>
         <p className="muted small">
-          {normalizeEmail(user.email)}
-          {' · '}
-          <button className="link" onClick={() => signOut(auth)}>Sign out</button>
+          {user.email}
         </p>
 
         {notice && <p className="notice">{notice}</p>}
@@ -817,7 +815,7 @@ export default function Portal() {
         <p className="muted small">
           <Link href="/privacy">Privacy</Link> · <Link href="/support">Support</Link>
         </p>
-      </main>
+      </AppShell>
     </>
   );
 }
