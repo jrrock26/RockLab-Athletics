@@ -93,6 +93,27 @@ export default function Import() {
     .sort((a, b) => teamLabel(a).localeCompare(teamLabel(b)));
   const picked = teams.find((t) => t.id === teamId);
 
+  const [rosterBusy, setRosterBusy] = useState(false);
+  const [rosterResult, setRosterResult] = useState(null);
+
+  /// Creating roster entries and emailing parents are different acts with different
+  /// consequences, so they are two buttons, not one. importPlayers takes bare names --
+  /// it creates the player and the roster entry, and does not send anything.
+  async function addToRoster() {
+    setRosterBusy(true);
+    setError('');
+    setRosterResult(null);
+    try {
+      const names = rows.map((r) => r.name).filter((n) => n && n.trim().length >= 2);
+      const res = await httpsCallable(functions, 'importPlayers')({ teamId, names });
+      setRosterResult(res.data);
+    } catch (err) {
+      setError(err?.message || 'Those players could not be added.');
+    } finally {
+      setRosterBusy(false);
+    }
+  }
+
   async function send() {
     setBusy(true);
     setError('');
@@ -179,9 +200,22 @@ export default function Import() {
                     placeholder={'John Smith,12,QB,parent@email.com'} />
         </label>
         <p className="muted small">{rows.length} player(s) · {withEmail} with parent email</p>
-        <button onClick={send} disabled={busy || !teamId || withEmail === 0}>
-          {busy ? 'Sending…' : `Send ${withEmail} invitation(s)`}
-        </button>
+
+        <div className="row">
+          <button type="button" onClick={addToRoster}
+            disabled={rosterBusy || !teamId || rows.length === 0}>
+            {rosterBusy ? 'Adding…' : `Add ${rows.length} player(s) to roster`}
+          </button>
+          <button type="button" onClick={send} disabled={busy || !teamId || withEmail === 0}>
+            {busy ? 'Sending…' : `Send ${withEmail} invitation(s)`}
+          </button>
+        </div>
+        {rosterResult && (
+          <p className="ok">
+            Roster updated: {rosterResult.created ?? 0} added
+            {rosterResult.duplicates ? `, ${rosterResult.duplicates} already there` : ''}.
+          </p>
+        )}
         {error && <p className="error">{error}</p>}
         {result && (
           <>
