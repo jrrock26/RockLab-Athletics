@@ -306,6 +306,15 @@ a { color: var(--accent); }
 .plain-list a { color: var(--text); text-decoration: none; }
 .plain-list a:hover { color: var(--accent); }
 
+/* ---- Forms: several short fields on one line where there is room ---- */
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+  margin: 16px 0;
+}
+
 @media (max-width: 720px) {
   .nav { gap: 12px; padding: 10px 14px; }
   .nav-links { gap: 12px; overflow-x: auto; }

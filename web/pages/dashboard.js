@@ -4,11 +4,13 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../lib/firebase';
 import { useAuth } from './index';
 import AppShell from '../components/AppShell';
+import AddTeam from '../components/AddTeam';
 import Link from 'next/link';
 
 export default function Dashboard() {
   const { loading, user, profile } = useAuth();
   const [teams, setTeams] = useState([]);
+  const [refresh, setRefresh] = useState(0);
   const [entitlement, setEntitlement] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState('');
@@ -48,7 +50,9 @@ export default function Dashboard() {
         setEntitlement(null);
       }
     })();
-  }, [profile?.schoolId]);
+    // `refresh` is bumped after a team is created so the new one appears without the
+    // reload the old build needed.
+  }, [profile?.schoolId, refresh]);
 
   if (loading) return <main className="page"><p>Loading…</p></main>;
   if (!user || profile?.role !== 'ad') {
@@ -93,7 +97,12 @@ export default function Dashboard() {
             </li>
           ))}
         </ul>
+        {teams.length === 0 && (
+          <p className="small muted">Start the first team below — a roster needs a team to belong to.</p>
+        )}
       </section>
+
+      <AddTeam schoolId={profile.schoolId} onCreated={() => setRefresh((n) => n + 1)} />
     </AppShell>
   );
 }
