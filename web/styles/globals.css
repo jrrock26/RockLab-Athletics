@@ -443,6 +443,17 @@ a { color: var(--accent); }
 .school-main { flex: 1; min-width: 0; }
 .school-main strong { font-size: 15px; }
 
+.roster-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  text-decoration: none;
+}
+.roster-link:hover strong { color: var(--accent); }
+
 /* ---- Dashboard: exceptions first, inventory below ---- */
 
 .dash-head {

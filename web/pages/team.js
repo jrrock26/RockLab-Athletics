@@ -97,14 +97,16 @@ export default function TeamPage() {
                 const fullName = p.playerName || p.displayName || p.name || '';
                 return (
                   <li key={p.id} className="roster-row">
-                    <span className="avatar">
-                      {fullName ? fullName.slice(0, 1).toUpperCase() : '?'}
-                    </span>
-                    <span>
-                      <strong>{fullName || 'Unnamed athlete'}</strong>
-                      {p.jerseyNumber ? <span className="muted"> · #{p.jerseyNumber}</span> : null}
-                      {p.position ? <span className="muted"> · {p.position}</span> : null}
-                    </span>
+                    <Link href={`/player?team=${id}&entry=${p.id}`} className="roster-link">
+                      <span className="avatar">
+                        {fullName ? fullName.slice(0, 1).toUpperCase() : '?'}
+                      </span>
+                      <span>
+                        <strong>{fullName || 'Unnamed athlete'}</strong>
+                        {p.jerseyNumber ? <span className="muted"> · #{p.jerseyNumber}</span> : null}
+                        {p.position ? <span className="muted"> · {p.position}</span> : null}
+                      </span>
+                    </Link>
                     {p.injuryStatus && p.injuryStatus !== 'healthy'
                       ? <span className="pill warn">{p.injuryStatus}</span>
                       : null}
