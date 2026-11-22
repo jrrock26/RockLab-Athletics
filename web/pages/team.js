@@ -5,6 +5,7 @@ import { collection, doc, getDoc, getDocs, limit, query, where } from 'firebase/
 import { db } from '../lib/firebase';
 import { useAuth } from './index';
 import AppShell from '../components/AppShell';
+import { personName } from '../lib/portal.mjs';
 
 /// A team, as the AD sees it on the web.
 ///
@@ -91,10 +92,10 @@ export default function TeamPage() {
             {roster.length === 0 && <p className="muted">No athletes on this roster yet.</p>}
             <ul className="req-list">
               {roster.map((p) => {
-                // Roster entries carry `playerName`; `displayName`/`name` exist on other
-                // shapes (players documents, user profiles). Reading only the latter made
-                // every imported athlete render as "Unnamed athlete".
-                const fullName = p.playerName || p.displayName || p.name || '';
+                // Roster entries carry `playerName`, user profiles `displayName`, durable
+                // players documents `name`. personName reads all of them, so this row does
+                // not have to know which document it is looking at.
+                const fullName = personName(p, 'Unnamed athlete');
                 return (
                   <li key={p.id} className="roster-row">
                     <Link href={`/player?team=${id}&entry=${p.id}`} className="roster-link">

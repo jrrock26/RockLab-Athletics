@@ -29,6 +29,7 @@ import {
   formatRecord,
   displayName,
   formatWhen,
+  personName,
   requirementStatus,
   toMillis,
 } from '../lib/portal.mjs';
@@ -557,7 +558,7 @@ export default function Portal() {
   return (
     <>
       <AppShell title="Your teams" profile={profile} user={user}>
-        <h1>{profile?.name || user.displayName || 'Your account'}</h1>
+        <h1>{personName(profile, 'Your account')}</h1>
         <p className="muted small">
           {user.email}
         </p>

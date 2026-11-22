@@ -3,6 +3,7 @@ import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { signOut } from 'firebase/auth';
 import { auth } from '../lib/firebase';
+import { personName } from '../lib/portal.mjs';
 
 /// The frame every signed-in screen sits in.
 ///
@@ -28,7 +29,7 @@ const RAIL = [
 export default function AppShell({ title, profile, user, children, art = 'arena.png' }) {
   const router = useRouter();
   const role = profile?.role || '';
-  const name = profile?.displayName || profile?.name || user?.email || '';
+  const name = personName(profile) || user?.email || '';
   const isAd = role === 'ad';
 
   // trailingSlash is on, so /dashboard/ and /dashboard must both count as current.

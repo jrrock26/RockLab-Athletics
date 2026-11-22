@@ -5,6 +5,7 @@ import { collection, doc, getDoc, getDocs, orderBy, query, serverTimestamp, setD
 import { db } from '../lib/firebase';
 import { useAuth } from './index';
 import AppShell from '../components/AppShell';
+import { personName } from '../lib/portal.mjs';
 
 /// Taking attendance at one event.
 ///
@@ -159,7 +160,7 @@ export default function EventAttendance() {
               <ul className="req-list">
                 {roster.map((p) => {
                   const current = marks[p.id];
-                  const name = p.playerName || p.displayName || p.name || 'Athlete';
+                  const name = personName(p, 'Athlete');
                   return (
                     <li key={p.id} className="attend-row">
                       <span className="roster-link">

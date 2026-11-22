@@ -6,6 +6,7 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../lib/firebase';
 import { useAuth } from './index';
 import AppShell from '../components/AppShell';
+import { personName } from '../lib/portal.mjs';
 
 /// One athlete, from the team roster.
 ///
@@ -135,7 +136,7 @@ export default function PlayerPage() {
   if (authLoading) return <main className="page"><p>Loading…</p></main>;
   if (!user) return <main className="page"><p className="muted"><Link href="/">Sign in</Link> first.</p></main>;
 
-  const name = player?.playerName || player?.displayName || player?.name || 'Athlete';
+  const name = personName(player, 'Athlete');
   const hurt = player?.injuryStatus && player.injuryStatus !== 'healthy';
 
   return (

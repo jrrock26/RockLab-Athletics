@@ -5,6 +5,7 @@ import { auth, db } from '../lib/firebase';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import Link from 'next/link';
+import { personName } from '../lib/portal.mjs';
 
 export function useAuth() {
   const [state, setState] = useState({ loading: true, user: null, profile: null });
@@ -88,7 +89,7 @@ export default function Login() {
             {user ? (
               <>
                 <p className="ok">
-                  Signed in as {profile?.name || user.email}
+                  Signed in as {personName(profile) || user.email}
                   {profile?.role ? ` · ${profile.role}` : ''}
                 </p>
                 <button type="button" onClick={() => signOut(auth)}>Sign out</button>

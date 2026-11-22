@@ -5,6 +5,7 @@ import { db, functions } from '../lib/firebase';
 import { httpsCallable } from 'firebase/functions';
 import { useAuth } from './index';
 import AppShell from '../components/AppShell';
+import { personName } from '../lib/portal.mjs';
 
 /// Coaches and their assignments.
 ///
@@ -48,7 +49,7 @@ export default function Coaches() {
         snap.docs
           .map((d) => ({ id: d.id, ...d.data() }))
           .filter((u) => ['coach', 'staff', 'ad'].includes(u.role))
-          .sort((a, b) => String(a.name || a.email).localeCompare(String(b.name || b.email))),
+          .sort((a, b) => personName(a).localeCompare(personName(b))),
       );
     })();
     return () => { alive = false; };
@@ -65,7 +66,7 @@ export default function Coaches() {
       const person = people.find((p) => p.id === coachId);
       const team = rows.find((t) => t.id === assignTeamId);
       setAssignNotice(
-        `${person?.displayName || person?.name || person?.email || 'Coach'} assigned to ${team ? label(team) : 'the team'}`
+        `${personName(person) || 'Coach'} assigned to ${team ? label(team) : 'the team'}`
         + `${res.data?.headCoach ? ' as head coach' : ''}.`,
       );
       setCoachId('');
@@ -148,7 +149,7 @@ export default function Coaches() {
                 <option value="">Choose a person…</option>
                 {people.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.displayName || p.name || p.email} ({p.role})
+                    {personName(p)} ({p.role})
                   </option>
                 ))}
               </select>
@@ -194,10 +195,10 @@ export default function Coaches() {
                 {coaches.map((c) => (
                   <li key={c.id} className="roster-row">
                     <span className="avatar">
-                      {String(c.displayName || c.name || c.email || '?').slice(0, 1).toUpperCase()}
+                      {String(personName(c, '?')).slice(0, 1).toUpperCase()}
                     </span>
                     <span>
-                      <strong>{c.displayName || c.name || c.email || 'Unnamed coach'}</strong>
+                      <strong>{personName(c, 'Unnamed coach')}</strong>
                       {t.headCoachId === c.userId
                         ? <span className="pill">head</span>
                         : <span className="muted small"> · assistant</span>}
@@ -209,7 +210,7 @@ export default function Coaches() {
             )}
             {staff.length > 0 && (
               <p className="small muted">
-                Staff: {staff.map((s) => s.name || s.email).join(', ')}
+                Staff: {staff.map((s) => personName(s)).join(', ')}
               </p>
             )}
             <p className="small">

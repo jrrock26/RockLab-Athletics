@@ -134,12 +134,46 @@ export function myAthletes(rosterEntries, { uid, linkedPlayerIds } = {}) {
   });
 }
 
+/// A human's name, from whichever document happens to hold it.
+///
+/// Three collections describe a person and none of them agrees on the field:
+///
+///   users/{uid}            displayName      (set by Firebase Auth, mirrored at signup)
+///   teams/{id}/members     displayName      (written by assignCoachToTeam)
+///   teams/{id}/roster      playerName       (written by importPlayers)
+///   players/{id}           name             (durable athlete record)
+///
+/// Every one of those mismatches has already produced a visible bug: a roster that
+/// rendered blank, coaches listed by email address, a header showing a login instead of
+/// a person. Reading through this function makes the field name a detail of the document
+/// rather than a detail of every screen.
+///
+/// Order matters. displayName first because it is what Auth and the member row set;
+/// playerName next because it is the only name a roster entry carries; then name, then
+/// firstName/lastName for records built from a form; email last, because showing an
+/// address is better than showing nothing but it is never the intent.
+export function personName(record, fallback = '') {
+  if (typeof record === 'string') return record.trim() || fallback;
+  if (!record) return fallback;
+
+  const clean = (value) => (typeof value === 'string' ? value.trim() : '');
+  const composed = [clean(record.firstName), clean(record.lastName)].filter(Boolean).join(' ');
+
+  return (
+    clean(record.displayName) ||
+    clean(record.playerName) ||
+    clean(record.name) ||
+    clean(record.fullName) ||
+    composed ||
+    clean(record.email) ||
+    fallback
+  );
+}
+
 export function displayName(entry) {
-  const name = String((entry && entry.playerName) || '').trim();
-  if (name) return name;
   // A roster entry always has a player name; if it does not, say so plainly
   // instead of showing an empty card.
-  return 'Unnamed athlete';
+  return personName(entry, 'Unnamed athlete');
 }
 
 export function formatWhen(ms, { locale, timeZone } = {}) {

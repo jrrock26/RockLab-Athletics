@@ -3,6 +3,7 @@ import { signOut } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import { useAuth } from './index';
 import AppShell from '../components/AppShell';
+import { personName } from '../lib/portal.mjs';
 
 /// Profile: who you are, what you can reach, and the way out.
 ///
@@ -22,7 +23,7 @@ export default function Profile() {
     );
   }
 
-  const initials = String(profile?.name || user.email || '?')
+  const initials = String(personName(profile) || user.email || '?')
     .split(/\s+/)
     .slice(0, 2)
     .map((p) => p[0])
@@ -38,7 +39,7 @@ export default function Profile() {
       <section className="card profile-head">
         <span className="avatar lg">{initials}</span>
         <div>
-          <h2>{profile?.name || 'Unnamed account'}</h2>
+          <h2>{personName(profile, 'Unnamed account')}</h2>
           <p className="muted small">{user.email}</p>
           {profile?.role && <span className="pill">{profile.role}</span>}
         </div>

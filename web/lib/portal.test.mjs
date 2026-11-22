@@ -14,6 +14,7 @@ import {
   formatRecord,
   myAthletes,
   displayName,
+  personName,
   formatWhen,
   portalSummary,
   REQUIREMENT_STATUS,
@@ -143,6 +144,49 @@ test('a guardian with no link sees nobody, and nothing crashes', () => {
 test('a nameless roster entry still renders something honest', () => {
   assert.strictEqual(displayName({ id: 'r1' }), 'Unnamed athlete');
   assert.strictEqual(displayName({ id: 'r1', playerName: '  ' }), 'Unnamed athlete');
+});
+
+// --- one name from four document shapes ------------------------------------
+
+test('each collection\'s name field is read, so no screen has to know the shape', () => {
+  // These four are the real shapes in production. Every mismatch below has already
+  // shipped as a visible bug at least once.
+  assert.strictEqual(personName({ displayName: 'Dana Reed' }), 'Dana Reed'); // users, members
+  assert.strictEqual(personName({ playerName: 'Ada Byron' }), 'Ada Byron'); // roster entries
+  assert.strictEqual(personName({ name: 'Grace Hopper' }), 'Grace Hopper'); // players documents
+  assert.strictEqual(personName({ firstName: 'Katherine', lastName: 'Johnson' }), 'Katherine Johnson');
+});
+
+test('displayName wins over the other fields on the same document', () => {
+  // A member row may carry both. The Auth-set name is the one a person chose.
+  assert.strictEqual(
+    personName({ displayName: 'Dana Reed', name: 'dana.reed@school.edu', email: 'dana.reed@school.edu' }),
+    'Dana Reed',
+  );
+});
+
+test('an address is a last resort, and only when there is no name at all', () => {
+  // Better than an empty cell, never the intent. This is what the coach list showed
+  // for every coach before the field names were reconciled.
+  assert.strictEqual(personName({ email: 'coach@school.edu' }), 'coach@school.edu');
+  assert.strictEqual(personName({ displayName: 'Dana Reed', email: 'd@school.edu' }), 'Dana Reed');
+});
+
+test('whitespace is not a name', () => {
+  assert.strictEqual(personName({ displayName: '   ', playerName: 'Ada' }), 'Ada');
+  assert.strictEqual(personName({ displayName: '  ' }), '');
+});
+
+test('a missing or malformed record falls back without throwing', () => {
+  assert.strictEqual(personName(null, 'Coach'), 'Coach');
+  assert.strictEqual(personName(undefined), '');
+  assert.strictEqual(personName({ displayName: 42 }, 'Coach'), 'Coach');
+  assert.strictEqual(personName('Ada Byron'), 'Ada Byron'); // a bare string is a name
+});
+
+test('the roster-entry helper keeps its own honest fallback', () => {
+  assert.strictEqual(displayName({ id: 'r1' }), 'Unnamed athlete');
+  assert.strictEqual(displayName({ id: 'r1', playerName: 'Ada' }), 'Ada');
 });
 
 // --- formatting -----------------------------------------------------------
