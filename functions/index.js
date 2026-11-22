@@ -4777,9 +4777,115 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Coach assignment
+//
+// createTeam sets headCoachId to whoever created it, so an AD who starts a team
+// becomes its head coach by default and there was no way to hand it to anyone.
+// ensureTeamCoachMembership only repairs the HEAD coach's own membership, so it
+// cannot add an assistant either.
+//
+// This is a callable rather than a client write because membership decides access to
+// a roster, and the school check has to happen somewhere a client cannot skip.
+//
+// It assigns an account that already exists. A coach with no account still needs an
+// invitation -- that is what the iOS InviteCoachSheet writes, and it is untouched here.
+// ---------------------------------------------------------------------------
+
+exports.assignCoachToTeam = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const db = admin.firestore();
+  const caller = await userProfile(db, context.auth.uid);
+  if (caller.role !== 'ad') {
+    throw new functions.https.HttpsError('permission-denied', 'Only an athletic director can assign coaches.');
+  }
+
+  const teamId = String((data && data.teamId) || '');
+  const userId = String((data && data.userId) || '');
+  const makeHead = !!(data && data.makeHead);
+  if (!teamId || !userId) {
+    throw new functions.https.HttpsError('invalid-argument', 'teamId and userId are required.');
+  }
+
+  const teamRef = db.collection('teams').doc(teamId);
+  const [teamSnap, userSnap] = await Promise.all([
+    teamRef.get(),
+    db.collection('users').doc(userId).get(),
+  ]);
+  if (!teamSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Team not found.');
+  }
+  if (!userSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'That account does not exist.');
+  }
+
+  const schoolId = teamSnap.get('schoolId') || '';
+  if (!schoolId || caller.schoolId !== schoolId) {
+    throw new functions.https.HttpsError('permission-denied', 'That is not your school.');
+  }
+  // The target must belong to the same school. Without this, an AD could hand a team to
+  // any account id they could guess.
+  if ((userSnap.get('schoolId') || '') !== schoolId) {
+    throw new functions.https.HttpsError('permission-denied', 'That person is not in your school.');
+  }
+
+  const targetRole = userSnap.get('role');
+  if (!['coach', 'staff', 'ad'].includes(targetRole)) {
+    throw new functions.https.HttpsError('failed-precondition', 'Only a coach, staff member or AD can hold a team.');
+  }
+
+  const memberRef = teamRef.collection('members').doc(userId);
+  const existing = await memberRef.get();
+
+  await memberRef.set({
+    teamId,
+    userId,
+    role: 'coach',
+    name: userSnap.get('name') || userSnap.get('email') || '',
+    email: userSnap.get('email') || '',
+    // Preserve permissions granted earlier; a reassignment must not silently revoke them.
+    permissions: existing.exists ? (existing.get('permissions') || []) : [],
+    createdAt: existing.exists ? existing.get('createdAt') : admin.firestore.FieldValue.serverTimestamp(),
+    assignedBy: context.auth.uid,
+    assignedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  if (makeHead) {
+    const previousHeadId = teamSnap.get('headCoachId') || '';
+    await teamRef.update({ headCoachId: userId });
+    // The outgoing head keeps their membership, demoted rather than removed: they may
+    // still run the team day to day, and losing the record would lose their history.
+    if (previousHeadId && previousHeadId !== userId) {
+      const prevRef = teamRef.collection('members').doc(previousHeadId);
+      const prev = await prevRef.get();
+      if (prev.exists) {
+        await prevRef.set({ role: 'coach', demotedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      }
+    }
+  }
+
+  // So the team appears in their app without a refresh.
+  await db.collection('users').doc(userId).update({
+    teamIds: admin.firestore.FieldValue.arrayUnion(teamId),
+  });
+
+  await db.collection('auditLog').add({
+    schoolId,
+    action: makeHead ? 'team.headCoachAssigned' : 'team.coachAssigned',
+    teamId,
+    targetUserId: userId,
+    actorId: context.auth.uid,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { ok: true, headCoach: makeHead };
+});
+
+// A season is an object with a state, not a label on a team. Everything here is an AD
+// ---------------------------------------------------------------------------
 // Seasons
 //
-// A season is an object with a state, not a label on a team. Everything here is an AD
 // action and everything writes through the Admin SDK, which is why seasons/{id} is
 // `allow write: if false` in firestore.rules.
 // ---------------------------------------------------------------------------

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { collection, getDocs, query, where } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, functions } from '../lib/firebase';
+import { httpsCallable } from 'firebase/functions';
 import { useAuth } from './index';
 import AppShell from '../components/AppShell';
 
@@ -19,6 +20,62 @@ export default function Coaches() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  const [people, setPeople] = useState([]);
+  const [coachId, setCoachId] = useState('');
+  const [assignTeamId, setAssignTeamId] = useState('');
+  const [makeHead, setMakeHead] = useState(false);
+  const [assignBusy, setAssignBusy] = useState(false);
+  const [assignError, setAssignError] = useState('');
+  const [assignNotice, setAssignNotice] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // users/{id} is readable by an AD through a branch that never touches the document, so
+  // this list query is authorisable. Same-school is enforced in memory as well, because a
+  // rule change elsewhere should not silently widen this screen.
+  useEffect(() => {
+    if (!isAd || !profile?.schoolId) return;
+    let alive = true;
+    (async () => {
+      const snap = await getDocs(
+        query(collection(db, 'users'), where('schoolId', '==', profile.schoolId)),
+      ).catch(() => null);
+      if (!alive || !snap) return;
+      setPeople(
+        snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .filter((u) => ['coach', 'staff', 'ad'].includes(u.role))
+          .sort((a, b) => String(a.name || a.email).localeCompare(String(b.name || b.email))),
+      );
+    })();
+    return () => { alive = false; };
+  }, [isAd, profile?.schoolId]);
+
+  async function assign() {
+    setAssignBusy(true);
+    setAssignError('');
+    setAssignNotice('');
+    try {
+      const res = await httpsCallable(functions, 'assignCoachToTeam')({
+        teamId: assignTeamId, userId: coachId, makeHead,
+      });
+      const person = people.find((p) => p.id === coachId);
+      const team = rows.find((t) => t.id === assignTeamId);
+      setAssignNotice(
+        `${person?.name || person?.email || 'Coach'} assigned to ${team ? label(team) : 'the team'}`
+        + `${res.data?.headCoach ? ' as head coach' : ''}.`,
+      );
+      setCoachId('');
+      setMakeHead(false);
+      // Re-read the staff lists instead of reloading the page, which would also throw away
+      // the confirmation above.
+      setReloadKey((k) => k + 1);
+    } catch (err) {
+      setAssignError(err?.message || 'That assignment did not go through.');
+    } finally {
+      setAssignBusy(false);
+    }
+  }
 
   const isAd = profile?.role === 'ad';
 
@@ -52,7 +109,7 @@ export default function Coaches() {
       }
     })();
     return () => { alive = false; };
-  }, [authLoading, user, profile, isAd]);
+  }, [authLoading, user, profile, isAd, reloadKey]);
 
   if (authLoading) return <main className="page"><p>Loading…</p></main>;
   if (!user) return <main className="page"><p className="muted"><Link href="/">Sign in</Link> first.</p></main>;
@@ -71,6 +128,51 @@ export default function Coaches() {
       {isAd && !loading && rows.length === 0 && (
         <section className="card">
           <p className="muted">No teams yet. <Link href="/dashboard">Start one</Link> first.</p>
+        </section>
+      )}
+
+      {isAd && (
+        <section className="card">
+          <h2>Assign a coach</h2>
+          <p className="small muted">
+            Picks an account that already exists in your school. A coach without an account
+            still needs an invitation — that is the path the app uses.
+          </p>
+          <div className="form-grid">
+            <label>
+              Coach
+              <select value={coachId} onChange={(e) => setCoachId(e.target.value)}>
+                <option value="">Choose a person…</option>
+                {people.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name || p.email} ({p.role})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Team
+              <select value={assignTeamId} onChange={(e) => setAssignTeamId(e.target.value)}>
+                <option value="">Choose a team…</option>
+                {rows.map((t) => (
+                  <option key={t.id} value={t.id}>{label(t)}</option>
+                ))}
+              </select>
+            </label>
+            <label className="checkbox-row">
+              <input type="checkbox" checked={makeHead} onChange={(e) => setMakeHead(e.target.checked)} />
+              <span>Make head coach</span>
+            </label>
+          </div>
+          <button
+            type="button"
+            onClick={assign}
+            disabled={assignBusy || !coachId || !assignTeamId}
+          >
+            {assignBusy ? 'Assigning…' : 'Assign'}
+          </button>
+          {assignError && <p className="error">{assignError}</p>}
+          {assignNotice && <p className="ok">{assignNotice}</p>}
         </section>
       )}
 
