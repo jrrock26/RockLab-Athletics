@@ -39,13 +39,23 @@ export default function AppShell({ title, profile, user, children, art = 'arena.
   };
   const cls = (path) => (here(path) ? 'on' : undefined);
 
+  // A back control on every page, because the browser button is the wrong size and in
+  // the wrong place when you are clicking through a roster on a laptop. Hidden on the
+  // landing page, where there is nothing to go back to.
+  const canGoBack = (router.pathname || '/') !== '/';
+
   return (
     <>
       <Head><title>{title ? `${title} · RockLab Athletics` : 'RockLab Athletics'}</title></Head>
       <div className="app-bg" style={{ '--art': `url('/img/${art}')` }} />
 
       <header className="nav">
-        <Link href="/" className="brand">
+        {canGoBack && (
+          <button type="button" className="back" onClick={() => router.back()} aria-label="Go back">
+            ←
+          </button>
+        )}
+        <Link href={isAd ? '/dashboard' : '/portal'} className="brand">
           <span className="brand-mark">RL</span>
           <span className="brand-text">RockLab</span>
         </Link>

@@ -296,6 +296,19 @@ a { color: var(--accent); }
 .nav-user .who { color: var(--muted); text-decoration: none; }
 .nav-user .who:hover { color: var(--text); }
 
+.back {
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.back:hover { color: var(--text); border-color: var(--accent); }
+
 /* ---- Profile ---- */
 
 .profile-head { display: flex; align-items: center; gap: 16px; }

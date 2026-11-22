@@ -12,6 +12,7 @@ const labelOf = (t) => {
   return [g, t?.level, t?.sportName].filter(Boolean).join(' · ');
 };
 import { auth, db, functions } from '../lib/firebase';
+import AppShell from '../components/AppShell';
 
 /// The coach's approval queue. Without this the join page files requests into a list
 /// nobody can see, which is worse than no join page at all.
@@ -122,7 +123,7 @@ export default function Requests() {
   return (
     <>
       <Head><title>Join requests · RockLab Athletics</title></Head>
-      <main className="page">
+      <AppShell title="Join requests" profile={null} user={user}>
         <h1>Join requests</h1>
         <p className="muted small">
           Approving links that family to the athlete. Rejecting tells them to ask again.
@@ -167,7 +168,7 @@ export default function Requests() {
         <p className="muted small">
           <Link href="/portal">Family view</Link> · <Link href="/support">Support</Link>
         </p>
-      </main>
+      </AppShell>
     </>
   );
 }

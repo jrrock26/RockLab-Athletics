@@ -3,6 +3,7 @@ import { collection, getDocs, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../lib/firebase';
 import { useAuth } from './index';
+import AppShell from '../components/AppShell';
 
 function parseCsv(text) {
   return text
@@ -141,7 +142,7 @@ export default function Import() {
   if (profile?.role !== 'ad') return <main className="page"><p>AD access required.</p></main>;
 
   return (
-    <main className="page">
+    <AppShell title="Import" profile={profile} user={user}>
       <h1>Import</h1>
       <p className="muted">
         Step 1 puts players on the roster. Step 2 emails their parents. Do them in that
@@ -287,6 +288,6 @@ export default function Import() {
           </>
         )}
       </div>
-    </main>
+    </AppShell>
   );
 }
