@@ -315,6 +315,56 @@ a { color: var(--accent); }
   margin: 16px 0;
 }
 
+/* ---- The AD rail: an office layout, not a phone layout ---- */
+
+.with-rail {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 24px 22px 64px;
+  gap: 26px;
+}
+
+.rail {
+  position: sticky;
+  top: 72px;
+  align-self: start;
+  display: grid;
+  gap: 2px;
+  padding: 10px 0;
+}
+
+.rail a {
+  display: block;
+  padding: 9px 12px;
+  border-radius: 9px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.rail a:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
+.rail a.on { color: var(--text); background: rgba(47, 111, 237, 0.16); }
+
+.with-rail .app-page { max-width: none; padding-top: 0; }
+
+@media (max-width: 900px) {
+  .with-rail { grid-template-columns: 1fr; padding: 18px 14px 48px; gap: 0; }
+  .rail {
+    position: static;
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 0 0 14px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 18px;
+  }
+  .rail a { white-space: nowrap; }
+}
+
+.warn-text { color: #ffb057; }
+
 @media (max-width: 720px) {
   .nav { gap: 12px; padding: 10px 14px; }
   .nav-links { gap: 12px; overflow-x: auto; }

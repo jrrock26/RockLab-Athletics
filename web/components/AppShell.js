@@ -6,18 +6,27 @@ import { auth } from '../lib/firebase';
 
 /// The frame every signed-in screen sits in.
 ///
-/// The first version of the web app had no frame at all: each page rendered a bare
-/// <main> with no way to tell who you were signed in as and no way out except
-/// navigating to the root and finding a sign-out button there. This gives every page the
-/// same header (identity, role, navigation, sign out) over the app's arena artwork, so
-/// the web feels like the same product as the iOS app rather than a form.
-///
-/// The active page is marked. Without it, clicking a link to the page you are already on
-/// does nothing visible and reads as a broken tab.
+/// An athletic director works a desk for eight hours and touches the app at events, so
+/// the web gets a persistent rail: every part of the organization one click away instead
+/// of two. Everyone else gets the top tabs, which suit a phone. The rail collapses to
+/// tabs below 900px so a coach checking a roster on a laptop is not squeezed.
+const RAIL = [
+  { href: '/dashboard', label: 'Teams' },
+  { href: '/coaches', label: 'Coaches' },
+  { href: '/import', label: 'Import' },
+  { href: '/requests', label: 'Requests' },
+  { href: '/reports', label: 'Reports' },
+  { href: '/records', label: 'Records' },
+  { href: '/audit', label: 'Audit log' },
+  { href: '/portal', label: 'Team portal' },
+  { href: '/profile', label: 'Profile' },
+];
+
 export default function AppShell({ title, profile, user, children, art = 'arena.png' }) {
   const router = useRouter();
   const role = profile?.role || '';
   const name = profile?.name || user?.email || '';
+  const isAd = role === 'ad';
 
   // trailingSlash is on, so /dashboard/ and /dashboard must both count as current.
   const here = (path) => {
@@ -39,13 +48,15 @@ export default function AppShell({ title, profile, user, children, art = 'arena.
         </Link>
 
         <nav className="nav-links">
-          {role === 'ad' && <Link href="/dashboard" className={cls('/dashboard')}>Teams</Link>}
-          {role === 'ad' && <Link href="/import" className={cls('/import')}>Import</Link>}
-          {(role === 'ad' || role === 'coach') && (
-            <Link href="/requests" className={cls('/requests')}>Requests</Link>
+          {!isAd && (
+            <>
+              {(role === 'coach') && (
+                <Link href="/requests" className={cls('/requests')}>Requests</Link>
+              )}
+              <Link href="/portal" className={cls('/portal')}>Portal</Link>
+              <Link href="/profile" className={cls('/profile')}>Profile</Link>
+            </>
           )}
-          <Link href="/portal" className={cls('/portal')}>Portal</Link>
-          <Link href="/profile" className={cls('/profile')}>Profile</Link>
         </nav>
 
         <div className="nav-user">
@@ -55,7 +66,20 @@ export default function AppShell({ title, profile, user, children, art = 'arena.
         </div>
       </header>
 
-      <main className="page app-page">{children}</main>
+      {isAd ? (
+        <div className="with-rail">
+          <nav className="rail">
+            {RAIL.map((item) => (
+              <Link key={item.href} href={item.href} className={cls(item.href)}>
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+          <main className="page app-page">{children}</main>
+        </div>
+      ) : (
+        <main className="page app-page">{children}</main>
+      )}
     </>
   );
 }
