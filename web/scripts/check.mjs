@@ -21,6 +21,92 @@ import { join, relative } from 'path';
 
 const ROOTS = ['pages', 'components', 'lib'];
 
+/// Identifiers that exist without being declared in the file.
+const GLOBALS = new Set([
+  'window', 'document', 'navigator', 'console', 'Math', 'JSON', 'Date', 'Number', 'String',
+  'Boolean', 'Array', 'Object', 'Promise', 'Set', 'Map', 'Error', 'RegExp', 'parseInt',
+  'parseFloat', 'isNaN', 'encodeURIComponent', 'decodeURIComponent', 'setTimeout',
+  'clearTimeout', 'setInterval', 'clearInterval', 'fetch', 'Blob', 'URL', 'File', 'FormData',
+  'React', 'undefined', 'null', 'true', 'false', 'NaN', 'Infinity', 'process',
+]);
+
+/// Every name this file binds: imports, destructuring, declarations, parameters, functions.
+///
+/// A crude but effective approximation of scope. It over-collects (a name declared anywhere
+/// is treated as bound everywhere), which means it cannot flag a genuinely out-of-scope use
+/// in a nested block -- but it does catch the case that shipped: a JSX attribute referring to
+/// a name the component never destructured, which throws on first render.
+/// Adds the names bound by a destructuring or parameter pattern, tolerating defaults and
+/// renames: `{ a, b: c, d = 1, ...rest }` binds a, c, d, rest.
+function addFromPattern(pattern, names) {
+  // Take the inside of the first brace or bracket group, ignoring any trailing `= {}`
+  // default, so `{ locale, timeZone } = {}` splits correctly.
+  const group = String(pattern).match(/[{[](.*)[}\]]/s);
+  const inner = group ? group[1] : String(pattern);
+  inner.split(',').forEach((piece) => {
+    const withoutDefault = piece.split('=')[0];
+    const parts = withoutDefault.split(':');
+    const raw = (parts.length > 1 ? parts[parts.length - 1] : parts[0]).trim().replace(/^\.\.\./, '');
+    if (/^[A-Za-z_$][\w$]*$/.test(raw)) names.add(raw);
+  });
+}
+
+function boundNames(source, imports) {
+  const names = new Set();
+
+  for (const m of imports.matchAll(/import\s+([\s\S]*?)\s+from/g)) {
+    const clause = m[1];
+    const ns = clause.match(/\*\s+as\s+([A-Za-z_$][\w$]*)/);
+    if (ns) names.add(ns[1]);
+    const braced = clause.match(/\{([\s\S]*)\}/);
+    if (braced) addFromPattern(braced[1], names);
+    const dflt = clause.replace(/\{[\s\S]*\}/, '').replace(/\*\s+as\s+[\w$]+/, '').replace(/,/g, '').trim();
+    if (/^[A-Za-z_$][\w$]*$/.test(dflt)) names.add(dflt);
+  }
+
+  // const { a, b: c } = ...   /   const [x, y] = ...   /   const z = ...
+  for (const m of source.matchAll(/\b(?:const|let|var)\s+(?:\{([^}]*)\}|\[([^\]]*)\]|([A-Za-z_$][\w$]*))/g)) {
+    if (m[1]) m[1].split(',').forEach((piece) => {
+      const alias = piece.split(':');
+      const name = (alias[1] || alias[0] || '').trim();
+      if (/^[A-Za-z_$][\w$]*$/.test(name)) names.add(name);
+    });
+    if (m[2]) m[2].split(',').forEach((piece) => {
+      const name = piece.trim();
+      if (/^[A-Za-z_$][\w$]*$/.test(name)) names.add(name);
+    });
+    if (m[3]) names.add(m[3]);
+  }
+
+  // function foo(  /  (a, b) =>  /  function (a) -- params may be destructured
+  for (const m of source.matchAll(/function\s+([A-Za-z_$][\w$]*)/g)) names.add(m[1]);
+  for (const m of source.matchAll(/function\s*[A-Za-z_$\w]*\s*\(([^)]*)\)/g)) {
+    m[1].split(/\s*,\s*(?![^{]*\})/).forEach((piece) => {
+      const trimmed = piece.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        addFromPattern(trimmed, names);
+      } else {
+        const name = trimmed.split('=')[0].trim();
+        if (/^[A-Za-z_$][\w$]*$/.test(name)) names.add(name);
+      }
+    });
+  }
+  for (const m of source.matchAll(/\(([^()]*)\)\s*=>/g)) {
+    m[1].split(/\s*,\s*(?![^{]*\})/).forEach((piece) => {
+      const trimmed = piece.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        addFromPattern(trimmed, names);
+      } else {
+        const name = trimmed.split('=')[0].trim();
+        if (/^[A-Za-z_$][\w$]*$/.test(name)) names.add(name);
+      }
+    });
+  }
+  for (const m of source.matchAll(/(?:^|[\s(,])([A-Za-z_$][\w$]*)\s*=>/gm)) names.add(m[1]);
+
+  return names;
+}
+
 /// Names that only ever arrive by import. Using one without importing it is a guaranteed
 /// runtime failure, not a style opinion.
 const IMPORT_ONLY = [
@@ -100,6 +186,22 @@ function checkFile(file) {
         );
         break;
       }
+    }
+  }
+
+  // A bare identifier inside JSX braces -- {user}, profile={user} -- must be bound in this
+  // file or it is a ReferenceError on the first render. React reports that as "a client-side
+  // exception has occurred", which names neither the file nor the identifier: /import threw
+  // exactly this way on `user` and the message told you nothing.
+  const bound = boundNames(body, imports);
+  const reported = new Set();
+  const looksLikeJsx = file.endsWith('.js');
+  if (looksLikeJsx) {
+    for (const m of body.matchAll(/\{\s*([A-Za-z_$][\w$]*)\s*\}/g)) {
+      const name = m[1];
+      if (reported.has(name) || bound.has(name) || GLOBALS.has(name)) continue;
+      reported.add(name);
+      problems.push(`${name} is used in JSX but never declared in this file`);
     }
   }
 

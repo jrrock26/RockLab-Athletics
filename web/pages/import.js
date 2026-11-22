@@ -19,7 +19,7 @@ function parseCsv(text) {
 }
 
 export default function Import() {
-  const { loading, profile } = useAuth();
+  const { loading, profile, user } = useAuth();
   const [teams, setTeams] = useState([]);
   const [teamId, setTeamId] = useState('');
   const [csv, setCsv] = useState('');
