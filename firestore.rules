@@ -255,6 +255,18 @@ service cloud.firestore {
         allow create, delete: if signedIn() && uid() == followerId;
         allow update: if false;
       }
+
+      // A season is an object because a string cannot be CLOSED, and "show me the 2025
+      // season" is unanswerable without one.
+      //
+      // All writes go through callables on purpose: closing a season stamps every roster
+      // entry in the school, and that cannot be done transactionally from a browser.
+      // Read is open to any signed-in user -- a season is not private data -- and must
+      // never be gated on exists(), or the seasons list becomes unlistable.
+      match /seasons/{seasonId} {
+        allow read: if signedIn();
+        allow write: if false;
+      }
     }
 
     match /teams/{teamId} {

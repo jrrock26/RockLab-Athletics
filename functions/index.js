@@ -14,6 +14,19 @@ const {
 
 admin.initializeApp();
 
+/// The role vocabulary has exactly one spelling per role.
+///
+/// iOS called guardians `family` before they became `parent`, and a legacy
+/// invitation or membership row can still carry that word. Rejecting it would
+/// break an old invite link; storing it would break `UserRole` decoding on iOS
+/// and every `memberRole() == 'parent'` rule clause. So anything that reads a
+/// stored role normalises it here first.
+function normaliseRole(raw) {
+  const role = String(raw || '').trim();
+  return role === 'family' ? 'parent' : role;
+}
+
+
 // ---------------------------------------------------------------------------
 // Shared: transactional email, invitation links, and the audit trail.
 //
@@ -839,7 +852,9 @@ exports.acceptInvitation = functions.https.onCall(async (data, context) => {
   }
 
   const schoolId = invData.schoolId;
-  const role = invData.role;
+  // Normalise once, here: every write below (users.role, custom claims, team
+  // membership) and every rule clause downstream reads this value.
+  const role = normaliseRole(invData.role);
   const teamId = invData.teamId;
 
   // Update user's school and role
@@ -880,7 +895,15 @@ exports.acceptInvitation = functions.https.onCall(async (data, context) => {
 
   // Create team membership if teamId exists
   if (teamId) {
-    const membershipRole = role === 'parent' ? 'follower' : role;
+    // A guardian is a full member of the team, not a follower.
+    //
+    // This used to read `role === 'parent' ? 'follower' : role`, which downgraded
+    // every parent at the membership layer. firestore.rules then withheld practice
+    // events (events rule: followers get game/meeting/meal/travel only) and every
+    // non-public comm-board post, and TeamAccess.isParent read the membership role
+    // so it was false for real parents — which also hid the parent chat channel.
+    // `follower` now means only a community member with no athlete.
+    const membershipRole = role;
     await db.collection('teams').doc(teamId).collection('members').doc(callerId).set({
       teamId: teamId,
       userId: callerId,
@@ -4728,5 +4751,136 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
   }
 
   res.json({ received: true });
+});
+
+// ---------------------------------------------------------------------------
+// Seasons
+//
+// A season is an object with a state, not a label on a team. Everything here is an AD
+// action and everything writes through the Admin SDK, which is why seasons/{id} is
+// `allow write: if false` in firestore.rules.
+// ---------------------------------------------------------------------------
+
+exports.createSeason = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const db = admin.firestore();
+  const caller = await userProfile(db, context.auth.uid);
+  if (caller.role !== 'ad') {
+    throw new functions.https.HttpsError('permission-denied', 'Only an athletic director can create a season.');
+  }
+
+  const schoolId = String((data && data.schoolId) || '');
+  const year = Number(data && data.year);
+  const term = String((data && data.term) || '').toLowerCase();
+  if (!schoolId || !['fall', 'winter', 'spring'].includes(term) || !year) {
+    throw new functions.https.HttpsError('invalid-argument', 'schoolId, year and term (fall|winter|spring) are required.');
+  }
+  // An AD may only open seasons for their own school.
+  if (caller.schoolId !== schoolId) {
+    throw new functions.https.HttpsError('permission-denied', 'That is not your school.');
+  }
+
+  const seasonId = `${year}-${term}`;
+  const ref = db.collection('schools').doc(schoolId).collection('seasons').doc(seasonId);
+  const existing = await ref.get();
+  if (existing.exists) {
+    throw new functions.https.HttpsError('already-exists', 'That season already exists.');
+  }
+
+  const startsAt = data && data.startsAt ? new Date(data.startsAt) : null;
+  const endsAt = data && data.endsAt ? new Date(data.endsAt) : null;
+
+  await ref.set({
+    schoolId,
+    year,
+    term,
+    name: `${term.charAt(0).toUpperCase()}${term.slice(1)} ${year}`,
+    startsAt: startsAt ? admin.firestore.Timestamp.fromDate(startsAt) : null,
+    endsAt: endsAt ? admin.firestore.Timestamp.fromDate(endsAt) : null,
+    state: 'active',
+    closedAt: null,
+    openedBy: context.auth.uid,
+    closedBy: null,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { seasonId };
+});
+
+/// Closing is the operation that makes a season a season.
+///
+/// It archives roster entries -- it never deletes them, because stats, injuries, form
+/// submissions and RSVPs all point at those documents. Batches are chunked because a
+/// school with many teams would exceed the 500-write limit in one commit.
+exports.closeSeason = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const db = admin.firestore();
+  const caller = await userProfile(db, context.auth.uid);
+  if (caller.role !== 'ad') {
+    throw new functions.https.HttpsError('permission-denied', 'Only an athletic director can close a season.');
+  }
+
+  const schoolId = String((data && data.schoolId) || '');
+  const seasonId = String((data && data.seasonId) || '');
+  if (!schoolId || !seasonId) {
+    throw new functions.https.HttpsError('invalid-argument', 'schoolId and seasonId are required.');
+  }
+  if (caller.schoolId !== schoolId) {
+    throw new functions.https.HttpsError('permission-denied', 'That is not your school.');
+  }
+
+  const seasonRef = db.collection('schools').doc(schoolId).collection('seasons').doc(seasonId);
+  const seasonSnap = await seasonRef.get();
+  if (!seasonSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'That season does not exist.');
+  }
+  if (seasonSnap.get('state') === 'closed') {
+    // Idempotent: closing twice is not an error, it is a no-op with a clear answer.
+    return { alreadyClosed: true, archived: 0 };
+  }
+
+  // Only entries actually stamped to this season are archived. An entry with no seasonId
+  // is left alone rather than swept into a season it never belonged to.
+  const teamsSnap = await db.collection('teams').where('schoolId', '==', schoolId).get();
+  const targets = [];
+  for (const teamDoc of teamsSnap.docs) {
+    const rosterSnap = await teamDoc.ref.collection('roster').where('seasonId', '==', seasonId).get();
+    rosterSnap.docs.forEach((r) => targets.push({ ref: r.ref, data: r.data() }));
+  }
+
+  let archived = 0;
+  for (let i = 0; i < targets.length; i += 400) {
+    const batch = db.batch();
+    targets.slice(i, i + 400).forEach((t) => {
+      if (t.data.state === 'archived') return;
+      batch.update(t.ref, {
+        state: 'archived',
+        archivedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      archived += 1;
+    });
+    await batch.commit();
+  }
+
+  await seasonRef.update({
+    state: 'closed',
+    closedAt: admin.firestore.FieldValue.serverTimestamp(),
+    closedBy: context.auth.uid,
+  });
+
+  await db.collection('auditLog').add({
+    schoolId,
+    action: 'season.closed',
+    seasonId,
+    archivedEntries: archived,
+    actorId: context.auth.uid,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { closed: true, archived };
 });
 

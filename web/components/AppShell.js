@@ -14,6 +14,7 @@ const RAIL = [
   { href: '/dashboard', label: 'Teams' },
   { href: '/coaches', label: 'Coaches' },
   { href: '/calendar', label: 'Calendar' },
+  { href: '/seasons', label: 'Seasons' },
   { href: '/directory', label: 'Directory' },
   { href: '/import', label: 'Import' },
   { href: '/requests', label: 'Requests' },
