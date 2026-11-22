@@ -4,6 +4,13 @@ import Link from 'next/link';
 import { onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, query, setDoc, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+
+/// Boys · Varsity · Basketball. Two teams can differ only by gender, so a request has to
+/// say which one it is for or the AD cannot tell them apart.
+const labelOf = (t) => {
+  const g = t?.gender ? `${String(t.gender).charAt(0).toUpperCase()}${String(t.gender).slice(1)}` : '';
+  return [g, t?.level, t?.sportName].filter(Boolean).join(' · ');
+};
 import { auth, db, functions } from '../lib/firebase';
 
 /// The coach's approval queue. Without this the join page files requests into a list
@@ -20,6 +27,7 @@ export default function Requests() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [hiddenCount, setHiddenCount] = useState(0);
 
   const load = useCallback(async (account) => {
     setLoading(true);
@@ -29,25 +37,40 @@ export default function Requests() {
       const profile = me.exists() ? me.data() : {};
 
       // Teams this account coaches, either as head coach or by membership list.
-      const ids = new Set(Array.isArray(profile.teamIds) ? profile.teamIds : []);
-      const headed = await getDocs(query(collection(db, 'teams'), where('headCoachId', '==', account.uid)))
-        .catch(() => null);
-      (headed?.docs || []).forEach((d) => ids.add(d.id));
+      // An AD can act on every team in the school, and the joinRequests rule grants
+      // isAd() exactly that. Enumerating only the AD's OWN teams is what made the
+      // dashboard say "2 waiting" while this page said nothing: the count was real, this
+      // list was looking in the wrong place.
+      const ids = new Set();
+      const names = {};
+      const isAd = profile.role === 'ad';
+
+      if (isAd && profile.schoolId) {
+        const all = await getDocs(query(collection(db, 'teams'), where('schoolId', '==', profile.schoolId)));
+        all.docs.forEach((d) => { ids.add(d.id); names[d.id] = labelOf(d.data()); });
+      } else {
+        (Array.isArray(profile.teamIds) ? profile.teamIds : []).forEach((id) => ids.add(id));
+        const headed = await getDocs(query(collection(db, 'teams'), where('headCoachId', '==', account.uid)))
+          .catch(() => null);
+        (headed?.docs || []).forEach((d) => { ids.add(d.id); names[d.id] = labelOf(d.data()); });
+      }
 
       const collected = [];
+      let hidden = 0;
       for (const teamId of ids) {
         // teamId is a PATH segment here, so the membership lookup inside the rule is a
         // fixed path and the query can be authorised.
         const snap = await getDocs(query(
           collection(db, 'teams', teamId, 'joinRequests'),
           where('status', '==', 'pending'),
-        )).catch(() => null);
+        )).catch(() => { hidden += 1; return null; });
         (snap?.docs || []).forEach((d) => {
-          collected.push({ id: d.id, teamId, ...d.data() });
+          collected.push({ id: d.id, teamId, teamName: names[teamId] || '', ...d.data() });
         });
       }
       collected.sort((a, b) => String(a.athleteName).localeCompare(String(b.athleteName)));
       setRows(collected);
+      setHiddenCount(hidden);
     } catch (err) {
       setError(err?.message || 'Could not load requests.');
     } finally {
@@ -107,6 +130,13 @@ export default function Requests() {
 
         {notice && <p className="notice">{notice}</p>}
         {error && <p className="error">{error}</p>}
+        {hiddenCount > 0 && (
+          <p className="small warn-text">
+            {hiddenCount} {hiddenCount === 1 ? 'team' : 'teams'} could not be read, so any
+            requests on {hiddenCount === 1 ? 'it' : 'them'} are not shown here. This is a
+            permissions problem, not an empty queue.
+          </p>
+        )}
 
         {!user && <p className="muted">Sign in to see requests.</p>}
         {user && loading && <p className="muted">Loading…</p>}
@@ -121,6 +151,7 @@ export default function Requests() {
               {(row.requesterName || row.requesterEmail || 'Someone')}
               {' · wants to join as '}
               {row.role === 'player' ? 'the athlete' : 'a parent or guardian'}
+              {row.teamName ? ` · ${row.teamName}` : ''}
             </p>
             <div className="actions">
               <button type="button" onClick={() => approve(row)} disabled={busy === row.id}>
