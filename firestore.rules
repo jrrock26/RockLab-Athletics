@@ -449,6 +449,29 @@ service cloud.firestore {
         );
       }
 
+      // Attendance: one document per roster entry, keyed by the roster entry id so it can
+      // be joined to an athlete without a second lookup.
+      //
+      // This rule was MISSING. iOS has had setAttendance()/fetchAttendance() since the
+      // start, writing events/{id}/attendance/{rosterEntryId}, and every one of those
+      // writes was denied -- which is why the feature looked like it did not exist.
+      //
+      // read: staff, coach and AD see the event's attendance. A player or guardian does
+      // NOT read this subcollection directly -- `users.linkedPlayerIds` is client-writable
+      // (see the note further up this file), so trusting it here would let any guardian
+      // add any roster entry id and read another child's record. Their own attendance is
+      // served through a callable instead, where the link can be trusted.
+      match /attendance/{rosterEntryId} {
+        allow read: if signedIn() && (
+          isAd()
+          || isCoachOf(eventTeam(eventId))
+          || isStaffOf(eventTeam(eventId))
+        );
+        // Whoever runs the event takes attendance: coach, staff with the roster duty, or
+        // the AD. Never the athlete, so attendance cannot be self-reported.
+        allow write: if canManageTeam(eventTeam(eventId)) || isStaffOf(eventTeam(eventId));
+      }
+
       match /attendance/{entryId} {
         allow read: if signedIn() && (isAd() || isCoachOf(eventTeam(eventId)) || staffHasPerm(eventTeam(eventId), 'attendance'));
         allow write: if signedIn() && (isAd() || isCoachOf(eventTeam(eventId)) || staffHasPerm(eventTeam(eventId), 'attendance'));

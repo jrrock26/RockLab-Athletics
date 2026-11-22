@@ -454,6 +454,35 @@ a { color: var(--accent); }
 }
 .roster-link:hover strong { color: var(--accent); }
 
+/* ---- Attendance capture ---- */
+
+.attend-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(14, 18, 25, 0.7);
+}
+
+.attend-options { display: flex; gap: 6px; margin-left: auto; }
+
+.choice {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.choice:hover { color: var(--text); }
+.choice.on.present { border-color: #2f6b45; background: rgba(61, 220, 151, 0.16); color: #62e6ac; }
+.choice.on.excused { border-color: #4a3a1e; background: rgba(255, 176, 87, 0.14); color: #ffb057; }
+.choice.on.unexcused { border-color: #5c2626; background: rgba(255, 107, 107, 0.14); color: #ff8a8a; }
+
 /* ---- Dashboard: exceptions first, inventory below ---- */
 
 .dash-head {

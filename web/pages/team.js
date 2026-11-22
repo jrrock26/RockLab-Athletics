@@ -39,7 +39,7 @@ export default function TeamPage() {
         const [r, f, e] = await Promise.all([
           getDocs(query(collection(db, 'teams', id, 'roster'), limit(200))).catch(() => null),
           getDocs(query(collection(db, 'teams', id, 'forms'), limit(50))).catch(() => null),
-          getDocs(query(collection(db, 'teams', id, 'events'), limit(50))).catch(() => null),
+          getDocs(query(collection(db, 'events'), where('teamId', '==', id), limit(50))).catch(() => null),
         ]);
         if (!alive) return;
         setRoster((r?.docs || []).map((d) => ({ id: d.id, ...d.data() })));
@@ -135,8 +135,12 @@ export default function TeamPage() {
             <ul>
               {events.map((ev) => (
                 <li key={ev.id}>
-                  <strong>{ev.title || ev.opponent || 'Event'}</strong>
-                  {ev.startAt ? <span className="muted small"> · {new Date(ev.startAt).toLocaleString()}</span> : null}
+                  <Link href={`/event?team=${id}&id=${ev.id}`}>
+                    <strong>{ev.title || ev.opponent || 'Event'}</strong>
+                  </Link>
+                  {ev.date
+                    ? <span className="muted small"> · {new Date(Number(ev.date) * 1000).toLocaleString()}</span>
+                    : null}
                 </li>
               ))}
             </ul>

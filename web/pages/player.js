@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
-import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../lib/firebase';
 import { useAuth } from './index';
@@ -22,6 +22,7 @@ export default function PlayerPage() {
 
   const [player, setPlayer] = useState(null);
   const [forms, setForms] = useState(null);
+  const [attendance, setAttendance] = useState(null);
   const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -56,6 +57,38 @@ export default function PlayerPage() {
       });
     }
     setForms(rows);
+
+    // Attendance lives on the EVENT, not the athlete: one doc per roster entry under
+    // events/{id}/attendance. So the rollup reads this team's events and asks each for
+    // this athlete's row. Events are read once per team, not per athlete per event.
+    // events is a TOP-LEVEL collection keyed by teamId, not a subcollection -- querying
+    // teams/{id}/events returns nothing. One query for the team, then one direct get per
+    // event for this athlete's row.
+    const events = await getDocs(
+      query(collection(db, 'events'), where('teamId', '==', team)),
+    ).catch(() => null);
+    if (!events) { setAttendance({ total: 0, present: 0, excused: 0, unexcused: 0, recent: [] }); return; }
+    const seen = [];
+    for (const e of events.docs) {
+      const row = await getDoc(doc(db, 'events', e.id, 'attendance', entry)).catch(() => null);
+      if (!row || !row.exists()) continue;
+      const status = row.data().status;
+      if (!status || status === 'pending') continue;
+      seen.push({
+        eventId: e.id,
+        status,
+        title: e.data().title || e.data().type || 'Event',
+        when: e.data().date ? new Date(Number(e.data().date) * 1000) : null,
+      });
+    }
+    seen.sort((a, b) => (b.when || 0) - (a.when || 0));
+    setAttendance({
+      total: seen.length,
+      present: seen.filter((r) => r.status === 'present').length,
+      excused: seen.filter((r) => r.status === 'excused').length,
+      unexcused: seen.filter((r) => r.status === 'unexcused').length,
+      recent: seen.slice(0, 8),
+    });
   }
 
   useEffect(() => {
@@ -214,11 +247,39 @@ export default function PlayerPage() {
 
           <section className="card">
             <h2>Attendance</h2>
-            <p className="muted small">
-              Attendance is recorded per event, not per athlete, so there is nothing to sum
-              here yet. Aggregating it means reading this team&apos;s events and their
-              attendance records — separate work, not a display tweak.
-            </p>
+            {attendance === null && <p className="muted">Loading…</p>}
+            {attendance && attendance.total === 0 && (
+              <p className="muted small">
+                No attendance recorded for this athlete yet. A coach takes it at an event.
+              </p>
+            )}
+            {attendance && attendance.total > 0 && (
+              <>
+                <div className="stat-row">
+                  <div className="stat-card"><strong>{attendance.present}</strong><span className="small muted">present</span></div>
+                  <div className="stat-card"><strong>{attendance.excused}</strong><span className="small muted">excused</span></div>
+                  <div className="stat-card attention"><strong>{attendance.unexcused}</strong><span className="small muted">unexcused</span></div>
+                </div>
+                <p className="small muted">
+                  {attendance.total} event{attendance.total === 1 ? '' : 's'} recorded ·{' '}
+                  {Math.round((attendance.present / attendance.total) * 100)}% attended
+                </p>
+                <ul className="plain-list">
+                  {attendance.recent.map((r) => (
+                    <li key={r.eventId}>
+                      <Link href={`/event?team=${team}&id=${r.eventId}`}>
+                        {r.title || 'Event'}
+                      </Link>
+                      {' '}
+                      <span className={r.status === 'unexcused' ? 'warn-text small' : 'muted small'}>
+                        {r.status}
+                      </span>
+                      {r.when ? <span className="muted small"> · {r.when.toLocaleDateString()}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
           </section>
         </>
       )}
