@@ -6,6 +6,7 @@ import { useAuth } from './index';
 import AppShell from '../components/AppShell';
 import AddTeam from '../components/AddTeam';
 import DashboardSummary from '../components/DashboardSummary';
+import SchoolLogo from '../components/SchoolLogo';
 import Link from 'next/link';
 
 export default function Dashboard() {
@@ -84,6 +85,8 @@ export default function Dashboard() {
         </button>
       </nav>
       {exportError && <p className="error">{exportError}</p>}
+
+      {profile.role === 'ad' && profile.schoolId && <SchoolLogo schoolId={profile.schoolId} />}
 
       <section className="card">
         <h2>Teams</h2>

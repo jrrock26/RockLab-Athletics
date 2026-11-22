@@ -4957,6 +4957,18 @@ exports.createSeason = functions.https.onCall(async (data, context) => {
 /// If the team has no season yet, the season is derived from the team's own label -- the
 /// same rule the backfill script uses, so both paths agree. The team is stamped too, so
 /// the next entry does not have to derive anything.
+/// The state an entry must carry if it is born into a closed season.
+///
+/// Returns 'archived' only for a season that exists and is closed. An unknown school or a
+/// missing season returns '', which the caller turns into 'active' -- an entry is never
+/// archived because a lookup failed.
+async function archivedStateForSeason(db, schoolId, seasonId) {
+  if (!schoolId || !seasonId) return '';
+  const snap = await db.collection('schools').doc(schoolId).collection('seasons').doc(seasonId).get();
+  if (!snap.exists) return '';
+  return snap.get('state') === 'closed' ? 'archived' : '';
+}
+
 function termOfLabel(label) {
   const s = String(label || '').toLowerCase();
   if (s.includes('fall')) return 'fall';
@@ -4990,7 +5002,11 @@ exports.onRosterEntryCreated = functions.firestore
 
     await snap.ref.update({
       seasonId,
-      state: data.state || 'active',
+      // An athlete added to a team whose season is already closed belongs to that closed
+      // season, so they are archived at birth. Stamping 'active' there would put a name on
+      // a roster that the roster read then filters out -- present in the data, invisible
+      // in the app, which is the hardest kind of bug to explain to a coach.
+      state: data.state || (await archivedStateForSeason(db, teamSnap.get('schoolId'), seasonId)) || 'active',
     });
     return null;
   });
@@ -5024,13 +5040,24 @@ exports.closeSeason = functions.https.onCall(async (data, context) => {
     return { alreadyClosed: true, archived: 0 };
   }
 
-  // Only entries actually stamped to this season are archived. An entry with no seasonId
-  // is left alone rather than swept into a season it never belonged to.
+  // Read each roster whole and match in memory, rather than filtering with
+  // `where('seasonId','==',seasonId)`.
+  //
+  // Two reasons. First, it removes an index from the critical path: a season closed
+  // seconds after a backfill once archived nothing and reported success, which is the
+  // worst failure mode this function has -- it looks like it worked. Second, the
+  // equality form silently matches nothing if the field is absent, and this is the one
+  // operation where "nothing matched" must be distinguishable from "nothing to do".
+  // A school has a few hundred roster entries; reading them is cheaper than being wrong.
   const teamsSnap = await db.collection('teams').where('schoolId', '==', schoolId).get();
   const targets = [];
+  let scanned = 0;
   for (const teamDoc of teamsSnap.docs) {
-    const rosterSnap = await teamDoc.ref.collection('roster').where('seasonId', '==', seasonId).get();
-    rosterSnap.docs.forEach((r) => targets.push({ ref: r.ref, data: r.data() }));
+    const rosterSnap = await teamDoc.ref.collection('roster').get();
+    scanned += rosterSnap.size;
+    rosterSnap.docs
+      .filter((r) => r.get('seasonId') === seasonId)
+      .forEach((r) => targets.push({ ref: r.ref, data: r.data() }));
   }
 
   let archived = 0;
@@ -5058,10 +5085,15 @@ exports.closeSeason = functions.https.onCall(async (data, context) => {
     action: 'season.closed',
     seasonId,
     archivedEntries: archived,
+    // `scanned` is recorded so an archived:0 with scanned:0 is visibly not the same as
+    // archived:0 after looking at entries. Without it the audit row cannot tell "nothing
+    // to archive" from "the sweep found nothing to look at" -- the difference between a
+    // closed season and a silent no-op.
+    scannedEntries: scanned,
     actorId: context.auth.uid,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
-  return { closed: true, archived };
+  return { closed: true, archived, scanned };
 });
 

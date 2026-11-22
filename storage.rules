@@ -27,14 +27,17 @@ service firebase.storage {
       return ('schoolId' in userData() && userData().schoolId is string) ? userData().schoolId : '';
     }
 
-    /// AD standing requires OWNING the school, mirroring firestore.rules. Without
-    /// this, any token carrying role 'ad' passed the old check, so the escalation
-    /// fix applied to Firestore was never applied to Storage.
+    /// AD standing requires OWNING the school, mirroring firestore.rules.
+    ///
+    /// One lookup, not two: `exists()` then `get()` on the same document cost double the
+    /// budget for no extra information, because `get()` on a missing document already
+    /// yields null and fails the comparison. Storage rules allow ten document reads per
+    /// evaluation and this function is called by every write on four paths.
     function ownsSchool() {
+      let schoolId = mySchoolId();
       return signedIn()
-        && mySchoolId() != ''
-        && firestore.exists(/databases/(default)/documents/schools/$(mySchoolId()))
-        && firestore.get(/databases/(default)/documents/schools/$(mySchoolId())).data.adUserId
+        && schoolId != ''
+        && firestore.get(/databases/(default)/documents/schools/$(schoolId)).data.adUserId
              == request.auth.uid;
     }
 
@@ -58,7 +61,7 @@ service firebase.storage {
     function isCoachOf(teamId) { return memberRole(teamId) == 'coach'; }
 
     function isSchoolAd(schoolId) {
-      return signedIn() && firestore.exists(/databases/(default)/documents/schools/$(schoolId))
+      return signedIn()
         && firestore.get(/databases/(default)/documents/schools/$(schoolId)).data.adUserId
              == request.auth.uid;
     }
@@ -71,11 +74,17 @@ service firebase.storage {
       allow delete: if signedIn() && request.auth.uid == uid;
     }
 
-    // School logos: the AD of that school (or a platform AD).
+    // School logos: the AD of that school.
+    //
+    // A logo is replaced far more often than it is created -- a school changes its mark,
+    // or the first upload is the wrong file -- so delete is allowed on the same terms.
+    // Metadata-only updates carry no `request.resource.size`, so the size check is
+    // written so it cannot deny an operation that never had a body.
     match /schools/{schoolId}/{fileName} {
       allow read: if signedIn();
       allow write: if signedIn() && (isAd() || isSchoolAd(schoolId))
         && request.resource.size < 10 * 1024 * 1024;
+      allow delete: if signedIn() && (isAd() || isSchoolAd(schoolId));
     }
 
     // Team photos: members can view, staff/coaches can manage.
