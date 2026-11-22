@@ -14,7 +14,12 @@ const SPORTS = [
   'Lacrosse', 'Ice Hockey', 'Field Hockey', 'Gymnastics', 'Cheerleading', 'Bowling',
 ];
 
-const LEVELS = ['Varsity', 'Junior Varsity', 'Freshman', 'Middle School'];
+const LEVELS = [
+  '1st Grade', '2nd Grade', '3rd Grade', '4th Grade', '5th Grade',
+  '6th Grade', '7th Grade', '8th Grade',
+  'Freshman', 'Junior Varsity', 'Varsity',
+];
+const SQUADS = ['', 'A', 'B'];
 const GENDERS = ['Boys', 'Girls', 'Coed'];
 const SEASONS = ['Fall', 'Winter', 'Spring'];
 
@@ -25,10 +30,15 @@ export default function AddTeam({ schoolId, onCreated }) {
   const [sport, setSport] = useState('Basketball');
   const [gender, setGender] = useState('Boys');
   const [level, setLevel] = useState('Varsity');
+  const [squad, setSquad] = useState('');
   const [season, setSeason] = useState('Fall');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState('');
+
+  // A and B squads are stored in the level string ("7th Grade A") because createTeam
+  // takes a free-text level and nothing downstream would read a separate field.
+  const levelValue = squad ? `${level} ${squad}` : level;
 
   async function create() {
     setBusy(true);
@@ -40,7 +50,7 @@ export default function AddTeam({ schoolId, onCreated }) {
         sportId: slug(sport),
         sportName: sport,
         gender,
-        level,
+        level: levelValue,
         season,
       });
       setDone(`${gender} ${level} ${sport} created.`);
@@ -80,6 +90,14 @@ export default function AddTeam({ schoolId, onCreated }) {
           </select>
         </label>
         <label>
+          Squad
+          <select value={squad} onChange={(e) => setSquad(e.target.value)}>
+            {SQUADS.map((s) => (
+              <option key={s || 'none'} value={s}>{s === '' ? 'No A/B split' : `${s} team`}</option>
+            ))}
+          </select>
+        </label>
+        <label>
           Season
           <select value={season} onChange={(e) => setSeason(e.target.value)}>
             {SEASONS.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -88,7 +106,7 @@ export default function AddTeam({ schoolId, onCreated }) {
       </div>
 
       <button type="button" onClick={create} disabled={busy || !schoolId}>
-        {busy ? 'Creating…' : `Create ${gender} ${level} ${sport}`}
+        {busy ? 'Creating…' : `Create ${gender} ${levelValue} ${sport}`}
       </button>
       {error && <p className="error">{error}</p>}
       {done && <p className="ok">{done}</p>}
