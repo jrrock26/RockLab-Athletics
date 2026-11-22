@@ -90,21 +90,27 @@ export default function TeamPage() {
             <h2>Roster</h2>
             {roster.length === 0 && <p className="muted">No athletes on this roster yet.</p>}
             <ul className="req-list">
-              {roster.map((p) => (
-                <li key={p.id} className="roster-row">
-                  <span className="avatar">
-                    {String(p.displayName || p.name || '?').slice(0, 1).toUpperCase()}
-                  </span>
-                  <span>
-                    <strong>{p.displayName || p.name || 'Unnamed athlete'}</strong>
-                    {p.jerseyNumber ? <span className="muted"> · #{p.jerseyNumber}</span> : null}
-                    {p.position ? <span className="muted"> · {p.position}</span> : null}
-                  </span>
-                  {p.injuryStatus && p.injuryStatus !== 'healthy'
-                    ? <span className="pill warn">{p.injuryStatus}</span>
-                    : null}
-                </li>
-              ))}
+              {roster.map((p) => {
+                // Roster entries carry `playerName`; `displayName`/`name` exist on other
+                // shapes (players documents, user profiles). Reading only the latter made
+                // every imported athlete render as "Unnamed athlete".
+                const fullName = p.playerName || p.displayName || p.name || '';
+                return (
+                  <li key={p.id} className="roster-row">
+                    <span className="avatar">
+                      {fullName ? fullName.slice(0, 1).toUpperCase() : '?'}
+                    </span>
+                    <span>
+                      <strong>{fullName || 'Unnamed athlete'}</strong>
+                      {p.jerseyNumber ? <span className="muted"> · #{p.jerseyNumber}</span> : null}
+                      {p.position ? <span className="muted"> · {p.position}</span> : null}
+                    </span>
+                    {p.injuryStatus && p.injuryStatus !== 'healthy'
+                      ? <span className="pill warn">{p.injuryStatus}</span>
+                      : null}
+                  </li>
+                );
+              })}
             </ul>
           </section>
 
