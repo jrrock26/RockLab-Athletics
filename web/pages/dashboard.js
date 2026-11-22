@@ -85,7 +85,7 @@ export default function Dashboard() {
         <ul className="team-grid">
           {teams.map((t) => (
             <li key={t.id}>
-              <Link className="team-card" href={`/team/${t.id}`}>
+              <Link className="team-card" href={`/team?id=${t.id}`}>
                 <strong>{t.sportName} {t.level}</strong>
                 <span className="muted"> · {t.season} {t.gender}</span>
                 <span className="small accent">Open team →</span>

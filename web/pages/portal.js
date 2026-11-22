@@ -8,11 +8,15 @@ import {
   signOut,
   updateProfile,
 } from 'firebase/auth';
-import { collection, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { auth, db, functions } from '../lib/firebase';
 import {
   VISIBLE_EVENT_TYPES,
+  ALL_EVENT_TYPES,
+  eventTypesFor,
+  normalizeRole,
+  rsvpId,
   REQUIREMENT_LABELS,
   isAwaitingReview,
   isOutstanding,
@@ -62,12 +66,18 @@ export default function Portal() {
   const [savingRsvp, setSavingRsvp] = useState('');
   const rsvpRequested = useRef({});
 
+  /// Comm-board posts per team, keyed by team id. Declared here because the render
+  /// below reads `announcements[t.id]`; the missing declaration is what threw
+  /// `ReferenceError: announcements is not defined` for every signed-in parent with
+  /// a team, turning the whole portal into Next's "Application error" page.
+  const [announcements, setAnnouncements] = useState({});
+
   const setRsvp = useCallback(async (eventId, entryId, status) => {
     const key = `${eventId}:${entryId}`;
     setSavingRsvp(key);
     setError('');
     try {
-      await setDoc(doc(db, 'events', eventId, 'rsvps', `${auth.currentUser.uid}__${entryId}`), {
+      await setDoc(doc(db, 'events', eventId, 'rsvps', rsvpId(auth.currentUser.uid, entryId)), {
         eventId,
         userId: auth.currentUser.uid,
         respondentUserId: auth.currentUser.uid,
@@ -136,15 +146,26 @@ export default function Portal() {
   /// type filter deliberately: the rule grants a follower the calendar except
   /// practices, and an unfiltered query is rejected outright. Each read is
   /// settled independently so one denied collection cannot blank the page.
-  const loadTeam = useCallback(async (teamId, linkedIds) => {
+  const loadTeam = useCallback(async (teamId, linkedIds, membershipRole) => {
     const [teamSnap, roster, eventsSnap, gamesSnap] = await Promise.all([
       getDoc(doc(db, 'teams', teamId)).catch(() => null),
       loadRoster(teamId, linkedIds),
-      getDocs(query(
-        collection(db, 'events'),
-        where('teamId', '==', teamId),
-        where('type', 'in', VISIBLE_EVENT_TYPES),
-      )).catch(() => null),
+      // Ask for the widest calendar this role allows, then fall back to the follower
+      // subset. A legacy parent row still stored as `follower` would otherwise get a
+      // rejected query — and an empty calendar with no explanation.
+      (async () => {
+        const wide = await getDocs(query(
+          collection(db, 'events'),
+          where('teamId', '==', teamId),
+          where('type', 'in', eventTypesFor(membershipRole)),
+        )).catch(() => null);
+        if (wide) return wide;
+        return getDocs(query(
+          collection(db, 'events'),
+          where('teamId', '==', teamId),
+          where('type', 'in', VISIBLE_EVENT_TYPES),
+        )).catch(() => null);
+      })(),
       getDocs(query(collection(db, 'games'), where('teamId', '==', teamId))).catch(() => null),
     ]);
     return {
@@ -164,7 +185,8 @@ export default function Portal() {
       return;
     }
     const linked = profileData?.linkedPlayerIds;
-    setTeams(await Promise.all(ids.map((id) => loadTeam(id, linked))));
+    const membershipRole = normalizeRole(profileData?.role);
+    setTeams(await Promise.all(ids.map((id) => loadTeam(id, linked, membershipRole))));
   }, [loadTeam]);
 
   /// One athlete's requirements. The per-player form documents under the roster
@@ -311,10 +333,17 @@ export default function Portal() {
         // `category` is what makes the query admissible; sorting in memory avoids a
         // composite index on category + createdAt, which would otherwise fail with a
         // missing-index error that the catch below would swallow.
-        const snap = await getDocs(query(
+        const isFollower = normalizeRole(profile?.role) === 'follower';
+        const byCategory = (categories) => getDocs(query(
           collection(db, 'chats', chatSnap.id, 'messages'),
-          where('category', 'in', PUBLIC_COMM_CATEGORIES),
+          where('category', 'in', categories),
         ));
+        // A member reads every category; a follower is confined by the rule to the
+        // public subset and a query asking for more is rejected outright. Falling
+        // back keeps the section visible for a row still stored as `follower`.
+        const snap = await (isFollower
+          ? byCategory(PUBLIC_COMM_CATEGORIES)
+          : byCategory(ALL_COMM_CATEGORIES).catch(() => byCategory(PUBLIC_COMM_CATEGORIES)));
         const rows = snap.docs
           .map((d) => ({ id: d.id, ...d.data() }))
           .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0))
@@ -350,6 +379,28 @@ export default function Portal() {
       });
     });
   }, [teams, user]);
+
+  /// Live calendar. A coach's new, moved or cancelled event — made on iOS or on this
+  /// page — appears here without a reload. The type filter is the same one the rules
+  /// require; a rejected listener leaves the fetched rows in place rather than
+  /// blanking the schedule.
+  useEffect(() => {
+    if (!user || teams.length === 0) return undefined;
+    const types = eventTypesFor(normalizeRole(profile?.role));
+    const unsubs = teams.map((t) => onSnapshot(
+      query(
+        collection(db, 'events'),
+        where('teamId', '==', t.id),
+        where('type', 'in', types),
+      ),
+      (snap) => {
+        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setTeams((prev) => prev.map((x) => (x.id === t.id ? { ...x, events: rows } : x)));
+      },
+      () => { /* keep what was already fetched */ },
+    ));
+    return () => unsubs.forEach((u) => u());
+  }, [user, teams.length, profile?.role]);
 
 
   async function signIn(e) {
@@ -744,10 +795,11 @@ export default function Portal() {
                 </>
               )}
 
-              <p className="small muted">
-                Practice times and locations aren&apos;t shown on the family view — ask
-                your coach in the app if you need them.
-              </p>
+              {upcoming.length > 0 && (
+                <p className="small muted">
+                  Times and locations come straight from your coach&apos;s schedule.
+                </p>
+              )}
             </section>
           );
         })}
@@ -778,7 +830,15 @@ export default function Portal() {
 /// branch of `messageReadAllowed` in firestore.rules; drift here is not cosmetic,
 /// because these values become an `in` filter and a value the rule rejects fails
 /// the entire query.
+/// Comm-board categories a school-level follower may read. Mirrors the follower
+/// branch of `messageReadAllowed` in firestore.rules; drift here is not cosmetic,
+/// because these values become an `in` filter and a value the rule rejects fails
+/// the entire query.
 const PUBLIC_COMM_CATEGORIES = ['liveGame', 'gameday', 'fundraiser'];
+
+/// Every comm-board category, in the order iOS stores them (`CommCategory`).
+/// A member — including a guardian — may read all of them.
+const ALL_COMM_CATEGORIES = ['general', 'liveGame', 'gameday', 'fundraiser'];
 
 /// The exact raw values iOS writes (Models/Event.swift RSVPStatus). Inventing
 /// "going" here would have stored answers the coach's roster could not parse.

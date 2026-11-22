@@ -8,6 +8,35 @@
 /// disagree, the list query is rejected outright.
 export const VISIBLE_EVENT_TYPES = ['game', 'meeting', 'meal', 'travel'];
 
+/// The full calendar. A guardian is a team member — acceptInvitation no longer
+/// downgrades them to `follower` — so they may read practice details too. This list
+/// must stay equal to `EventType` on iOS and to the events rule.
+export const ALL_EVENT_TYPES = ['practice', 'game', 'meeting', 'meal', 'travel'];
+
+/// The event types to query for a given membership role. A list query that asks for
+/// a type the rule withholds is rejected outright, so this must match permissions
+/// exactly rather than being generous and filtering in the UI.
+export function eventTypesFor(membershipRole) {
+  return membershipRole === 'follower' ? VISIBLE_EVENT_TYPES : ALL_EVENT_TYPES;
+}
+
+/// The one RSVP document id, shared with iOS (`FirestoreService.rsvpDocumentId`).
+///
+/// A guardian answers per child, so the athlete has to be in the id. iOS used to
+/// write a bare uid here while the web wrote the composite, and neither could read
+/// the other's answers — which is why no coach ever saw a single RSVP.
+export function rsvpId(uid, athleteEntryId) {
+  if (!uid) return '';
+  return athleteEntryId ? `${uid}__${athleteEntryId}` : uid;
+}
+
+/// A stored role, spelled one way. iOS shipped guardians as `family`; a legacy row
+/// must still behave like a parent rather than falling through to the narrow path.
+export function normalizeRole(role) {
+  const cleaned = String(role || '').trim().toLowerCase();
+  return cleaned === 'family' ? 'parent' : cleaned;
+}
+
 export function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
 }

@@ -2,6 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert';
 import {
   VISIBLE_EVENT_TYPES,
+  ALL_EVENT_TYPES,
+  eventTypesFor,
+  rsvpId,
+  normalizeRole,
   toMillis,
   partitionEvents,
   isFinalGame,
@@ -341,5 +345,39 @@ test('outstanding rows lead with the soonest deadline and drop completed ones', 
 
 test('outstandingRequirements tolerates null', () => {
   assert.deepStrictEqual(outstandingRequirements(null), []);
+});
+
+// --- cross-platform contract ------------------------------------------------
+//
+// These three exist because iOS and the web drifted apart in exactly these
+// places: a role spelled two ways, a calendar that disagreed with the rules, and
+// an RSVP id each client invented for itself. `CrossPlatformContractTests.swift`
+// asserts the same values on the Swift side.
+
+test('rsvpId carries the athlete so each child answers separately', () => {
+  assert.equal(rsvpId('uid1', 'entry9'), 'uid1__entry9');
+});
+
+test('rsvpId falls back to the bare uid when there is no athlete', () => {
+  assert.equal(rsvpId('uid1', ''), 'uid1');
+  assert.equal(rsvpId('uid1', null), 'uid1');
+  assert.equal(rsvpId('', 'entry9'), '');
+});
+
+test('a guardian is a member: the calendar includes practice', () => {
+  assert.ok(eventTypesFor('parent').includes('practice'));
+  assert.deepStrictEqual(eventTypesFor('parent'), ALL_EVENT_TYPES);
+});
+
+test('a follower never asks for a type the rule withholds', () => {
+  assert.ok(!eventTypesFor('follower').includes('practice'));
+  assert.deepStrictEqual(eventTypesFor('follower'), VISIBLE_EVENT_TYPES);
+});
+
+test('the legacy role spelling is the parent role', () => {
+  assert.equal(normalizeRole('family'), 'parent');
+  assert.equal(normalizeRole(' PARENT '), 'parent');
+  assert.equal(normalizeRole('follower'), 'follower');
+  assert.equal(normalizeRole(undefined), '');
 });
 
