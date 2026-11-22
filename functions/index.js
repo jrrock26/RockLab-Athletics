@@ -1397,7 +1397,7 @@ exports.requestTeamJoin = functions.https.onCall(async (data, context) => {
 
   const code = String((data && data.code) || '').trim().toUpperCase();
   const role = String((data && data.role) || '');
-  const athleteName = String((data && data.athleteName) || '').trim().slice(0, 80);
+  const rosterEntryId = String((data && data.rosterEntryId) || '');
 
   if (!/^[A-Z0-9]{4,10}$/.test(code)) {
     throw new functions.https.HttpsError('invalid-argument', 'That does not look like a team code.');
@@ -1405,9 +1405,11 @@ exports.requestTeamJoin = functions.https.onCall(async (data, context) => {
   if (!['parent', 'player'].includes(role)) {
     throw new functions.https.HttpsError('invalid-argument', 'Choose parent or player.');
   }
-  // A parent must name their athlete; a player is naming themselves either way.
-  if (athleteName.length < 2) {
-    throw new functions.https.HttpsError('invalid-argument', 'Enter the athlete name.');
+  // The parent selected a specific player from the filtered list, so the request names
+  // an id rather than a string. Two matching models in one function is how the last
+  // three defects happened.
+  if (!rosterEntryId) {
+    throw new functions.https.HttpsError('invalid-argument', 'Select the athlete from the list.');
   }
 
   const teamSnap = await db.collection('teams').where('joinCode', '==', code).limit(1).get();
@@ -1462,26 +1464,23 @@ exports.requestTeamJoin = functions.https.onCall(async (data, context) => {
   const requesterName = userSnap.exists ? (userSnap.get('name') || userSnap.get('displayName') || '') : '';
   const requesterEmail = userSnap.exists ? (userSnap.get('email') || context.auth.token.email || '') : (context.auth.token.email || '');
 
-  // Resolve the TYPED name against this school's players, server-side. The join page
-  // never lists roster names (a leaked code must not become a roster disclosure), so
-  // matching has to happen here: the coach then sees "matched player" and approves, or
-  // "not on roster" and knows a profile needs creating. A single equality filter on
-  // schoolId, matched in memory, avoids the composite index that schoolId+name needs.
-  const normal = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+  // Resolve the selected entry. Server-side, because the client sends an id and we must
+  // not trust it: the entry has to belong to THIS team and carry a playerId, or the
+  // approval would later refuse it.
   const schoolId = teamDoc.get('schoolId') || '';
-  let matchedPlayerId = null;
-  let matchedRosterEntryId = null;
-  if (schoolId) {
-    const playersSnap = await db.collection('players').where('schoolId', '==', schoolId).get();
-    const wanted = normal(athleteName);
-    const hit = playersSnap.docs.find((d) => normal(d.get('name')) === wanted);
-    if (hit) {
-      matchedPlayerId = hit.id;
-      const rosterSnap = await db.collection('teams').doc(teamId).collection('roster')
-        .where('playerId', '==', hit.id).limit(1).get();
-      matchedRosterEntryId = rosterSnap.empty ? null : rosterSnap.docs[0].id;
-    }
+  const entryRef = db.collection('teams').doc(teamId).collection('roster').doc(rosterEntryId);
+  const entrySnap = await entryRef.get();
+  if (!entrySnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'That athlete is not on this team.');
   }
+  const matchedPlayerId = entrySnap.get('playerId') || null;
+  if (!matchedPlayerId) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'That athlete has no player profile yet. Ask your coach to rebuild the roster.',
+    );
+  }
+  const athleteName = String(entrySnap.get('playerName') || '').slice(0, 80);
 
   const ref = await db.collection('teams').doc(teamId).collection('joinRequests').add({
     teamId,
@@ -1489,12 +1488,8 @@ exports.requestTeamJoin = functions.https.onCall(async (data, context) => {
     code,
     role,
     athleteName,
-    rosterEntryId: matchedRosterEntryId,
+    rosterEntryId,
     matchedPlayerId,
-    matchedRosterEntryId,
-    matchStatus: matchedPlayerId
-      ? (matchedRosterEntryId ? 'matched' : 'player_without_roster_entry')
-      : 'not_found',
     requesterUserId: callerId,
     requesterName,
     requesterEmail,
