@@ -4842,7 +4842,9 @@ exports.assignCoachToTeam = functions.https.onCall(async (data, context) => {
     teamId,
     userId,
     role: 'coach',
-    name: userSnap.get('name') || userSnap.get('email') || '',
+    // displayName is the field a user document actually carries; `name` is what roster
+    // entries use. Falling back to email put an address where a coach's name belongs.
+    name: userSnap.get('displayName') || userSnap.get('name') || userSnap.get('email') || '',
     email: userSnap.get('email') || '',
     // Preserve permissions granted earlier; a reassignment must not silently revoke them.
     permissions: existing.exists ? (existing.get('permissions') || []) : [],

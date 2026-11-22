@@ -28,7 +28,7 @@ const RAIL = [
 export default function AppShell({ title, profile, user, children, art = 'arena.png' }) {
   const router = useRouter();
   const role = profile?.role || '';
-  const name = profile?.name || user?.email || '';
+  const name = profile?.displayName || profile?.name || user?.email || '';
   const isAd = role === 'ad';
 
   // trailingSlash is on, so /dashboard/ and /dashboard must both count as current.

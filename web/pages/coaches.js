@@ -65,7 +65,7 @@ export default function Coaches() {
       const person = people.find((p) => p.id === coachId);
       const team = rows.find((t) => t.id === assignTeamId);
       setAssignNotice(
-        `${person?.name || person?.email || 'Coach'} assigned to ${team ? label(team) : 'the team'}`
+        `${person?.displayName || person?.name || person?.email || 'Coach'} assigned to ${team ? label(team) : 'the team'}`
         + `${res.data?.headCoach ? ' as head coach' : ''}.`,
       );
       setCoachId('');
@@ -148,7 +148,7 @@ export default function Coaches() {
                 <option value="">Choose a person…</option>
                 {people.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name || p.email} ({p.role})
+                    {p.displayName || p.name || p.email} ({p.role})
                   </option>
                 ))}
               </select>
@@ -194,10 +194,10 @@ export default function Coaches() {
                 {coaches.map((c) => (
                   <li key={c.id} className="roster-row">
                     <span className="avatar">
-                      {String(c.name || c.email || '?').slice(0, 1).toUpperCase()}
+                      {String(c.displayName || c.name || c.email || '?').slice(0, 1).toUpperCase()}
                     </span>
                     <span>
-                      <strong>{c.name || c.email || 'Unnamed coach'}</strong>
+                      <strong>{c.displayName || c.name || c.email || 'Unnamed coach'}</strong>
                       {t.headCoachId === c.userId
                         ? <span className="pill">head</span>
                         : <span className="muted small"> · assistant</span>}
