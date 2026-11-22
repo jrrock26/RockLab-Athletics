@@ -27,6 +27,35 @@ export default function Import() {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState('');
 
+  const [fileError, setFileError] = useState('');
+
+  /// Read a chosen .csv into the same textarea the paste path uses, so there is one
+  /// parser and one preview rather than two ways to import that can disagree.
+  async function loadFile(e) {
+    const file = e.target.files && e.target.files[0];
+    setFileError('');
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      setFileError('That file is over 2 MB. Split it into smaller files.');
+      return;
+    }
+    try {
+      const text = await file.text();
+      // A spreadsheet exported from Excel sometimes arrives tab-separated. Rewriting it
+      // here is friendlier than telling a coach to re-export.
+      const firstLine = text.split(/\r?\n/)[0] || '';
+      const normalised = firstLine.includes('\t') && !firstLine.includes(',')
+        ? text.split(/\r?\n/).map((line) => line.split('\t').join(',')).join('\n')
+        : text;
+      setCsv(normalised);
+    } catch (err) {
+      setFileError('That file could not be read.');
+    } finally {
+      // Allows choosing the same file twice after editing it.
+      e.target.value = '';
+    }
+  }
+
   async function copy(text, marker) {
     try {
       await navigator.clipboard.writeText(text);
@@ -137,6 +166,13 @@ export default function Import() {
             {picked.season ? ` · ${picked.season}` : ''}
           </p>
         )}
+        <label>
+          CSV file
+          <input type="file" accept=".csv,text/csv,text/plain" onChange={loadFile} />
+        </label>
+        <p className="small muted">Or paste it below.</p>
+        {fileError && <p className="error">{fileError}</p>}
+
         <label>
           CSV
           <textarea rows={10} value={csv} onChange={(e) => setCsv(e.target.value)}
