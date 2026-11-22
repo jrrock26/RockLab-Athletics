@@ -3,6 +3,7 @@ import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebas
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { useRouter } from 'next/router';
+import Head from 'next/head';
 import Link from 'next/link';
 
 export function useAuth() {
@@ -22,52 +23,107 @@ export function useAuth() {
   return state;
 }
 
+/// One door. Student-athletes, parents, coaches, staff and athletic directors all sign
+/// in here, and the role decides where they land -- the console for an AD, the team
+/// portal for everyone else. Splitting the web app into "the console" and "the family
+/// portal" made families feel like guests at their own school.
 export default function Login() {
   const { loading, user, profile } = useAuth();
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!loading && user) {
-      // ADs get the console. Everyone else — parents, players, coaches,
-      // followers — belongs in the portal, which works on Android and the web.
-      // Sending them to the App Store was a dead end for half of families.
-      if (profile?.role === 'ad') router.replace('/dashboard');
-      else router.replace('/portal');
-    }
+    if (loading || !user) return;
+    if (profile?.role === 'ad') router.replace('/dashboard');
+    else if (profile) router.replace('/portal');
   }, [loading, user, profile, router]);
 
   async function submit(e) {
     e.preventDefault();
     setError('');
+    setBusy(true);
     try {
       await signInWithEmailAndPassword(auth, email, password);
     } catch (err) {
-      setError(err.message);
+      // Firebase's default strings leak whether an address exists. Do not repeat them.
+      setError(
+        err?.code === 'auth/invalid-credential' || err?.code === 'auth/wrong-password'
+          ? 'That email and password do not match.'
+          : err?.code === 'auth/too-many-requests'
+            ? 'Too many attempts. Wait a minute and try again.'
+            : 'Could not sign in. Check the address and try again.',
+      );
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
-    <main className="page">
-      <h1>RockLab Athletics</h1>
-      <p className="muted">Athletic director console</p>
-      <p className="small muted">
-        Family or player? <Link href="/portal">Sign in to the team portal</Link> — works on
-        any phone or computer, no app needed.
-      </p>
-      <form onSubmit={submit} className="card">
-        <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
-        <label>Password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
-        <button type="submit">Sign in</button>
-        {error && <p className="error">{error}</p>}
-      </form>
-      <p className="muted small">
-        <Link href="/privacy">Privacy</Link> · <Link href="/support">Support</Link> ·{" "}
-        <a href="https://www.rocklabtechnologies.com">RockLab Technologies</a>
-      </p>
-      {user && <button className="link" onClick={() => signOut(auth)}>Sign out</button>}
-    </main>
+    <>
+      <Head><title>RockLab Athletics</title></Head>
+      <div className="shell">
+        <section className="hero">
+          <div className="hero-inner">
+            <p className="eyebrow">RockLab Athletics</p>
+            <h1 className="hero-title">
+              Every team.<br />One place.
+            </h1>
+            <p className="hero-sub">
+              Rosters, schedules, forms, and scores — the same records the mobile app uses,
+              visible to the people who need them.
+            </p>
+          </div>
+        </section>
+
+        <main className="auth-col">
+          <div className="card auth-card">
+            <h2>Sign in</h2>
+            <p className="small muted">
+              Athletic directors, coaches, staff, players and parents.
+            </p>
+
+            {user ? (
+              <>
+                <p className="ok">
+                  Signed in as {profile?.name || user.email}
+                  {profile?.role ? ` · ${profile.role}` : ''}
+                </p>
+                <button type="button" onClick={() => signOut(auth)}>Sign out</button>
+              </>
+            ) : (
+              <form onSubmit={submit}>
+                <label>
+                  Email
+                  <input type="email" value={email} autoComplete="email" required
+                    onChange={(e) => setEmail(e.target.value)} />
+                </label>
+                <label>
+                  Password
+                  <input type="password" value={password} autoComplete="current-password" required
+                    onChange={(e) => setPassword(e.target.value)} />
+                </label>
+                <button type="submit" disabled={busy}>
+                  {busy ? 'Signing in…' : 'Sign in'}
+                </button>
+                {error && <p className="error">{error}</p>}
+              </form>
+            )}
+
+            <hr className="rule" />
+            <p className="small muted">
+              Joining a team for the first time?{' '}
+              <Link href="/join">Use your coach&apos;s code</Link>.
+            </p>
+            <p className="small muted">
+              <Link href="/privacy">Privacy</Link> · <Link href="/support">Support</Link> ·{' '}
+              <a href="https://www.rocklabtechnologies.com">RockLab Technologies</a>
+            </p>
+          </div>
+        </main>
+      </div>
+    </>
   );
 }
