@@ -76,6 +76,30 @@ export default function Seasons() {
     }
   }
 
+  async function reopen(season) {
+    const ok = window.confirm(
+      `Reopen ${season.name}?\n\nEntries this season archived go back on the active roster. `
+      + `Nothing was deleted, so this is a restore rather than a re-import.`,
+    );
+    if (!ok) return;
+    setBusy(season.id);
+    setError('');
+    setNotice('');
+    try {
+      const res = await httpsCallable(functions, 'reopenSeason')({ schoolId, seasonId: season.id });
+      setNotice(
+        res.data?.alreadyOpen
+          ? 'That season is already open.'
+          : `Reopened. ${res.data?.restored ?? 0} roster entries restored.`,
+      );
+      await load();
+    } catch (err) {
+      setError(err?.message || 'That season could not be reopened.');
+    } finally {
+      setBusy('');
+    }
+  }
+
   if (authLoading) return <main className="page"><p>Loading…</p></main>;
   if (!user) return <main className="page"><p className="muted"><Link href="/">Sign in</Link> first.</p></main>;
 
@@ -137,14 +161,19 @@ export default function Seasons() {
                   {busy === s.id ? 'Closing…' : 'Close season'}
                 </button>
               )}
+              {isAd && s.state === 'closed' && (
+                <button type="button" className="link" onClick={() => reopen(s)} disabled={busy === s.id}>
+                  {busy === s.id ? 'Reopening…' : 'Reopen season'}
+                </button>
+              )}
             </li>
           ))}
         </ul>
       </section>
 
       <p className="small muted">
-        Teams and roster entries do not carry a season id yet, so closing archives nothing
-        until that migration lands. This page is the first half.
+        Closing a season archives the roster entries stamped to it and reopening restores
+        them. Nothing is ever deleted, which is why a close can be undone.
       </p>
     </AppShell>
   );

@@ -5097,3 +5097,87 @@ exports.closeSeason = functions.https.onCall(async (data, context) => {
   return { closed: true, archived, scanned };
 });
 
+/// Reopens a season that was closed by mistake, or early.
+///
+/// Closing archives every roster entry in the season, and until now there was no way back:
+/// a single click on the wrong row removed a school's whole roster from every view, with no
+/// path to recovery short of editing documents by hand. That is a one-way door in a UI
+/// where the button sits beside a list of seasons, so it will be pressed by mistake.
+///
+/// Symmetric with closeSeason on purpose -- same authorisation, same in-memory sweep, same
+/// audit row -- because a return path that is harder to authorize than the destructive
+/// action is a return path nobody can use in the moment they need it.
+///
+/// Only entries carrying this seasonId AND currently archived are restored. An entry
+/// archived by an earlier close of the same season is indistinguishable from one archived
+/// by this one, and both belong on the roster when the season is active again.
+exports.reopenSeason = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const db = admin.firestore();
+  const caller = await userProfile(db, context.auth.uid);
+  if (caller.role !== 'ad') {
+    throw new functions.https.HttpsError('permission-denied', 'Only an athletic director can reopen a season.');
+  }
+
+  const schoolId = String((data && data.schoolId) || '');
+  const seasonId = String((data && data.seasonId) || '');
+  if (!schoolId || !seasonId) {
+    throw new functions.https.HttpsError('invalid-argument', 'schoolId and seasonId are required.');
+  }
+  if (caller.schoolId !== schoolId) {
+    throw new functions.https.HttpsError('permission-denied', 'That is not your school.');
+  }
+
+  const seasonRef = db.collection('schools').doc(schoolId).collection('seasons').doc(seasonId);
+  const seasonSnap = await seasonRef.get();
+  if (!seasonSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'That season does not exist.');
+  }
+  if (seasonSnap.get('state') !== 'closed') {
+    return { alreadyOpen: true, restored: 0, scanned: 0 };
+  }
+
+  const teamsSnap = await db.collection('teams').where('schoolId', '==', schoolId).get();
+  const targets = [];
+  let scanned = 0;
+  for (const teamDoc of teamsSnap.docs) {
+    const rosterSnap = await teamDoc.ref.collection('roster').get();
+    scanned += rosterSnap.size;
+    rosterSnap.docs
+      .filter((r) => r.get('seasonId') === seasonId && r.get('state') === 'archived')
+      .forEach((r) => targets.push(r.ref));
+  }
+
+  let restored = 0;
+  for (let i = 0; i < targets.length; i += 400) {
+    const batch = db.batch();
+    targets.slice(i, i + 400).forEach((ref) => {
+      batch.update(ref, { state: 'active', archivedAt: null });
+      restored += 1;
+    });
+    await batch.commit();
+  }
+
+  await seasonRef.update({
+    state: 'active',
+    closedAt: null,
+    closedBy: null,
+    reopenedAt: admin.firestore.FieldValue.serverTimestamp(),
+    reopenedBy: context.auth.uid,
+  });
+
+  await db.collection('auditLog').add({
+    schoolId,
+    action: 'season.reopened',
+    seasonId,
+    restoredEntries: restored,
+    scannedEntries: scanned,
+    actorId: context.auth.uid,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { reopened: true, restored, scanned };
+});
+
