@@ -29,6 +29,7 @@ export default function Requests() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [hiddenCount, setHiddenCount] = useState(0);
+  const [claims, setClaims] = useState([]);
 
   const load = useCallback(async (account) => {
     setLoading(true);
@@ -72,6 +73,20 @@ export default function Requests() {
       collected.sort((a, b) => String(a.athleteName).localeCompare(String(b.athleteName)));
       setRows(collected);
       setHiddenCount(hidden);
+
+      // Player claims, when this account can decide them. The collection sits under the
+      // school so the rule authorises staff from the path and this list query is permitted;
+      // a top-level collection would have needed a document read to answer "is this mine",
+      // which a list query cannot do.
+      if (profile.schoolId && ['ad', 'coach', 'staff'].includes(profile.role)) {
+        const claimSnap = await getDocs(query(
+          collection(db, 'schools', profile.schoolId, 'playerClaimRequests'),
+          where('status', '==', 'pending'),
+        )).catch(() => null);
+        setClaims((claimSnap?.docs || []).map((d) => ({ id: d.id, ...d.data() })));
+      } else {
+        setClaims([]);
+      }
     } catch (err) {
       setError(err?.message || 'Could not load requests.');
     } finally {
@@ -115,6 +130,34 @@ export default function Requests() {
       setRows((prev) => prev.filter((r) => r.id !== row.id));
     } catch (err) {
       setError(err?.message || 'That request could not be rejected.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function decideClaim(row, approve) {
+    setBusy(`claim:${row.id}`);
+    setError('');
+    setNotice('');
+    try {
+      if (approve) {
+        await httpsCallable(functions, 'approvePlayerClaim')({
+          schoolId: row.schoolId,
+          requestId: row.id,
+        });
+        setNotice(`${row.playerName || 'That athlete'} linked to their account.`);
+      } else {
+        const reason = window.prompt('Why is this claim being declined?') || '';
+        await httpsCallable(functions, 'denyPlayerClaim')({
+          schoolId: row.schoolId,
+          requestId: row.id,
+          reason,
+        });
+        setNotice('Claim declined.');
+      }
+      setClaims((prev) => prev.filter((c) => c.id !== row.id));
+    } catch (err) {
+      setError(err?.message || 'That claim could not be decided.');
     } finally {
       setBusy('');
     }
@@ -164,6 +207,42 @@ export default function Requests() {
             </div>
           </section>
         ))}
+
+        {claims.length > 0 && (
+          <>
+            <h2>Profile claims</h2>
+            <p className="muted small">
+              An athlete account asking to be linked to a profile. Approving links the account;
+              guardians keep their access.
+            </p>
+            {claims.map((row) => (
+              <section className="card" key={`claim:${row.id}`}>
+                <h2>{row.playerName || 'Unnamed athlete'}</h2>
+                <p className="muted small">
+                  {row.requesterDisplayName || row.requesterEmail || 'An account'}
+                  {' · asked to claim this profile'}
+                </p>
+                <div className="actions">
+                  <button
+                    type="button"
+                    onClick={() => decideClaim(row, true)}
+                    disabled={busy === `claim:${row.id}`}
+                  >
+                    {busy === `claim:${row.id}` ? 'Working…' : 'Approve claim'}
+                  </button>
+                  <button
+                    type="button"
+                    className="link"
+                    onClick={() => decideClaim(row, false)}
+                    disabled={busy === `claim:${row.id}`}
+                  >
+                    Decline
+                  </button>
+                </div>
+              </section>
+            ))}
+          </>
+        )}
 
         <p className="muted small">
           <Link href="/portal">Family view</Link> · <Link href="/support">Support</Link>

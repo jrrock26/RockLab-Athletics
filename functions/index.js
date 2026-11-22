@@ -11,6 +11,12 @@ const {
   acceptanceBlocker,
   DEFAULT_TTL_DAYS,
 } = require('./invitations');
+const {
+  makeClaimCode,
+  normalizeClaimCode,
+  isValidClaimCode,
+  canApproveClaim,
+} = require('./claim');
 
 admin.initializeApp();
 
@@ -1249,6 +1255,11 @@ exports.importPlayers = functions.https.onCall(async (data, context) => {
 /// this endpoint is a free oracle for enumerating every team in the database.
 const JOIN_WINDOW_MS = 60 * 60 * 1000;
 const JOIN_MAX_PER_WINDOW = 5;
+
+/// Claim attempts are capped the same way and for the same reason: a code is short enough
+/// to type, so it is short enough to guess, and the cap turns a brute-force attempt into
+/// five failures an hour instead of thousands.
+const CLAIM_MAX_PER_WINDOW = 8;
 
 /// Filtered roster search for the join page. The parent types a name and picks their
 /// child; the page never lists the whole roster.
@@ -5179,5 +5190,359 @@ exports.reopenSeason = functions.https.onCall(async (data, context) => {
   });
 
   return { reopened: true, restored, scanned };
+});
+
+
+// === Player claim ==========================================================
+//
+// A player profile belongs to the school and exists before the child has an account. The
+// child later takes ownership of it. Between those two facts sits the risk: a stranger who
+// knows a child's name must not be able to attach an account to that child.
+//
+// So a claim is made by CODE, never by name -- there is no search that finds a child -- and
+// a claim is granted by a guardian or the school, never by the person asking. Claiming adds
+// an alias and a `claimedByUserId`; it never removes a guardian, because a guardian's access
+// to records they were responsible for is not revoked by the child growing up.
+
+/// Stamps a claim code on every player that does not have one.
+///
+/// A trigger rather than an argument to the creation callables: players are created by the
+/// web import, by the iOS roster editor, and by hand in the console, and a code that only
+/// exists on two of those paths means an athlete silently cannot claim their profile. The
+/// same reasoning as onRosterEntryCreated stamping seasonId.
+///
+/// Collisions are checked before writing. Eight characters from a 31-symbol alphabet makes
+/// a clash unlikely, not impossible, and two players sharing a code would let an approval
+/// attach the wrong child -- so the collision is checked rather than assumed away.
+exports.onPlayerCreated = functions.firestore
+  .document('players/{playerId}')
+  .onCreate(async (snap) => {
+    const data = snap.data() || {};
+    if (data.claimCode) return null;
+
+    const db = admin.firestore();
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const code = makeClaimCode();
+      const clash = await db.collection('players').where('claimCode', '==', code).limit(1).get();
+      if (clash.empty) {
+        await snap.ref.update({
+          claimCode: code,
+          claimCodeIssuedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        return null;
+      }
+    }
+    // Deliberately leaves the player without a code rather than looping: the school can
+    // issue one from issuePlayerClaimCode, and a missing code fails loudly at claim time.
+    return null;
+  });
+
+/// Gives a player a fresh code, for when the printed one is lost or was read by the wrong
+/// person. AD or staff of that school only.
+exports.issuePlayerClaimCode = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Sign in first.');
+  }
+  const db = admin.firestore();
+  const caller = await userProfile(db, context.auth.uid);
+  const playerId = String((data && data.playerId) || '');
+  if (!playerId) {
+    throw new functions.https.HttpsError('invalid-argument', 'playerId is required.');
+  }
+
+  const playerRef = db.collection('players').doc(playerId);
+  const playerSnap = await playerRef.get();
+  if (!playerSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'That player does not exist.');
+  }
+  const schoolId = playerSnap.get('schoolId');
+  const sameSchool = caller.schoolId && caller.schoolId === schoolId;
+  if (!sameSchool || !['ad', 'coach', 'staff'].includes(caller.role)) {
+    throw new functions.https.HttpsError('permission-denied', 'That player is not in your school.');
+  }
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const code = makeClaimCode();
+    const clash = await db.collection('players').where('claimCode', '==', code).limit(1).get();
+    if (clash.empty) {
+      await playerRef.update({
+        claimCode: code,
+        claimCodeIssuedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      await db.collection('auditLog').add({
+        schoolId,
+        action: 'player.claimCodeIssued',
+        playerId,
+        actorId: context.auth.uid,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      return { ok: true, claimCode: code };
+    }
+  }
+  throw new functions.https.HttpsError('aborted', 'Could not generate a unique code. Try again.');
+});
+
+
+/// Files a claim request. Grants nothing.
+///
+/// This is the only place a player is looked up by a code a stranger could hold, so it is
+/// the only place worth rate limiting. The lookup is a query inside a callable -- the client
+/// never queries `players` -- which is what keeps a directory of children out of reach.
+exports.requestPlayerClaim = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Sign in first.');
+  }
+  const uid = context.auth.uid;
+  const db = admin.firestore();
+
+  const typed = normalizeClaimCode(data && data.claimCode);
+  // Shape is checked before the lookup so a mistyped code costs no attempt and no query.
+  if (!isValidClaimCode(typed)) {
+    throw new functions.https.HttpsError(
+      'invalid-argument',
+      'That does not look like a claim code. It is eight letters and numbers.',
+    );
+  }
+
+  // Same single-document counter as requestTeamJoin, for the same reason: a query with a
+  // time filter needs a composite index, and a missing index fails as INTERNAL on every
+  // legitimate call rather than on the attack.
+  const attemptRef = db.collection('claimAttempts').doc(uid);
+  const attemptSnap = await attemptRef.get();
+  const nowMs = Date.now();
+  const prevStart = attemptSnap.exists ? (attemptSnap.get('windowStartMs') || 0) : 0;
+  const prevCount = attemptSnap.exists ? (attemptSnap.get('count') || 0) : 0;
+  const inWindow = nowMs - prevStart < JOIN_WINDOW_MS;
+  const usedInWindow = inWindow ? prevCount : 0;
+
+  if (usedInWindow >= CLAIM_MAX_PER_WINDOW) {
+    throw new functions.https.HttpsError(
+      'resource-exhausted',
+      'Too many claim attempts. Wait an hour and try again.',
+    );
+  }
+
+  const matches = await db.collection('players').where('claimCode', '==', typed).limit(1).get();
+  const consumed = inWindow ? prevCount + 1 : 1;
+  await attemptRef.set(
+    { windowStartMs: inWindow ? prevStart : nowMs, count: consumed, updatedAt: nowMs },
+    { merge: true },
+  );
+
+  if (matches.empty) {
+    // One message for "no such code" and "code belongs to another school": confirming which
+    // would tell a guesser they had found a real child.
+    throw new functions.https.HttpsError('not-found', 'That code does not match a player.');
+  }
+
+  const player = matches.docs[0];
+  if (player.get('claimedByUserId')) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'That profile has already been claimed. Ask your school for help if this is wrong.',
+    );
+  }
+
+  const schoolId = player.get('schoolId');
+  if (!schoolId) {
+    throw new functions.https.HttpsError('failed-precondition', 'That player is not attached to a school.');
+  }
+
+  // Deterministic id from (player, requester) rather than a query for "my pending requests":
+  // a get by id needs no index and makes a double-tap idempotent instead of two rows.
+  const requestRef = db.collection('schools').doc(schoolId)
+    .collection('playerClaimRequests').doc(`${player.id}__${uid}`);
+  const existing = await requestRef.get();
+  if (existing.exists) {
+    const status = existing.get('status');
+    if (status === 'pending') {
+      return { ok: true, alreadyPending: true, requestId: requestRef.id, playerName: player.get('name') || '' };
+    }
+    if (status === 'approved') {
+      throw new functions.https.HttpsError('failed-precondition', 'You already own that profile.');
+    }
+  }
+
+  await requestRef.set({
+    playerId: player.id,
+    playerName: player.get('name') || '',
+    schoolId,
+    requesterUserId: uid,
+    // Shown to the approver so a guardian can recognise a request they did not make.
+    requesterDisplayName: (context.auth.token && context.auth.token.name) || '',
+    requesterEmail: (context.auth.token && context.auth.token.email) || '',
+    status: 'pending',
+    requestedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { ok: true, requestId: requestRef.id, schoolId, playerName: player.get('name') || '' };
+});
+
+
+/// Grants a claim. This is the only writer of `claimedByUserId`.
+///
+/// Authorisation is decided here rather than in firestore.rules because it depends on three
+/// separate facts -- is the caller a guardian, are they this school's AD, are they staff --
+/// and a rule that reads three documents to answer that question costs three lookups on
+/// every read of the collection.
+exports.approvePlayerClaim = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Sign in first.');
+  }
+  const db = admin.firestore();
+  const uid = context.auth.uid;
+  const schoolId = String((data && data.schoolId) || '');
+  const requestId = String((data && data.requestId) || '');
+  if (!schoolId || !requestId) {
+    throw new functions.https.HttpsError('invalid-argument', 'schoolId and requestId are required.');
+  }
+
+  const requestRef = db.collection('schools').doc(schoolId)
+    .collection('playerClaimRequests').doc(requestId);
+  const requestSnap = await requestRef.get();
+  if (!requestSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'That request does not exist.');
+  }
+  if (requestSnap.get('status') !== 'pending') {
+    return { alreadyDecided: true, status: requestSnap.get('status') };
+  }
+
+  const playerId = requestSnap.get('playerId');
+  const requesterUserId = requestSnap.get('requesterUserId');
+  const playerRef = db.collection('players').doc(playerId);
+  const playerSnap = await playerRef.get();
+  if (!playerSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'That player no longer exists.');
+  }
+
+  const caller = await userProfile(db, uid);
+  const guardianSnap = await db.collection('players').doc(playerId)
+    .collection('guardians').doc(uid).get();
+  const sameSchool = Boolean(caller.schoolId) && caller.schoolId === schoolId;
+  const isAdOfSchool = sameSchool && caller.role === 'ad';
+  const isStaffOfSchool = sameSchool && ['coach', 'staff'].includes(caller.role);
+
+  if (!canApproveClaim({ isGuardian: guardianSnap.exists, isAdOfSchool, isStaffOfSchool })) {
+    throw new functions.https.HttpsError(
+      'permission-denied',
+      'Only a guardian of this athlete, or staff of their school, can approve a claim.',
+    );
+  }
+
+  if (playerSnap.get('claimedByUserId') && playerSnap.get('claimedByUserId') !== requesterUserId) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'That profile has already been claimed by another account.',
+    );
+  }
+
+  // An alias is the identity mapping that stitches history together. Two players pointing
+  // at one account would merge two children's records, and that is not something to resolve
+  // by guessing -- so it is refused here, with a message naming who can fix it.
+  const aliasRef = db.collection('playerAliases').doc(`user:${requesterUserId}`);
+  const aliasSnap = await aliasRef.get();
+  if (aliasSnap.exists && aliasSnap.get('playerId') !== playerId) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'That account is already linked to a different athlete. An athletic director must resolve it.',
+    );
+  }
+
+  const approvedByRole = guardianSnap.exists && !isAdOfSchool && !isStaffOfSchool
+    ? 'guardian'
+    : (isAdOfSchool ? 'ad' : 'staff');
+
+  await db.runTransaction(async (tx) => {
+    tx.update(playerRef, {
+      claimedByUserId: requesterUserId,
+      claimedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    tx.set(aliasRef, {
+      playerId,
+      kind: 'user',
+      personId: requesterUserId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    tx.update(requestRef, {
+      status: 'approved',
+      decidedBy: uid,
+      decidedByRole: approvedByRole,
+      decidedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  });
+
+  // A guardian is never touched by this. Claiming gives the athlete control of their own
+  // profile; it does not take records away from the adult responsible for them.
+  await db.collection('auditLog').add({
+    schoolId,
+    action: 'player.claimed',
+    playerId,
+    claimedByUserId: requesterUserId,
+    approvedBy: uid,
+    approvedByRole,
+    // Staff approving without a guardian is the exception path from the identity doc, and
+    // the audit row is what makes it an exception with a trail rather than a capability.
+    withoutGuardian: approvedByRole !== 'guardian',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { approved: true, playerId, approvedByRole };
+});
+
+
+/// Declines a claim. Separate from approve so the reason is recorded -- a claim that
+/// vanishes without explanation reads to a family like the app lost it.
+exports.denyPlayerClaim = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Sign in first.');
+  }
+  const db = admin.firestore();
+  const uid = context.auth.uid;
+  const schoolId = String((data && data.schoolId) || '');
+  const requestId = String((data && data.requestId) || '');
+  const reason = String((data && data.reason) || '').slice(0, 300);
+  if (!schoolId || !requestId) {
+    throw new functions.https.HttpsError('invalid-argument', 'schoolId and requestId are required.');
+  }
+
+  const requestRef = db.collection('schools').doc(schoolId)
+    .collection('playerClaimRequests').doc(requestId);
+  const requestSnap = await requestRef.get();
+  if (!requestSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'That request does not exist.');
+  }
+  if (requestSnap.get('status') !== 'pending') {
+    return { alreadyDecided: true, status: requestSnap.get('status') };
+  }
+
+  const caller = await userProfile(db, uid);
+  const playerId = requestSnap.get('playerId');
+  const guardianSnap = await db.collection('players').doc(playerId)
+    .collection('guardians').doc(uid).get();
+  const sameSchool = Boolean(caller.schoolId) && caller.schoolId === schoolId;
+  const isAdOfSchool = sameSchool && caller.role === 'ad';
+  const isStaffOfSchool = sameSchool && ['coach', 'staff'].includes(caller.role);
+
+  if (!canApproveClaim({ isGuardian: guardianSnap.exists, isAdOfSchool, isStaffOfSchool })) {
+    throw new functions.https.HttpsError('permission-denied', 'Only a guardian or school staff can decline.');
+  }
+
+  await requestRef.update({
+    status: 'denied',
+    decidedBy: uid,
+    decidedAt: admin.firestore.FieldValue.serverTimestamp(),
+    reason,
+  });
+
+  await db.collection('auditLog').add({
+    schoolId,
+    action: 'player.claimDenied',
+    playerId,
+    decidedBy: uid,
+    reason,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { denied: true };
 });
 

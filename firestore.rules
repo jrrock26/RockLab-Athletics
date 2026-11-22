@@ -217,7 +217,16 @@ service cloud.firestore {
 
       // Guardians REQUEST profile changes; they never write the player record. Their
       // own contact details live on their user document, which they already edit.
-      allow update: if signedIn() && (isAd() || (role() in ['coach', 'staff'] && isMySchool()));
+      //
+      // `claimedByUserId` and `claimCode` are frozen here even for staff. Both are decided
+      // by the claim callables, which write with admin credentials and therefore do not
+      // need this rule. Without the freeze a coach could attach any account to a child's
+      // profile in one write, which is the exact thing the claim flow exists to prevent.
+      // `get(field, null)` rather than `data.field`: players created before claim codes
+      // existed have no claimCode, and a missing field would otherwise deny every edit.
+      allow update: if signedIn() && (isAd() || (role() in ['coach', 'staff'] && isMySchool()))
+        && request.resource.data.get('claimedByUserId', null) == resource.data.get('claimedByUserId', null)
+        && request.resource.data.get('claimCode', null) == resource.data.get('claimCode', null);
       allow delete: if false;
 
       // Guardianship is granted by the school, not claimed by the guardian: the link is
@@ -266,6 +275,27 @@ service cloud.firestore {
       match /seasons/{seasonId} {
         allow read: if signedIn();
         allow write: if false;
+      }
+
+      // Claim requests live under the school rather than at the top level so the read rule
+      // can authorise staff from the PATH alone. A top-level collection would have to read
+      // `resource.data.schoolId` to answer "is this my school", and a rule that reads the
+      // document cannot authorise a list query -- the trap that has broken four reads here.
+      //
+      // The requester branch does read the document, so an athlete fetches their one request
+      // by id (returned by requestPlayerClaim) instead of listing. That is deliberate: a
+      // claimant has no business enumerating a school's claim queue.
+      //
+      // All writes go through the callables, which verify the approver against guardians,
+      // AD ownership and staff membership. `create` is false so a client cannot file a
+      // request naming a player it could not otherwise see.
+      match /playerClaimRequests/{requestId} {
+        allow read: if signedIn() && (
+          isAd()
+          || (role() in ['coach', 'staff'] && userData().schoolId == schoolId)
+          || resource.data.requesterUserId == request.auth.uid
+        );
+        allow create, update, delete: if false;
       }
     }
 

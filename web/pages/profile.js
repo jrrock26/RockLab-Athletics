@@ -63,6 +63,7 @@ export default function Profile() {
         <h2>Account</h2>
         <ul className="plain-list">
           <li><Link href="/portal">Team portal</Link></li>
+          <li><Link href="/claim">Claim an athlete profile</Link></li>
           <li><Link href="/privacy">Privacy</Link></li>
           <li><Link href="/support">Support</Link></li>
           {profile?.role === 'ad' && <li><Link href="/billing">Plan and billing</Link></li>}
