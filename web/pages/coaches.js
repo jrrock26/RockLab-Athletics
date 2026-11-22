@@ -12,9 +12,9 @@ import AppShell from '../components/AppShell';
 /// makes this screen safe to build: the rules authorise membership from the collection
 /// path, whereas a list query across `users` would need exists() and be refused.
 ///
-/// Assigning a coach is not here. There is no assign callable -- ensureTeamCoachMembership
-/// only repairs the HEAD coach's own membership -- so adding a coach means an invitation,
-/// which is what the link below goes to.
+/// Assigning a coach goes through assignCoachToTeam: membership decides who can see a
+/// roster, so the school check lives in a callable. A coach with no account still needs an
+/// invitation, which is the path the iOS app uses.
 export default function Coaches() {
   const { loading: authLoading, user, profile } = useAuth();
   const [rows, setRows] = useState([]);
@@ -34,7 +34,10 @@ export default function Coaches() {
   // this list query is authorisable. Same-school is enforced in memory as well, because a
   // rule change elsewhere should not silently widen this screen.
   useEffect(() => {
-    if (!isAd || !profile?.schoolId) return;
+    // `profile?.role` directly rather than the `isAd` constant: isAd is declared further
+    // down, so reading it here hits the temporal dead zone and throws on first render --
+    // which is exactly the white screen this caused.
+    if (profile?.role !== 'ad' || !profile?.schoolId) return;
     let alive = true;
     (async () => {
       const snap = await getDocs(
@@ -49,7 +52,7 @@ export default function Coaches() {
       );
     })();
     return () => { alive = false; };
-  }, [isAd, profile?.schoolId]);
+  }, [profile?.role, profile?.schoolId]);
 
   async function assign() {
     setAssignBusy(true);
