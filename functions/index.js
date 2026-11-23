@@ -5583,3 +5583,138 @@ exports.denyPlayerClaim = functions.https.onCall(async (data, context) => {
   return { denied: true };
 });
 
+
+// === Bulk record import ====================================================
+//
+// A school that has kept a record book for thirty years has it in a spreadsheet. The page
+// resolves every column to the canonical vocabulary before calling this; the job here is to
+// write it once and only once.
+//
+// Written server-side rather than as a client batch for one reason: de-duplication. A
+// browser can only skip what it happened to load, so two ADs importing the same file at the
+// same time would double every record, and the record book is the one document a school
+// shows to alumni.
+
+const MAX_IMPORT_ROWS = 2000;
+
+/// Same normalisation as web/lib/records-import.js recordKey, because a key that differs by
+/// a space is a duplicate that slips through.
+function importKey(record) {
+  const name = String(record.playerName || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+  return [
+    record.sportId,
+    record.statKey,
+    name,
+    String(record.season || '').trim().toLowerCase(),
+    Number(record.value),
+  ].join('|');
+}
+
+exports.importSchoolRecords = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Sign in first.');
+  }
+  const db = admin.firestore();
+  const caller = await userProfile(db, context.auth.uid);
+  const schoolId = String((data && data.schoolId) || '');
+  if (!schoolId) {
+    throw new functions.https.HttpsError('invalid-argument', 'schoolId is required.');
+  }
+  if (!caller.schoolId || caller.schoolId !== schoolId) {
+    throw new functions.https.HttpsError('permission-denied', 'That is not your school.');
+  }
+  if (!['ad', 'coach', 'staff'].includes(caller.role)) {
+    throw new functions.https.HttpsError('permission-denied', 'Only school staff can import records.');
+  }
+
+  const rows = Array.isArray(data && data.records) ? data.records : [];
+  if (rows.length === 0) {
+    throw new functions.https.HttpsError('invalid-argument', 'There is nothing to import.');
+  }
+  if (rows.length > MAX_IMPORT_ROWS) {
+    throw new functions.https.HttpsError(
+      'invalid-argument',
+      `That file has ${rows.length} records. Split it into files of ${MAX_IMPORT_ROWS} or fewer.`,
+    );
+  }
+
+  // Existing keys, read once. A record book is hundreds of rows at most, and this is what
+  // makes the import repeatable instead of quadrupling on the second run.
+  const existingSnap = await db.collection('schools').doc(schoolId).collection('records').get();
+  const seen = new Set(existingSnap.docs.map((d) => importKey(d.data())));
+  const existingCount = existingSnap.size;
+
+  const invalid = [];
+  const toWrite = [];
+
+  rows.forEach((row, index) => {
+    const sportId = String(row && row.sportId || '').slice(0, 40);
+    const statKey = String(row && row.statKey || '').slice(0, 60);
+    const playerName = String(row && row.playerName || '').trim().slice(0, 120);
+    const value = Number(row && row.value);
+
+    if (!sportId || !statKey) { invalid.push({ index, reason: 'Missing sport or stat.' }); return; }
+    if (!playerName) { invalid.push({ index, reason: 'Missing player name.' }); return; }
+    if (!Number.isFinite(value) || value < 0) { invalid.push({ index, reason: 'Value is not a number.' }); return; }
+
+    const record = {
+      schoolId,
+      sportId,
+      statKey,
+      statLabel: String(row.statLabel || statKey).slice(0, 60),
+      value,
+      unit: String(row.unit || 'count').slice(0, 20),
+      direction: row.direction === 'low' ? 'low' : 'high',
+      playerName,
+      playerId: null,
+      gradYear: Number.isFinite(Number(row.gradYear)) && row.gradYear ? Number(row.gradYear) : null,
+      season: String(row.season || '').slice(0, 20),
+      level: ['Varsity', 'JV', 'Freshman', 'Middle school'].includes(row.level) ? row.level : 'Varsity',
+      gender: ['boys', 'girls', 'coed'].includes(row.gender) ? row.gender : '',
+      teamId: null,
+      note: String(row.note || '').slice(0, 300),
+      createdBy: context.auth.uid,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      importBatch: context.auth.uid.slice(0, 6) + '-' + Date.now(),
+    };
+
+    const key = importKey(record);
+    if (seen.has(key)) return;
+    seen.add(key);
+    toWrite.push(record);
+  });
+
+  for (let i = 0; i < toWrite.length; i += 400) {
+    const batch = db.batch();
+    toWrite.slice(i, i + 400).forEach((record) => {
+      batch.set(db.collection('schools').doc(schoolId).collection('records').doc(), record);
+    });
+    await batch.commit();
+  }
+
+  await db.collection('auditLog').add({
+    schoolId,
+    action: 'records.imported',
+    received: rows.length,
+    created: toWrite.length,
+    skippedDuplicates: rows.length - toWrite.length - invalid.length,
+    invalid: invalid.length,
+    existingBefore: existingCount,
+    actorId: context.auth.uid,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ok: true,
+    received: rows.length,
+    created: toWrite.length,
+    // Reported separately from `invalid` on purpose: a duplicate is not an error, and
+    // calling it one makes a successful re-import look like a failure.
+    skippedDuplicates: rows.length - toWrite.length - invalid.length,
+    invalid,
+  };
+});
+

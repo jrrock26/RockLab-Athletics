@@ -447,6 +447,8 @@ export default function Records() {
       <p className="muted small">
         Records are kept by hand for now. Games scored in the app feed career stats; nothing
         writes into this book automatically, so a mark only appears here once it is entered.
+        <br />
+        <Link href="/records-import">Already have a record book in a spreadsheet? Import it.</Link>
       </p>
     </AppShell>
   );
