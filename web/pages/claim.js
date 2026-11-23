@@ -72,7 +72,7 @@ export default function Claim() {
               type="text"
               value={code}
               onChange={(e) => setCode(e.target.value)}
-              placeholder="ABCD2345"
+              placeholder="example: ABCD2345"
               autoCapitalize="characters"
               autoCorrect="off"
               spellCheck={false}

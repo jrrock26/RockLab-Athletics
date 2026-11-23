@@ -160,7 +160,7 @@ export default function Join() {
             <label>
               Team code
               <input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())}
-                placeholder="e.g. GPRYW5" autoCapitalize="characters" />
+                placeholder="example: GPRYW5" autoCapitalize="characters" />
             </label>
 
             <label>
