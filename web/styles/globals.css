@@ -56,6 +56,22 @@ input, select, textarea {
   width: 100%;
 }
 
+/*
+ * Example text in an empty field must never look like typed text.
+ *
+ * Without this rule the placeholder inherits `color: var(--text)` from the rule above --
+ * near-white on a dark field -- so "e.g. 1845" reads as a value already filled in. An AD
+ * typed nothing, pressed save, and got "the record value has to be a number" about a field
+ * that appeared to hold 1845. `opacity: 1` is required because Firefox dims placeholders by
+ * default, and italic alone is not enough of a difference.
+ */
+input::placeholder,
+textarea::placeholder {
+  color: #556072;
+  opacity: 1;
+  font-style: italic;
+}
+
 button {
   background: var(--accent);
   color: #fff;

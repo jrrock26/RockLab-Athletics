@@ -247,7 +247,7 @@ export default function Records() {
             <input
               value={fQuery}
               onChange={(e) => setFQuery(e.target.value)}
-              placeholder="Name, season, class of"
+              placeholder="Search — example: Ada, 2019-20, 2020"
             />
           </label>
         </div>
@@ -307,6 +307,10 @@ export default function Records() {
       {canWrite && (
         <section className="card">
           <h2>Add a record</h2>
+          <p className="muted small">
+            Grey italic text is an example, not a value — those fields are empty and need your
+            own entry. Level starts at Varsity; change it if the record is JV or below.
+          </p>
           <form onSubmit={saveRecord}>
             <div className="row">
               <label>
@@ -345,7 +349,7 @@ export default function Records() {
                   <input
                     value={newLabel}
                     onChange={(e) => setNewLabel(e.target.value)}
-                    placeholder="Charges taken"
+                    placeholder="example: Charges taken"
                     maxLength={60}
                   />
                 </label>
@@ -385,7 +389,7 @@ export default function Records() {
                 <input
                   value={value}
                   onChange={(e) => setValue(e.target.value)}
-                  placeholder="1845"
+                  placeholder="example: 1845"
                   inputMode="decimal"
                 />
               </label>
@@ -394,7 +398,7 @@ export default function Records() {
                 <input
                   value={playerName}
                   onChange={(e) => setPlayerName(e.target.value)}
-                  placeholder="Jordan Smith"
+                  placeholder="example: Jordan Smith"
                 />
               </label>
               <label>
@@ -402,7 +406,7 @@ export default function Records() {
                 <input
                   value={gradYear}
                   onChange={(e) => setGradYear(e.target.value)}
-                  placeholder="2020"
+                  placeholder="example: 2020"
                   inputMode="numeric"
                   maxLength={4}
                 />
@@ -412,7 +416,7 @@ export default function Records() {
                 <input
                   value={season}
                   onChange={(e) => setSeason(e.target.value)}
-                  placeholder="2019-20"
+                  placeholder="example: 2019-20"
                 />
               </label>
               <label>
@@ -427,7 +431,7 @@ export default function Records() {
               <input
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
-                placeholder="Broke a 22-year-old record"
+                placeholder="Optional — example: broke a 22-year-old record"
                 maxLength={300}
               />
             </label>
