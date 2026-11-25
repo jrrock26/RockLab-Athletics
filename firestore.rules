@@ -5,7 +5,19 @@ service cloud.firestore {
     function signedIn() { return request.auth != null; }
     function uid() { return request.auth.uid; }
     function userData() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
-    function role() { return userData().role; }
+
+    /// Role, or '' when the account has no profile document yet.
+    ///
+    /// `get()` returns null for a document that does not exist, and `.role` on null is
+    /// an ERROR, not false. An error inside the first operand of an `||` aborts the
+    /// whole rule, so a signed-in account that had not written its profile would be
+    /// denied operations a later operand would have granted. Returning '' makes it a
+    /// plain false. One `let` also keeps this to a single read where the old body
+    /// could pay for two.
+    function role() {
+      let u = userData();
+      return u != null && 'role' in u ? u.role : '';
+    }
 
     function membership(t) {
       return exists(/databases/$(database)/documents/teams/$(t)/members/$(request.auth.uid))
@@ -14,25 +26,54 @@ service cloud.firestore {
     function memberRole(t) { return membership(t) == null ? null : membership(t).role; }
 
     /// The school this user belongs to, or '' if unattached.
-    function mySchoolId() {
-      return ('schoolId' in userData() && userData().schoolId is string) ? userData().schoolId : '';
-    }
-
-    /// AD standing comes from OWNING a school, not from a label on the user doc.
     ///
-    /// `role` is written by the client (onboarding sets it right after creating
-    /// the school), so a bare `role() == 'ad'` was self-grantable: any signed-in
-    /// account could write role 'ad' to its own document and then edit every
-    /// school in the database. Requiring ownership of the school the user is
-    /// attached to bounds that to a single organization.
-    function ownsSchool() {
-      return signedIn()
-        && mySchoolId() != ''
-        && exists(/databases/$(database)/documents/schools/$(mySchoolId()))
-        && get(/databases/$(database)/documents/schools/$(mySchoolId())).data.adUserId == uid();
+    /// Same null-safety as `role()`: no profile document means '', which matches no
+    /// school, instead of an error that takes a whole rule with it.
+    function mySchoolId() {
+      let u = userData();
+      return u != null && 'schoolId' in u && u.schoolId is string ? u.schoolId : '';
     }
 
-    function isAd() { return role() == 'ad' && ownsSchool(); }
+    /// AD standing IN ONE SCHOOL.
+    ///
+    /// `role` is written by the client (onboarding sets it right after creating the
+    /// school), so a bare `role() == 'ad'` is self-grantable: any signed-in account
+    /// could write role 'ad' to its own document. Standing therefore means "this
+    /// school names me as its AD" -- asked about a SPECIFIC school, passed in.
+    ///
+    /// Why the argument matters: `isAd()` answers "do I own some school". Used on a
+    /// path that reads another document, that let an AD of one school read every
+    /// user, report and invitation in the district. A rule about another document
+    /// must pass THAT document's school.
+    ///
+    /// `is string` keeps a document with no `schoolId` from erroring the whole rule:
+    /// a missing field yields false and denies, where a bare comparison raises and
+    /// takes the rest of the evaluation with it.
+    function isAdOf(schoolId) {
+      return signedIn()
+        && schoolId is string
+        && schoolId != ''
+        && role() == 'ad'
+        && exists(/databases/$(database)/documents/schools/$(schoolId))
+        && get(/databases/$(database)/documents/schools/$(schoolId)).data.adUserId == uid();
+    }
+
+    /// The caller's own school. Only for the narrow case where the question really is
+    /// "do I own the school I am attached to" -- onboarding creating that school.
+    /// Everywhere else use `isAdOf(the school the document names)`.
+    function isAd() { return isAdOf(mySchoolId()); }
+
+    /// The school that owns a team, or '' when no such team exists.
+    ///
+    /// Trips, fundraisers and reports carry `teamId` and no `schoolId` (the report
+    /// function writes no school today), so their school has to be resolved through
+    /// the team. Returning '' instead of erroring means a document with no team -- a
+    /// profile report, say -- simply matches no AD; it does not break the rule.
+    function teamSchool(t) {
+      return t != '' && exists(/databases/$(database)/documents/teams/$(t))
+        ? get(/databases/$(database)/documents/teams/$(t)).data.get('schoolId', '')
+        : '';
+    }
     function isCoachOf(t) { return memberRole(t) == 'coach'; }
     function isStaffOf(t) { return memberRole(t) == 'staff'; }
     function isTeamMember(t) { return memberRole(t) in ['coach','staff','player','parent']; }
@@ -147,13 +188,17 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      // Your own record, an AD of the school you share, or staff of the same
+      // Your own record, an AD of THIS document's school, or staff of the same
       // school. Previously any user claiming role coach/staff could read every
       // document in this collection; the same-school check confines that.
+      //
+      // The AD branch passes the school named by the document being read, not the
+      // caller's own: a bare `isAd()` here let any AD read every guardian's email and
+      // phone number in every school.
       allow read: if signedIn() && (
         uid() == userId
-        || isAd()
-        || (role() in ['coach','staff'] && mySchoolId() != '' && mySchoolId() == resource.data.schoolId)
+        || isAdOf(resource.data.get('schoolId', ''))
+        || (role() in ['coach','staff'] && mySchoolId() != '' && mySchoolId() == resource.data.get('schoolId', ''))
       );
 
       // Self-signup may claim an unprivileged role. Claiming 'ad' requires the
@@ -199,7 +244,9 @@ service cloud.firestore {
               || request.resource.data.schoolId == resource.data.get('schoolId', ''))
           )
         ))
-        || isAd()
+        // Editing someone else's document is an AD power, but only over the school
+        // that document belongs to.
+        || isAdOf(resource.data.get('schoolId', ''))
       );
       allow delete: if false;
     }
@@ -509,7 +556,20 @@ service cloud.firestore {
       allow read: if signedIn() && (isAd() || isTeamMember(resource.data.teamId)
         || (memberRole(resource.data.teamId) == 'follower'
             && resource.data.type in ['game', 'meeting', 'meal', 'travel']));
-      allow create, update, delete: if canManageTeam(request.resource.data.teamId);
+      // `request.resource` is null on a delete, so a rule that reads it can never
+      // allow one: every event was permanent, and a mistyped practice could not be
+      // removed. Delete authorises on the STORED team, and through that team's school
+      // rather than a bare `isAd()` -- enabling deletes must not hand every AD the
+      // district's calendar.
+      //
+      // Create and update keep `canManageTeam`, whose AD branch is still school-blind
+      // (task 2.3): tightening it here would also lock ADs out of legacy teams that
+      // carry no `schoolId`, and that change belongs with its own tests.
+      allow create, update: if canManageTeam(request.resource.data.get('teamId', ''));
+      allow delete: if signedIn() && (
+        isAdOf(teamSchool(resource.data.get('teamId', '')))
+        || isCoachOf(resource.data.get('teamId', ''))
+      );
 
       match /rsvps/{rsvpUserId} {
         // A family must answer for each child separately, so a guardian's document
@@ -702,18 +762,50 @@ service cloud.firestore {
       allow update, delete: if canManageTeam(resource.data.teamId);
     }
 
+    // Trips carry `teamId` and no `schoolId` (iOS writes the document directly), so
+    // their school is resolved through the team. A team with no `schoolId` grants its
+    // AD nothing here -- deny is the safe default for a legacy record.
+    //
+    // Delete reads the STORED document: the old rule read `request.resource`, which is
+    // null on a delete, so no trip could ever be removed.
     match /trips/{tripId} {
-      allow read: if signedIn() && (isAd() || isTeamMember(resource.data.teamId));
-      allow create, update, delete: if isAd() || isCoachOf(request.resource.data.teamId);
+      allow read: if signedIn() && (
+        isAdOf(teamSchool(resource.data.get('teamId', '')))
+        || isTeamMember(resource.data.get('teamId', ''))
+      );
+      allow create, update: if signedIn() && (
+        isAdOf(teamSchool(request.resource.data.get('teamId', '')))
+        || isCoachOf(request.resource.data.get('teamId', ''))
+      );
+      allow delete: if signedIn() && (
+        isAdOf(teamSchool(resource.data.get('teamId', '')))
+        || isCoachOf(resource.data.get('teamId', ''))
+      );
     }
 
     match /fundraisers/{fundraiserId} {
+      // A fundraiser is public-facing by design -- a donor follows a link -- so read
+      // stays open to any signed-in account. Writes are the owning school's.
       allow read: if signedIn();
-      allow create, update, delete: if isAd() || isCoachOf(request.resource.data.teamId)
-        || staffHasPerm(request.resource.data.teamId, 'fundraising');
+      allow create, update: if signedIn() && (
+        isAdOf(teamSchool(request.resource.data.get('teamId', '')))
+        || isCoachOf(request.resource.data.get('teamId', ''))
+        || staffHasPerm(request.resource.data.get('teamId', ''), 'fundraising')
+      );
+      // Delete reads the stored document; `request.resource` is null here, which made
+      // every fundraiser permanent.
+      allow delete: if signedIn() && (
+        isAdOf(teamSchool(resource.data.get('teamId', '')))
+        || isCoachOf(resource.data.get('teamId', ''))
+        || staffHasPerm(resource.data.get('teamId', ''), 'fundraising')
+      );
 
       match /donations/{donationId} {
-        allow read: if signedIn() && (isAd() || isCoachOf(fundTeam(fundraiserId)) || isStaffOf(fundTeam(fundraiserId)));
+        allow read: if signedIn() && (
+          isAdOf(teamSchool(fundTeam(fundraiserId)))
+          || isCoachOf(fundTeam(fundraiserId))
+          || isStaffOf(fundTeam(fundraiserId))
+        );
         allow create: if signedIn();
         allow update, delete: if false;
       }
@@ -721,7 +813,8 @@ service cloud.firestore {
       match /progress/{entryId} {
         allow read: if signedIn();
         allow write: if signedIn() && (
-          isAd() || isCoachOf(fundTeam(fundraiserId))
+          isAdOf(teamSchool(fundTeam(fundraiserId)))
+          || isCoachOf(fundTeam(fundraiserId))
           || staffHasPerm(fundTeam(fundraiserId), 'fundraising')
           || isRosterAssignee(fundTeam(fundraiserId), entryId)
         );
@@ -742,8 +835,13 @@ service cloud.firestore {
     }
 
     // Moderation queue. Written only by the reportContent Cloud Function.
+    //
+    // That function stores `teamId` and no `schoolId`, so the school is resolved
+    // through the team. A report with no team (a profile report) resolves to '' and is
+    // readable by nobody through this path: no school owns it. The alternative was
+    // every AD reading every district's moderation queue.
     match /reports/{reportId} {
-      allow read: if signedIn() && isAd();
+      allow read: if signedIn() && isAdOf(teamSchool(resource.data.get('teamId', '')));
       allow write: if false;
     }
 
@@ -762,16 +860,20 @@ service cloud.firestore {
         (request.auth.token.email != null
           && 'email' in resource.data
           && resource.data.email == request.auth.token.email.lower())
-        // The school's AD, for its own school only.
-        || (isAd() && 'schoolId' in resource.data && resource.data.schoolId == userData().schoolId)
+        // The AD of the school the INVITATION names, not of the caller's own.
+        || isAdOf(resource.data.get('schoolId', ''))
         // The team's coach or staff, for their own team only.
         || ('teamId' in resource.data && (isCoachOf(resource.data.teamId) || isStaffOf(resource.data.teamId)))
       );
       // AD invitations carry ownership of the school, so they are minted by the
       // Cloud Function (which verifies the caller owns it), never by a client.
       allow create: if signedIn() && request.resource.data.role != 'ad'
-        && (isAd() || ('teamId' in request.resource.data && isCoachOf(request.resource.data.teamId)));
-      allow update, delete: if signedIn() && (isAd() || ('teamId' in resource.data && isCoachOf(resource.data.teamId)));
+        && (isAdOf(request.resource.data.get('schoolId', ''))
+          || ('teamId' in request.resource.data && isCoachOf(request.resource.data.teamId)));
+      allow update, delete: if signedIn() && (
+        isAdOf(resource.data.get('schoolId', ''))
+        || ('teamId' in resource.data && isCoachOf(resource.data.teamId))
+      );
     }
 
     // Append-only audit trail. Written exclusively by Cloud Functions via the

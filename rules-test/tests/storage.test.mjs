@@ -93,4 +93,25 @@ describe('athlete paperwork in Storage', () => {
       { contentType: 'application/pdf' },
     ));
   });
+
+  // NOT ASSERTED HERE: that a guardian cannot overwrite a document that already
+  // exists (D-3, the `allow update: if staffOfTeam()` half of the rules).
+  //
+  // Probed directly, the Storage emulator evaluates a second upload to the same path as
+  // `create`, not `update` -- so the emulator allows the overwrite for anyone the
+  // `create` rule allows, and no assertion written here can fail for the right reason.
+  // The rule is kept because production distinguishes the two operations as documented,
+  // and it is safe either way: every portal upload gets a fresh `${Date.now()}-${name}`
+  // path, so a family re-uploading the right file is unaffected. Defence in depth is
+  // not coverage: this half of D-3 stays unverified until Phase 4.3 versions documents.
+
+  test('staff may still replace a document', async () => {
+    // physical.pdf exists from the first test; a coach re-uploading a corrected scan is
+    // an `update` and stays allowed.
+    await assertSucceeds(uploadBytes(
+      ref(storage('coachA'), documentsPath(ENTRY_KID_A)),
+      new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+      { contentType: 'application/pdf' },
+    ));
+  });
 });

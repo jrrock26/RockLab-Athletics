@@ -61,8 +61,21 @@ export async function seedFixtures(db) {
     email: 'someone.b@example.com', schoolId: SCHOOL_B, role: 'parent', code: 'ZZZZ2222',
   });
 
-  // Moderation queue and audit trail: both server-write only.
-  await write('reports/reportA', { schoolId: SCHOOL_A, reason: 'spam', status: 'open' });
+  // The three collections whose delete rules read `request.resource` (and so denied
+  // every delete), plus a fundraiser with a donation to scope. They carry `teamId` and
+  // no `schoolId`, exactly as iOS and `reportContent` write them, which is why the
+  // rules resolve their school through the team.
+  await write('events/eventA', { teamId: TEAM_A, type: 'game', title: 'Alpha vs Bravo' });
+  await write('trips/tripA', { teamId: TEAM_A, title: 'District finals', destination: 'Springfield' });
+  await write('fundraisers/fundA', { teamId: TEAM_A, title: 'Equipment fund', goal: 5000, raised: 0 });
+  await write('fundraisers/fundA/donations/don1', { amount: 50, donorName: 'A Donor' });
+
+  // Moderation queue and audit trail: both server-write only. The report carries the
+  // shape `reportContent` actually writes -- `teamId`, no `schoolId`.
+  await write('reports/reportA', {
+    teamId: TEAM_A, contentType: 'message', contentId: 'msg1', reason: 'spam',
+    reportedBy: 'guardianA', reportedUserId: 'kidB', status: 'open',
+  });
   await write(`auditLogs/${SCHOOL_A}-log`, { schoolId: SCHOOL_A, action: 'test' });
   await write(`auditLogs/${SCHOOL_B}-log`, { schoolId: SCHOOL_B, action: 'test' });
 }

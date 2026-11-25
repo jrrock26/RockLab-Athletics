@@ -69,6 +69,12 @@ describe('invitations', () => {
     }));
   });
 
+  test('an AD of another school cannot mint an invitation into this school', async () => {
+    await assertFails(setDoc(doc(as('adB'), 'invitations/inviteByAdB'), {
+      email: 'friend@example.com', schoolId: SCHOOL_A, teamId: TEAM_A, role: 'parent', code: 'ADBCODE1',
+    }));
+  });
+
   test('an unrelated parent cannot mint an invitation', async () => {
     await assertFails(setDoc(doc(as('guardianA'), 'invitations/inviteByParent'), {
       email: 'friend@example.com', schoolId: SCHOOL_A, teamId: TEAM_A, role: 'parent', code: 'PARENT01',

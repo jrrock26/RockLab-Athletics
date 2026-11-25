@@ -137,7 +137,25 @@ service firebase.storage {
 
       // The rules language has no ternary: one conjunction, so a write by anyone
       // outside these two groups is refused by the first clause alone.
-      allow create, update: if (staffOfTeam() || guardianOfEntry())
+      //
+      // A family may ADD a document but never REPLACE one. `create` fires only when no
+      // object exists at the path; `update` fires when one does. A file a coach has
+      // already reviewed must not change underneath the review, and Storage cannot ask
+      // whether it was reviewed. This does not strand a family that uploaded the wrong
+      // file: the portal names each upload `${Date.now()}-${name}`, so a re-upload
+      // lands at a new path and staff can compare both. Overwrite stays a staff power.
+      //
+      // Note for whoever verifies this: the Storage emulator reports every upload as
+      // `create`, so this distinction cannot be probed locally. It has to be checked
+      // against the deployed rules in Phase 4.3, with the versioned-document fix, which
+      // is the part that actually makes a reviewed file immutable.
+      allow create: if (staffOfTeam() || guardianOfEntry())
+        && request.resource.size < 10 * 1024 * 1024
+        && (request.resource.contentType == 'application/pdf'
+          || request.resource.contentType == 'image/jpeg'
+          || request.resource.contentType == 'image/png');
+
+      allow update: if staffOfTeam()
         && request.resource.size < 10 * 1024 * 1024
         && (request.resource.contentType == 'application/pdf'
           || request.resource.contentType == 'image/jpeg'

@@ -29,6 +29,13 @@ describe('server-write-only collections', () => {
     await assertFails(getDoc(doc(as('coachA'), 'reports/reportA')));
   });
 
+  test('an AD of another school cannot read this school\'s reports', async () => {
+    // Reports carry `teamId` and no `schoolId`, so the rule resolves the school through
+    // the team. Before Phase 2 the branch was a bare `isAd()`, which let any AD read
+    // every district's moderation queue.
+    await assertFails(getDoc(doc(as('adB'), 'reports/reportA')));
+  });
+
   test('a signed-out caller cannot read the moderation queue', async () => {
     const db = env.unauthenticatedContext().firestore();
     await assertFails(getDoc(doc(db, 'reports/reportA')));
