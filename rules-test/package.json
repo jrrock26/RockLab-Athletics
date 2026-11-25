@@ -1,0 +1,18 @@
+{
+  "name": "rocklab-rules-test",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Emulator-only Firestore/Storage security-rules tests for RockLab Athletics",
+  "type": "module",
+  "scripts": {
+    "test": "cd .. && firebase emulators:exec --only firestore,auth,storage --project demo-rocklab-athletics \"node --test --test-concurrency=1 rules-test/tests/*.test.mjs\"",
+    "emulators": "cd .. && firebase emulators:start --only firestore,auth,storage --project demo-rocklab-athletics",
+    "seed": "cd .. && node rules-test/seed.mjs"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.0.2",
+    "firebase-admin": "^12.6.0",
+    "firebase-tools": "^15.33.0"
+  }
+}

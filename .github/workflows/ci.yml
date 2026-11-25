@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  # Every pull request, whatever its base branch: the integration branch
+  # (restore/web-app) must be able to gate on this before it reaches develop.
+  pull_request:
+
+jobs:
+  test:
+    name: Run Tests & Checks
+    runs-on: macos-latest
+
+    defaults:
+      run:
+        working-directory: .
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies (web)
+        run: npm ci
+        working-directory: web
+
+      - name: Install dependencies (functions)
+        run: npm ci
+        working-directory: functions
+
+      # ── Web (Next.js) correctness gate ─────────────────────────────
+      - name: Run web check (identifier correctness)
+        run: npm run check
+        working-directory: web
+
+      - name: Run web lint (alias for check)
+        run: npm run lint
+        working-directory: web
+
+      - name: Run web unit tests
+        run: npm test
+        working-directory: web
+
+      # ── Cloud Functions ────────────────────────────────────────────
+      - name: Run functions tests
+        run: npm test
+        working-directory: functions
+
+      # ── iOS (Xcode) ────────────────────────────────────────────────
+      - name: Install Xcode
+        run: xcodebuild -version
+
+      - name: Run iOS unit tests
+        run: |
+          set -o pipefail
+          # Use the first available iOS simulator destination; GitHub Actions
+          # runners may not have iOS 17.0, so we pick a compatible one.
+          xcodebuild test \
+            -project RockLabAthletics.xcodeproj \
+            -scheme RockLabAthletics \
+            -destination "platform=iOS Simulator,name=iPhone 15 Pro" \
+            | tee test-output.log
+        working-directory: .
+
+      - name: Upload iOS test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-test-results
+          path: test-output.log
+
+      # ── Summary ────────────────────────────────────────────────────
+      - name: Fail workflow if any check/tests failed
+        if: failure()
+        run: |
+          echo "❌ CI checks or tests failed"
+          exit 1
+        shell: bash
+
+      - name: ✅ CI passed
+        if: success()
+        run: |
+          echo "All CI checks and tests passed"
+        shell: bash
+
+  # Security rules are the access-control layer of the whole platform, and until now
+  # nothing executed them. This job runs the real firestore.rules and storage.rules in
+  # the local emulators, offline (project id starts with `demo-`), against a fake school.
+  rules:
+    name: Firestore & Storage rules (emulators)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The Firestore emulator is a JVM process.
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install dependencies (rules-test)
+        run: npm ci
+        working-directory: rules-test
+
+      - name: Run rules tests
+        run: npm test
+        working-directory: rules-test

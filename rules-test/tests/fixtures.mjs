@@ -1,0 +1,68 @@
+/**
+ * The smallest dataset that can express every access boundary in the rules:
+ * two schools (so "my school" is testable), one team, two families, and the
+ * role variants a roster entry distinguishes.
+ *
+ * Ids are readable on purpose: a failing assertion should say
+ * "guardianA cannot read entryKidB", not "doc 4f2a9c".
+ */
+import { doc, setDoc } from 'firebase/firestore';
+
+export const SCHOOL_A = 'schoolA';
+export const SCHOOL_B = 'schoolB';
+export const TEAM_A = 'teamA';
+export const ENTRY_KID_A = 'entryKidA';
+export const ENTRY_KID_B = 'entryKidB';
+
+export async function seedFixtures(db) {
+  const write = (path, data) => setDoc(doc(db, path), data);
+
+  await write(`schools/${SCHOOL_A}`, { name: 'Alpha High', adUserId: 'adA' });
+  await write(`schools/${SCHOOL_B}`, { name: 'Bravo High', adUserId: 'adB' });
+
+  // Users. `role` and `schoolId` are what nearly every rule reads.
+  await write('users/adA', { role: 'ad', schoolId: SCHOOL_A, displayName: 'Ada Alpha', email: 'ad.a@example.com' });
+  await write('users/adB', { role: 'ad', schoolId: SCHOOL_B, displayName: 'Bo Bravo', email: 'ad.b@example.com' });
+  await write('users/coachA', { role: 'coach', schoolId: SCHOOL_A, displayName: 'Casey Coach' });
+  await write('users/coachB', { role: 'coach', schoolId: SCHOOL_B, displayName: 'Cleo Coach' });
+  await write('users/staffA', { role: 'staff', schoolId: SCHOOL_A, displayName: 'Sam Staff' });
+  await write('users/guardianA', { role: 'parent', schoolId: SCHOOL_A, displayName: 'Gale Guardian', email: 'guardian.a@example.com' });
+  await write('users/guardianB', { role: 'parent', schoolId: SCHOOL_A, displayName: 'Gus Guardian', email: 'guardian.b@example.com' });
+  await write('users/kidA', { role: 'player', schoolId: SCHOOL_A, displayName: 'Kai Kid' });
+  await write('users/followerX', { role: 'follower', displayName: 'Fran Follower' });
+
+  await write(`teams/${TEAM_A}`, { name: 'Alpha Varsity', schoolId: SCHOOL_A });
+
+  // Memberships decide team standing; roster entries decide family standing.
+  await write(`teams/${TEAM_A}/members/coachA`, { role: 'coach' });
+  await write(`teams/${TEAM_A}/members/staffA`, { role: 'staff' });
+  await write(`teams/${TEAM_A}/members/guardianA`, { role: 'parent' });
+  await write(`teams/${TEAM_A}/members/guardianB`, { role: 'parent' });
+  await write(`teams/${TEAM_A}/members/kidA`, { role: 'player' });
+  await write(`teams/${TEAM_A}/members/followerX`, { role: 'follower' });
+
+  // Roster entries carry the guardian link. `guardianUserIds` is the only field
+  // that may confer family standing, because it is server-written.
+  await write(`teams/${TEAM_A}/roster/${ENTRY_KID_A}`, {
+    firstName: 'Kai', lastName: 'Kid', userId: 'kidA',
+    guardianUserIds: ['guardianA'], injuryStatus: 'healthy',
+  });
+  await write(`teams/${TEAM_A}/roster/${ENTRY_KID_B}`, {
+    firstName: 'Kim', lastName: 'Kid', userId: 'kidB',
+    guardianUserIds: ['guardianB'], injuryStatus: 'out',
+  });
+
+  // An invitation for guardianA, and one for a schoolB address (used to prove the
+  // same-school clause on the AD read branch).
+  await write('invitations/inviteA', {
+    email: 'guardian.a@example.com', schoolId: SCHOOL_A, teamId: TEAM_A, role: 'parent', code: 'K7QP4MXR',
+  });
+  await write('invitations/inviteB', {
+    email: 'someone.b@example.com', schoolId: SCHOOL_B, role: 'parent', code: 'ZZZZ2222',
+  });
+
+  // Moderation queue and audit trail: both server-write only.
+  await write('reports/reportA', { schoolId: SCHOOL_A, reason: 'spam', status: 'open' });
+  await write(`auditLogs/${SCHOOL_A}-log`, { schoolId: SCHOOL_A, action: 'test' });
+  await write(`auditLogs/${SCHOOL_B}-log`, { schoolId: SCHOOL_B, action: 'test' });
+}

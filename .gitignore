@@ -32,10 +32,16 @@ yarn-error.log*
 firebase-debug.log
 firebase-debug.*.log
 .ui-debug.log
+# Written by the local emulators (npm test in rules-test/)
+firestore-debug.log
+storage-debug.log
 
 # Test / coverage artifacts
 coverage/
 *.xcresult
+
+# Locally downloaded toolchain (JDK for the Firestore emulator) — never commit
+.tools/
 
 # CocoaPods / Carthage
 Pods/
