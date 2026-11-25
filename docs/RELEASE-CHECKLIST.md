@@ -11,9 +11,12 @@ Last reviewed: 2026-11-20
 
 ### 1. Email (blocker for onboarding, not for shipping)
 
-Without this, invitations are created and carry working links, but nothing is
-emailed. The console shows the links so an AD can send them manually — so this is
-no longer a hard blocker, just friction.
+Without this, invitations are created and carry working links, but nothing is emailed. The console shows the links so an AD can send them manually — so this is no longer a hard blocker, just friction.
+
+**Decision for the pilot (25 Nov 2026):** run on **manually shared invite links**; do
+not verify a sending domain yet. `deliveryStatus` stays `not_configured` and the UI must
+keep saying so rather than implying a mail went out. Verify a Resend domain before the
+second school, because past one pilot the manual step is the thing that stops adoption.
 
 ```bash
 firebase functions:secrets:set RESEND_API_KEY     # from resend.com

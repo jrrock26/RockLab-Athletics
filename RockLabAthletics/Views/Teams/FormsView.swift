@@ -11,6 +11,7 @@ struct FormsView: View {
     let entryId: String
     @State private var vm = RosterViewModel()
     @State private var access = TeamAccess()
+    @State private var documents: [UploadedDocument] = []
 
     private var canViewEligibility: Bool {
         access.canManageTeam || access.isStaff
@@ -63,8 +64,43 @@ struct FormsView: View {
                     }
                 }
             }
+
+            // A family uploads through the web portal, which stores the file beside this
+            // requirement and records `documentUrl` on it. Without this section the
+            // upload is invisible here and the physical reads as still missing.
+            Section("Uploaded documents") {
+                if documents.isEmpty {
+                    Text("No documents uploaded from the family portal.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(documents) { doc in
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let url = doc.url {
+                                Link(destination: url) {
+                                    Label(doc.fileName.isEmpty ? doc.formId : doc.fileName,
+                                          systemImage: "paperclip")
+                                }
+                            } else {
+                                Label(doc.fileName.isEmpty ? doc.formId : doc.fileName,
+                                      systemImage: "paperclip")
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(documentSubtitle(doc))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
         }
         .task { await load() }
+    }
+
+    private func documentSubtitle(_ doc: UploadedDocument) -> String {
+        var parts = [doc.status.displayName]
+        if !doc.signedByName.isEmpty { parts.append("signed by \(doc.signedByName)") }
+        if let d = doc.signedAt { parts.append(d.formatted(date: .abbreviated, time: .omitted)) }
+        return parts.joined(separator: " · ")
     }
 
     private func statusText(form: TeamForm, submission: FormSubmission?) -> String {
@@ -82,6 +118,8 @@ struct FormsView: View {
     private func load() async {
         access = await FirestoreService.shared.teamAccess(teamId: teamId, userId: auth.user?.id, isAd: auth.user?.role == .ad)
         await vm.loadRoster(teamId: teamId, includeEligibility: canViewEligibility)
+        documents = (try? await FirestoreService.shared.fetchUploadedDocuments(
+            teamId: teamId, rosterEntryId: entryId)) ?? []
     }
 }
 

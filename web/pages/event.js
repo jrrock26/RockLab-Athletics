@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
-import { collection, doc, getDoc, getDocs, orderBy, query, serverTimestamp, setDoc } from 'firebase/firestore';
+import { collection, doc, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from './index';
 import AppShell from '../components/AppShell';
@@ -37,33 +37,51 @@ export default function EventAttendance() {
   useEffect(() => {
     if (authLoading || !user || !team || !id) return;
     let alive = true;
-    (async () => {
-      try {
-        const ev = await getDoc(doc(db, 'events', id));
-        if (!ev.exists()) { setError('That event does not exist.'); setLoading(false); return; }
+    const unsubs = [];
+
+    // Live marks, not a snapshot at open. Attendance is the screen two people use at
+    // once -- a head coach and an assistant on the sideline, or an AD watching from the
+    // office -- and a stale board is worse than no board, because it looks authoritative.
+    unsubs.push(onSnapshot(
+      doc(db, 'events', id),
+      (snap) => {
         if (!alive) return;
-        setEvent({ id: ev.id, ...ev.data() });
+        if (!snap.exists()) { setError('That event does not exist.'); setLoading(false); return; }
+        setEvent({ id: snap.id, ...snap.data() });
+      },
+      (err) => {
+        if (!alive) return;
+        setError(err?.message || 'Could not open that event.');
+        setLoading(false);
+      },
+    ));
 
-        const rosterRef = collection(db, 'teams', team, 'roster');
-        const [rosterSnap, attSnap] = await Promise.all([
-          getDocs(query(rosterRef, orderBy('playerName'))).catch(() => getDocs(rosterRef)),
-          getDocs(collection(db, 'events', id, 'attendance')).catch(() => null),
-        ]);
+    // Unordered and sorted here: `orderBy('playerName')` silently drops entries that
+    // have no name yet, which is exactly the half-added athlete a coach is looking for.
+    unsubs.push(onSnapshot(
+      collection(db, 'teams', team, 'roster'),
+      (snap) => {
+        if (!alive) return;
+        const rows = activeRoster(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setRoster(rows.sort((a, b) =>
+          String(personName(a, '')).localeCompare(String(personName(b, '')))));
+        setLoading(false);
+      },
+      () => { if (alive) setLoading(false); },
+    ));
 
+    unsubs.push(onSnapshot(
+      collection(db, 'events', id, 'attendance'),
+      (snap) => {
+        if (!alive) return;
         const map = {};
-        (attSnap?.docs || []).forEach((d) => { map[d.id] = d.data().status; });
-        if (!alive) return;
-        // Attendance is taken against the current roster. An archived entry belongs to a
-        // closed season and cannot be marked present at today's game.
-        setRoster(activeRoster(rosterSnap.docs.map((d) => ({ id: d.id, ...d.data() }))));
+        snap.docs.forEach((d) => { map[d.id] = d.data().status; });
         setMarks(map);
-      } catch (err) {
-        if (alive) setError(err?.message || 'Could not open that event.');
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => { alive = false; };
+      },
+      () => {},
+    ));
+
+    return () => { alive = false; unsubs.forEach((u) => u()); };
   }, [authLoading, user, team, id]);
 
   async function mark(entryId, status) {

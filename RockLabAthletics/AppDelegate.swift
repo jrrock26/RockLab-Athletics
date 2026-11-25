@@ -7,6 +7,19 @@ import FirebaseFirestore
 import FirebaseMessaging
 import FirebaseAppCheck
 
+/// Vends App Attest providers on this SDK version.
+///
+/// `AppAttestProviderFactory` is only available from Firebase 12.14 (firebase-ios-sdk
+/// #16182). This project pins 11.15.0, so the previous `AppAttestProviderFactory()` call
+/// did not compile in Release -- and because `#if DEBUG` always chose the debug branch
+/// on this machine, nothing caught it until an archive was attempted. This is the
+/// documented pre-12.14 form: the factory creates `AppAttestProvider` itself.
+private final class AppAttestFactory: NSObject, AppCheckProviderFactory {
+    func createProvider(with app: FirebaseApp) -> AppCheckProvider? {
+        AppAttestProvider(app: app)
+    }
+}
+
 /// Handles Firebase configuration and push-notification registration.
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate, MessagingDelegate {
 
@@ -42,7 +55,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         #if DEBUG || targetEnvironment(simulator)
         AppCheck.setAppCheckProviderFactory(AppCheckDebugProviderFactory())
         #else
-        AppCheck.setAppCheckProviderFactory(AppAttestProviderFactory())
+        AppCheck.setAppCheckProviderFactory(AppAttestFactory())
         #endif
     }
 

@@ -92,6 +92,39 @@ struct PlayerForm: Identifiable, Codable {
     }
 }
 
+/// Paperwork a family uploaded from the web portal.
+///
+/// The portal files an upload at `teams/{teamId}/roster/{entryId}/forms/{formId}` with a
+/// `documentUrl` (a Storage download URL) beside the requirement's own fields. iOS read
+/// neither the URL nor that collection -- `fetchForms` had no caller at all -- so a coach
+/// reviewing a physical saw an empty requirement while the PDF sat one path away.
+///
+/// This decoder is deliberately narrow and does not reuse `PlayerForm`: `PlayerForm`
+/// requires a `FormType`, and a coach-created form's id is not one of its three cases, so
+/// those rows were dropped silently. A document only needs to be identified and opened.
+struct UploadedDocument: Identifiable, Hashable {
+    let id: String
+    let formId: String
+    let status: FormStatus
+    let signedByName: String
+    let signedAt: Date?
+    let fileName: String
+    let url: URL?
+
+    init?(id: String, data: [String: Any]) {
+        let rawURL = (data["documentUrl"] as? String) ?? ""
+        self.id = id
+        self.formId = data["formId"] as? String ?? id
+        self.status = FormStatus(rawValue: data["status"] as? String ?? "") ?? .submitted
+        self.signedByName = data["signedByName"] as? String ?? ""
+        self.signedAt = (data["signedAt"] as? Double).map { Date(timeIntervalSince1970: $0) }
+        self.fileName = data["documentName"] as? String
+            ?? data["fileName"] as? String
+            ?? ""
+        self.url = rawURL.isEmpty ? nil : URL(string: rawURL)
+    }
+}
+
 /// Whether a player is cleared to play.
 enum EligibilityStatus: Equatable {
     case eligible

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
-import { collection, doc, getDoc, getDocs, limit, query, where } from 'firebase/firestore';
+import { collection, doc, limit, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from './index';
 import AppShell from '../components/AppShell';
@@ -30,30 +30,45 @@ export default function TeamPage() {
     // for `id` is what stops this from showing "does not exist" before it has looked.
     if (!id || authLoading || !user) return;
     let alive = true;
-    (async () => {
-      try {
-        const snap = await getDoc(doc(db, 'teams', id));
-        if (!alive) return;
-        if (!snap.exists()) { setMissing(true); return; }
-        setTeam({ id: snap.id, ...snap.data() });
+    const unsubs = [];
+    setMissing(false);
 
-        const [r, f, e] = await Promise.all([
-          getDocs(query(collection(db, 'teams', id, 'roster'), limit(200))).catch(() => null),
-          getDocs(query(collection(db, 'teams', id, 'forms'), limit(50))).catch(() => null),
-          getDocs(query(collection(db, 'events'), where('teamId', '==', id), limit(50))).catch(() => null),
-        ]);
+    // Live listeners, not one-shot reads. A coach adding a player, publishing a form or
+    // moving a game while the AD has this page open used to require a manual refresh --
+    // two people looking at "the same team" saw different states. The queries are the
+    // same ones the reads used, so the rules that admitted them still admit the listener.
+    unsubs.push(onSnapshot(
+      doc(db, 'teams', id),
+      (snap) => {
         if (!alive) return;
-        // A closed season archives entries rather than deleting them, so the roster this
-        // page means is the unarchived one. Without this, September opens on last
-        // season's names alongside this season's.
-        setRoster(activeRoster((r?.docs || []).map((d) => ({ id: d.id, ...d.data() }))));
-        setForms((f?.docs || []).map((d) => ({ id: d.id, ...d.data() })));
-        setEvents((e?.docs || []).map((d) => ({ id: d.id, ...d.data() })));
-      } catch (err) {
-        if (alive) setError(err?.message || 'Could not open that team.');
-      }
-    })();
-    return () => { alive = false; };
+        if (!snap.exists()) { setMissing(true); setTeam(null); return; }
+        setTeam({ id: snap.id, ...snap.data() });
+      },
+      (err) => { if (alive) setError(err?.message || 'Could not open that team.'); },
+    ));
+
+    // A closed season archives entries rather than deleting them, so the roster this
+    // page means is the unarchived one. Without this, September opens on last
+    // season's names alongside this season's.
+    unsubs.push(onSnapshot(
+      query(collection(db, 'teams', id, 'roster'), limit(200)),
+      (snap) => { if (alive) setRoster(activeRoster(snap.docs.map((d) => ({ id: d.id, ...d.data() })))); },
+      () => {},
+    ));
+
+    unsubs.push(onSnapshot(
+      query(collection(db, 'teams', id, 'forms'), limit(50)),
+      (snap) => { if (alive) setForms(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); },
+      () => {},
+    ));
+
+    unsubs.push(onSnapshot(
+      query(collection(db, 'events'), where('teamId', '==', id), limit(50)),
+      (snap) => { if (alive) setEvents(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); },
+      () => {},
+    ));
+
+    return () => { alive = false; unsubs.forEach((u) => u()); };
   }, [id, authLoading, user]);
 
   if (authLoading) return <main className="page"><p>Loading…</p></main>;

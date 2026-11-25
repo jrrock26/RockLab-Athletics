@@ -729,6 +729,19 @@ struct FirestoreService {
         return snapshot.documents.compactMap { PlayerForm(id: $0.documentID, data: $0.data()) }
     }
 
+    /// Documents a family uploaded from the web portal.
+    ///
+    /// Read from the same collection as `fetchForms`; only rows carrying a
+    /// `documentUrl` are uploads, so the requirement definitions are ignored here.
+    func fetchUploadedDocuments(teamId: String, rosterEntryId: String) async throws -> [UploadedDocument] {
+        let snapshot = try await db.collection("teams").document(teamId)
+            .collection("roster").document(rosterEntryId)
+            .collection("forms").getDocuments()
+        return snapshot.documents
+            .compactMap { UploadedDocument(id: $0.documentID, data: $0.data()) }
+            .filter { $0.url != nil }
+    }
+
     // MARK: - Parent / player linking
 
     func findUserByEmail(email: String) async throws -> AppUser? {
