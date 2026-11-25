@@ -107,6 +107,45 @@ service firebase.storage {
       allow delete: if signedIn() && (isAd() || isCoachOf(teamId) || memberRole(teamId) == 'staff');
     }
 
+    // Athlete paperwork: physicals, code-of-conduct returns, clearance letters.
+    //
+    // Scoped to the ROSTER ENTRY, not the team, so "the guardian of this child" is
+    // expressible. `guardianUserIds` is the authority: acceptInvitation and
+    // approveParentLink write it server-side, and roster entries are writable only by
+    // coaches and ADs. `users.linkedPlayerIds` is deliberately NOT consulted — it is
+    // client-writable, so trusting it here would let any account claim a child.
+    //
+    // Read: the guardian of that entry, or staff. Never a follower, and never a
+    // teammate — a 10 MB PDF of someone else's medical record is the worst thing this
+    // bucket could leak.
+    //
+    // Write: same people, ≤10 MB, and only the three types a phone camera or a school
+    // office produces. `request.resource.contentType` is declared by the client, but
+    // Storage verifies it against the uploaded bytes.
+    match /teams/{teamId}/roster/{entryId}/documents/{fileName} {
+      function guardianOfEntry() {
+        return signedIn() && firestore.get(
+          /databases/(default)/documents/teams/$(teamId)/roster/$(entryId)
+        ).data.guardianUserIds.hasAny([request.auth.uid]);
+      }
+
+      function staffOfTeam() {
+        return signedIn() && (isAd() || isCoachOf(teamId) || memberRole(teamId) == 'staff');
+      }
+
+      allow read: if staffOfTeam() || guardianOfEntry();
+
+      // The rules language has no ternary: one conjunction, so a write by anyone
+      // outside these two groups is refused by the first clause alone.
+      allow create, update: if (staffOfTeam() || guardianOfEntry())
+        && request.resource.size < 10 * 1024 * 1024
+        && (request.resource.contentType == 'application/pdf'
+          || request.resource.contentType == 'image/jpeg'
+          || request.resource.contentType == 'image/png');
+
+      allow delete: if staffOfTeam() || guardianOfEntry();
+    }
+
     // Everything else is closed.
     match /{allPaths=**} {
       allow read, write: if false;

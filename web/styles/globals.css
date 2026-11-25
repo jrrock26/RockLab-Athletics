@@ -569,4 +569,105 @@ a { color: var(--accent); }
   .who { max-width: 10ch; }
 }
 
+/* --- Family portal: tabs, notifications, chat, uploads ---------------------
+ *
+ * The portal's building blocks. Kept at the end of the file so the older screen
+ * styles above are untouched; every class here is used by
+ * components/parent/*.js and nowhere else.
+ */
+
+.notice {
+  border: 1px solid rgba(61, 220, 151, 0.4);
+  background: rgba(61, 220, 151, 0.08);
+  color: var(--ok);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 12px 0;
+}
+
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 14px 0 6px; }
+.tab {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 999px;
+}
+.tab.on {
+  color: var(--text);
+  border-color: var(--accent);
+  background: rgba(47, 111, 237, 0.14);
+}
+
+button.secondary {
+  background: #1b2130;
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+button.small-button { padding: 5px 10px; font-size: 12px; }
+
+.notifications .notify-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  display: grid;
+  gap: 8px;
+}
+.notify { border-left: 3px solid var(--line); padding: 6px 0 6px 10px; }
+.notify.overdue,
+.notify.expiry { border-left-color: var(--error); }
+.notify.form,
+.notify.rsvp { border-left-color: #ffb057; }
+.notify.invitation { border-left-color: var(--accent); }
+.notify.announcement { border-left-color: var(--ok); }
+
+.athlete { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.athlete:last-child { border-bottom: 0; }
+.athlete-head { font-size: 16px; }
+.badge.injured { color: var(--error); border-color: rgba(255, 107, 107, 0.45); }
+.badge.limited { color: #ffb057; border-color: #4a3a1e; }
+
+.form-body {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.thread .bubbles {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 16px;
+  display: grid;
+  gap: 8px;
+  max-height: 380px;
+  overflow-y: auto;
+}
+.bubble {
+  background: #171d27;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+.bubble.mine {
+  border-color: rgba(47, 111, 237, 0.5);
+  background: rgba(47, 111, 237, 0.1);
+}
+.bubble > div { margin-top: 2px; }
+
+.upload,
+.correction {
+  border-top: 1px dashed var(--line);
+  margin-top: 14px;
+  padding-top: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.link-athlete { margin-top: 12px; }
+
 

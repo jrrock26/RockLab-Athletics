@@ -2,28 +2,39 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import AppShell from '../components/AppShell';
+import Notifications from '../components/parent/Notifications';
+import LinkAthlete from '../components/parent/LinkAthlete';
+import AthleteCard from '../components/parent/AthleteCard';
+import TeamForms from '../components/parent/TeamForms';
+import Messages from '../components/parent/Messages';
+import Account from '../components/parent/Account';
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
   signInWithEmailAndPassword,
-  signOut,
   updateProfile,
 } from 'firebase/auth';
-import { collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  onSnapshot,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+} from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { auth, db, functions } from '../lib/firebase';
 import {
   VISIBLE_EVENT_TYPES,
-  ALL_EVENT_TYPES,
   eventTypesFor,
   normalizeRole,
   rsvpId,
   REQUIREMENT_LABELS,
-  isAwaitingReview,
-  isOutstanding,
   myAthletes,
   normalizeEmail,
-  outstandingRequirements,
   partitionEvents,
   recordFromGames,
   formatRecord,
@@ -34,11 +45,18 @@ import {
   requirementStatus,
   toMillis,
 } from '../lib/portal.mjs';
+import { buildNotifications } from '../lib/parent.mjs';
 
-/// The parent-facing web app. Exists so a family without an iPhone can still take
-/// part: sign in (or create an account), accept the invitation the school sent,
-/// and see their athlete's team. iOS remains the place for scoring; this is the
-/// reach fix, not a second product.
+/// The family web app.
+///
+/// One page, four tabs per team, because a parent with two children needs one place
+/// where "what do I owe, when is the next game, and how do I reach the coach" are all
+/// answerable without installing an iPhone app. iOS remains the place for scoring and
+/// compliance review; nothing here writes anything a coach has not authorised.
+///
+/// Every read is settled independently. An earlier version used `Promise.all`, and a
+/// single 403 on the roster blanked the whole page — which is exactly the failure a
+/// family reports as "the app is broken".
 export default function Portal() {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -56,24 +74,44 @@ export default function Portal() {
   const [notice, setNotice] = useState('');
 
   /// Requirements per athlete, keyed `${teamId}:${rosterEntryId}`. One record per
-  /// athlete, never one per team: two children on the same team must not share a
-  /// row, which is the entire point of a multi-athlete view.
+  /// athlete, never one per team: two children on the same team must not share a row.
   const [requirements, setRequirements] = useState({});
-  const [signatures, setSignatures] = useState({});
-  const [submitting, setSubmitting] = useState('');
   const requested = useRef({});
 
-  /// Answers keyed `${eventId}:${rosterEntryId}` so two children on one team each
-  /// hold their own answer — the whole point of the composite document id.
+  /// Answers keyed `${eventId}:${rosterEntryId}` so each child holds their own answer.
   const [rsvps, setRsvps] = useState({});
   const [savingRsvp, setSavingRsvp] = useState('');
   const rsvpRequested = useRef({});
 
-  /// Comm-board posts per team, keyed by team id. Declared here because the render
-  /// below reads `announcements[t.id]`; the missing declaration is what threw
-  /// `ReferenceError: announcements is not defined` for every signed-in parent with
-  /// a team, turning the whole portal into Next's "Application error" page.
   const [announcements, setAnnouncements] = useState({});
+
+  /// Which tab is open per team. Local state, so switching teams does not reset all of
+  /// them and a reload never loses more than the open tab.
+  const [tabByTeam, setTabByTeam] = useState({});
+
+  /// When this device last acknowledged notifications. Deliberately localStorage: the
+  /// server has no per-device read state, and inventing one would need a schema the
+  /// iOS client does not share.
+  const [seenAt, setSeenAt] = useState(0);
+
+  useEffect(() => {
+    try {
+      const stored = Number(window.localStorage.getItem('rocklab.notificationsSeen') || 0);
+      if (Number.isFinite(stored)) setSeenAt(stored);
+    } catch {
+      // Private mode, storage disabled: notifications simply never look "seen".
+    }
+  }, []);
+
+  const markSeen = useCallback(() => {
+    const now = Date.now();
+    setSeenAt(now);
+    try {
+      window.localStorage.setItem('rocklab.notificationsSeen', String(now));
+    } catch {
+      // Ignore: the state above still suppresses them for this session.
+    }
+  }, []);
 
   const setRsvp = useCallback(async (eventId, entryId, status) => {
     const key = `${eventId}:${entryId}`;
@@ -96,10 +134,10 @@ export default function Portal() {
     }
   }, []);
 
-  /// Pending invitations addressed to this exact address. The rule permits this
-  /// query because it filters on email, matching the invitee clause.
+  /// Pending invitations addressed to this exact address. The rule permits this query
+  /// because it filters on email, matching the invitee clause.
   const loadInvitations = useCallback(async (account) => {
-    if (!account?.email) return [];
+    if (!account || !account.email) return [];
     const snap = await getDocs(query(
       collection(db, 'invitations'),
       where('email', '==', normalizeEmail(account.email)),
@@ -110,10 +148,10 @@ export default function Portal() {
     return rows;
   }, []);
 
-  /// The roster a guardian is allowed to see. Listing the whole roster is
-  /// staff-only (entries carry other families' contact details), so a follower
-  /// falls back to reading just the entries that name them. Doing this per
-  /// document keeps the rule checkable and the exposure minimal.
+  /// The roster a guardian is allowed to see. Listing the whole roster is staff-only
+  /// (entries carry other families' contact details), so a guardian asks for exactly
+  /// what is permitted: entries whose `guardianUserIds` name them, plus ids the profile
+  /// links. Driving this off `linkedPlayerIds` alone made a second child invisible.
   const loadRoster = useCallback(async (teamId, linkedIds) => {
     try {
       const snap = await getDocs(collection(db, 'teams', teamId, 'roster'));
@@ -121,26 +159,21 @@ export default function Portal() {
         entries: activeRoster(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
         restricted: false,
       };
-    } catch (err) {
-      // A follower may not list the roster, so ask for exactly what is permitted:
-      // entries that name this account, plus any ids the profile links. Querying
-      // guardianUserIds is essential — driving this off linkedPlayerIds alone made
-      // a second child invisible, because that field is client-written and only
-      // ever held the first invitation's entry.
-      const uid = auth.currentUser?.uid;
+    } catch {
+      const uid = auth.currentUser ? auth.currentUser.uid : '';
       const ids = Array.isArray(linkedIds) ? linkedIds : [];
       const [named, ...individual] = await Promise.all([
         uid
           ? getDocs(query(
-              collection(db, 'teams', teamId, 'roster'),
-              where('guardianUserIds', 'array-contains', uid),
-            )).catch(() => null)
+            collection(db, 'teams', teamId, 'roster'),
+            where('guardianUserIds', 'array-contains', uid),
+          )).catch(() => null)
           : null,
         ...ids.map((entryId) => getDoc(doc(db, 'teams', teamId, 'roster', entryId)).catch(() => null)),
       ]);
 
       const byId = new Map();
-      (named?.docs || []).forEach((d) => byId.set(d.id, { id: d.id, ...d.data() }));
+      (named && named.docs ? named.docs : []).forEach((d) => byId.set(d.id, { id: d.id, ...d.data() }));
       individual.forEach((snap) => {
         if (snap && snap.exists()) byId.set(snap.id, { id: snap.id, ...snap.data() });
       });
@@ -148,17 +181,13 @@ export default function Portal() {
     }
   }, []);
 
-  /// Everything the portal displays for one team. The event query carries the
-  /// type filter deliberately: the rule grants a follower the calendar except
-  /// practices, and an unfiltered query is rejected outright. Each read is
-  /// settled independently so one denied collection cannot blank the page.
+  /// Everything the portal displays for one team. The event query carries the type
+  /// filter deliberately: the rule grants a follower the calendar except practices,
+  /// and an unfiltered query is rejected outright.
   const loadTeam = useCallback(async (teamId, linkedIds, membershipRole) => {
     const [teamSnap, roster, eventsSnap, gamesSnap] = await Promise.all([
       getDoc(doc(db, 'teams', teamId)).catch(() => null),
       loadRoster(teamId, linkedIds),
-      // Ask for the widest calendar this role allows, then fall back to the follower
-      // subset. A legacy parent row still stored as `follower` would otherwise get a
-      // rejected query — and an empty calendar with no explanation.
       (async () => {
         const wide = await getDocs(query(
           collection(db, 'events'),
@@ -185,20 +214,18 @@ export default function Portal() {
   }, [loadRoster]);
 
   const loadTeams = useCallback(async (account, profileData) => {
-    const ids = Array.isArray(profileData?.teamIds) ? profileData.teamIds : [];
+    const ids = Array.isArray(profileData && profileData.teamIds) ? profileData.teamIds : [];
     if (!ids.length) {
       setTeams([]);
       return;
     }
-    const linked = profileData?.linkedPlayerIds;
-    const membershipRole = normalizeRole(profileData?.role);
+    const linked = profileData ? profileData.linkedPlayerIds : [];
+    const membershipRole = normalizeRole(profileData ? profileData.role : '');
     setTeams(await Promise.all(ids.map((id) => loadTeam(id, linked, membershipRole))));
   }, [loadTeam]);
 
-  /// One athlete's requirements. The per-player form documents under the roster
-  /// entry ARE the record of what this family owes and has signed, so this needs no
-  /// second read of the team-level submissions collection. A denial is caught here
-  /// and shown per athlete rather than blanking the page.
+  /// One athlete's requirements. The per-player form documents under the roster entry
+  /// ARE the record of what this family owes and has signed.
   const loadRequirements = useCallback(async (teamId, entryId, key) => {
     try {
       const snap = await getDocs(collection(db, 'teams', teamId, 'roster', entryId, 'forms'));
@@ -208,7 +235,7 @@ export default function Portal() {
         return {
           id: d.id,
           raw: form,
-          label: FORM_LABELS[form.type] || form.type || 'Requirement',
+          label: FORM_LABELS[form.type] || form.title || form.type || 'Requirement',
           status: requirementStatus(form, null, now),
           dueAt: form.dueDate,
           expiresAt: form.expiresAt,
@@ -218,60 +245,10 @@ export default function Portal() {
     } catch (err) {
       setRequirements((prev) => ({
         ...prev,
-        [key]: { rows: [], error: err?.message || 'Requirements could not be loaded.' },
+        [key]: { rows: [], error: err && err.message ? err.message : 'Requirements could not be loaded.' },
       }));
     }
   }, []);
-
-  /// Signing is the guardian's own act, so the name is typed rather than defaulted
-  /// from the profile — a prefilled signature is not a signature. The write names
-  /// the guardian's uid, so the stored record says who actually signed; the roster
-  /// form is already the guardian's own document, and the rules pin the status to
-  /// `submitted` so this can never self-approve.
-  const submitRequirement = useCallback(async (teamId, entryId, row, key) => {
-    const signedByName = String(signatures[key] || '').trim();
-    if (!signedByName) {
-      setError('Type your name to sign before completing this requirement.');
-      return;
-    }
-    setSubmitting(key);
-    setError('');
-    try {
-      const isGuardian = profile?.role === 'parent';
-      await setDoc(
-        doc(db, 'teams', teamId, 'roster', entryId, 'forms', row.id),
-        {
-          formId: row.id,
-          rosterEntryId: entryId,
-          teamId,
-          status: 'submitted',
-          signedByName,
-          // Epoch SECONDS, matching how iOS writes signedAt and how toMillis reads it.
-          signedAt: Date.now() / 1000,
-          submittedBy: user.uid,
-          ...(isGuardian ? { parentSignedByName: signedByName } : {}),
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true },
-      );
-      // Show it immediately: a submission that vanishes until reload looks lost.
-      const reqKey = `${teamId}:${entryId}`;
-      setRequirements((prev) => ({
-        ...prev,
-        [reqKey]: {
-          rows: (prev[reqKey]?.rows || []).map((r) =>
-            r.id === row.id ? { ...r, status: 'pending_approval' } : r,
-          ),
-          error: '',
-        },
-      }));
-      setNotice(`${row.label} submitted. Your coach still has to approve it.`);
-    } catch (err) {
-      setError(err?.message || 'That requirement could not be submitted.');
-    } finally {
-      setSubmitting('');
-    }
-  }, [signatures, profile, user]);
 
   const refresh = useCallback(async (account) => {
     const snap = await getDoc(doc(db, 'users', account.uid));
@@ -288,6 +265,7 @@ export default function Portal() {
         setProfile(null);
         setInvitations([]);
         setTeams([]);
+        setRequirements({});
         setLoading(false);
         return;
       }
@@ -302,12 +280,11 @@ export default function Portal() {
   }, [refresh]);
 
   /// Fetch requirements once per athlete, after the teams resolve. The ref guard
-  /// matters: this effect depends on `teams`, which is a new array on every load,
-  /// so without it each render would start another identical read.
+  /// matters: this effect depends on `teams`, a new array on every load.
   useEffect(() => {
     if (!user || !teams.length) return;
     teams.forEach((t) => {
-      myAthletes(t.roster, { uid: user.uid, linkedPlayerIds: profile?.linkedPlayerIds })
+      myAthletes(t.roster, { uid: user.uid, linkedPlayerIds: profile && profile.linkedPlayerIds })
         .forEach((a) => {
           const key = `${t.id}:${a.id}`;
           if (requested.current[key]) return;
@@ -317,9 +294,10 @@ export default function Portal() {
     });
   }, [teams, user, profile, loadRequirements]);
 
-  /// Guardian-editable details, keyed `${teamId}:${entryId}`. The field list here
-  /// must stay inside the hasOnly() whitelist on the roster update rule; adding a
-  /// field that is not whitelisted makes the whole save fail.
+  const reloadAthlete = useCallback((teamId, entryId) => {
+    loadRequirements(teamId, entryId, `${teamId}:${entryId}`);
+  }, [loadRequirements]);
+
   const announceRequested = useRef({});
 
   useEffect(() => {
@@ -329,37 +307,28 @@ export default function Portal() {
       announceRequested.current[t.id] = true;
       try {
         // Read the board by id rather than querying the collection: the chats rule
-        // decides access with an exists() lookup on the caller's membership, and
-        // Firestore cannot satisfy that for a list query, so the query is denied
-        // even when the caller is entitled. A direct get has no such problem.
+        // decides access with a membership lookup, so a direct get is the reliable path.
         const chatSnap = await getDoc(doc(db, 'chats', `${t.id}_commBoard`));
         if (!chatSnap.exists()) return;
-        // Under the "only categorised posts are public" rule, a follower may read
-        // comm-board posts carrying a public category and nothing else. Filtering on
-        // `category` is what makes the query admissible; sorting in memory avoids a
-        // composite index on category + createdAt, which would otherwise fail with a
-        // missing-index error that the catch below would swallow.
-        const isFollower = normalizeRole(profile?.role) === 'follower';
+        const isFollower = normalizeRole(profile && profile.role) === 'follower';
         const byCategory = (categories) => getDocs(query(
           collection(db, 'chats', chatSnap.id, 'messages'),
           where('category', 'in', categories),
         ));
-        // A member reads every category; a follower is confined by the rule to the
-        // public subset and a query asking for more is rejected outright. Falling
-        // back keeps the section visible for a row still stored as `follower`.
         const snap = await (isFollower
           ? byCategory(PUBLIC_COMM_CATEGORIES)
           : byCategory(ALL_COMM_CATEGORIES).catch(() => byCategory(PUBLIC_COMM_CATEGORIES)));
         const rows = snap.docs
-          .map((d) => ({ id: d.id, ...d.data() }))
+          .map((d) => ({ id: d.id, teamId: t.id, chatId: chatSnap.id, ...d.data() }))
           .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0))
           .slice(0, 5);
         setAnnouncements((prev) => ({ ...prev, [t.id]: rows }));
-      } catch (err) {
+      } catch {
         // Not permitted, or no board yet: the section simply does not appear.
       }
     });
-  }, [teams, user]);
+  }, [teams, user, profile]);
+
   useEffect(() => {
     if (!user || !teams.length) return;
     teams.forEach((t) => {
@@ -379,20 +348,17 @@ export default function Portal() {
             }
           });
           if (Object.keys(next).length) setRsvps((prev) => ({ ...prev, ...next }));
-        } catch (err) {
+        } catch {
           // No answers yet, or not permitted: say nothing rather than alarm.
         }
       });
     });
   }, [teams, user]);
 
-  /// Live calendar. A coach's new, moved or cancelled event — made on iOS or on this
-  /// page — appears here without a reload. The type filter is the same one the rules
-  /// require; a rejected listener leaves the fetched rows in place rather than
-  /// blanking the schedule.
+  /// Live calendar, so a moved or cancelled event reaches the family without a reload.
   useEffect(() => {
     if (!user || teams.length === 0) return undefined;
-    const types = eventTypesFor(normalizeRole(profile?.role));
+    const types = eventTypesFor(normalizeRole(profile && profile.role));
     const unsubs = teams.map((t) => onSnapshot(
       query(
         collection(db, 'events'),
@@ -406,8 +372,7 @@ export default function Portal() {
       () => { /* keep what was already fetched */ },
     ));
     return () => unsubs.forEach((u) => u());
-  }, [user, teams.length, profile?.role]);
-
+  }, [user, teams.length, profile]);
 
   async function signIn(e) {
     e.preventDefault();
@@ -450,15 +415,13 @@ export default function Portal() {
     try {
       await httpsCallable(functions, 'acceptInvitation')({
         invitationId: invitation.id,
-        name: name || user?.displayName || invitation.email,
+        name: name || (user && user.displayName) || invitation.email,
       });
       setNotice(
         `You're in. ${invitation.teamName || invitation.schoolName || 'Your team'} is now on your account.`,
       );
       if (user) await refresh(user);
     } catch (err) {
-      // The callable returns plain-language reasons (expired, cancelled, already
-      // accepted), so show them rather than a generic failure.
       setError(err.message || 'That invitation could not be accepted.');
     } finally {
       setBusy(false);
@@ -474,8 +437,8 @@ export default function Portal() {
         <main className="page">
           <h1>RockLab Athletics</h1>
           <p className="muted">
-            Follow your athlete&apos;s team from any phone or computer — schedules, results
-            and roster. No app install needed.
+            Follow your athlete&apos;s team from any phone or computer — schedules, forms,
+            documents, and a direct line to the coach. No app install needed.
           </p>
 
           <form className="card" onSubmit={mode === 'signin' ? signIn : signUp}>
@@ -518,6 +481,7 @@ export default function Portal() {
             </p>
             <p className="small muted">
               Use the exact email address your school invited — the match is exact.
+              Forgot your password? <Link href="/auth/signin">Reset it</Link>.
             </p>
           </form>
 
@@ -530,328 +494,292 @@ export default function Portal() {
   }
 
   const hasInvitations = invitations.length > 0;
-
-  /// Everything time-sensitive across every athlete, so a family with two children
-  /// sees one list instead of hunting through each card. "Expiring soon" is a
-  /// COMPLETED requirement whose document lapses within 30 days: the family's work
-  /// is done, but the athlete becomes ineligible again if nothing new is filed — the
-  /// failure a parent most needs warning about and least expects.
-  const ATTENTION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
   const nowMs = Date.now();
-  const attention = [];
+
+  /// One athlete list across every team, for the account panel's read-only view of what
+  /// the school holds.
+  const allAthletes = [];
   teams.forEach((t) => {
-    myAthletes(t.roster, { uid: user.uid, linkedPlayerIds: profile?.linkedPlayerIds }).forEach((a) => {
-      (requirements[`${t.id}:${a.id}`]?.rows || []).forEach((r) => {
-        const exp = toMillis(r.expiresAt);
-        const expiringSoon = exp != null && exp > nowMs && exp - nowMs <= ATTENTION_WINDOW_MS;
-        const needsAttention = ['expired', 'overdue', 'rejected'].includes(r.status)
-          || (r.status === 'completed' && expiringSoon);
-        if (!needsAttention) return;
-        attention.push({
-          key: `${t.id}:${a.id}:${r.id}`,
-          who: displayName(a),
+    myAthletes(t.roster, { uid: user.uid, linkedPlayerIds: profile && profile.linkedPlayerIds })
+      .forEach((a) => {
+        allAthletes.push({ teamId: t.id, entry: a, name: displayName(a) });
+      });
+  });
+
+  /// Everything time-sensitive, across every athlete. Requirements feed both the
+  /// "needs attention" block and the notification list, so they are assembled once.
+  const requirementRows = [];
+  const eventRows = [];
+  teams.forEach((t) => {
+    const athletes = myAthletes(t.roster, {
+      uid: user.uid, linkedPlayerIds: profile && profile.linkedPlayerIds,
+    });
+    athletes.forEach((a) => {
+      const rec = requirements[`${t.id}:${a.id}`];
+      ((rec && rec.rows) || []).forEach((r) => {
+        requirementRows.push({
+          teamId: t.id,
+          entryId: a.id,
+          athleteName: displayName(a),
+          formId: r.id,
           label: r.label,
           status: r.status,
-          when: expiringSoon ? exp : toMillis(r.dueAt),
-          expiringSoon,
+          dueAt: r.dueAt,
+          expiresAt: r.expiresAt,
         });
       });
     });
+    (t.events || []).forEach((e) => {
+      eventRows.push({ ...e, athleteEntryIds: athletes.map((a) => a.id) });
+    });
+  });
+
+  const announcementRows = [];
+  Object.keys(announcements).forEach((teamId) => {
+    (announcements[teamId] || []).forEach((m) => {
+      announcementRows.push({ ...m, teamId });
+    });
+  });
+
+  const notifications = buildNotifications({
+    nowMs,
+    invitations,
+    requirements: requirementRows,
+    events: eventRows,
+    announcements: announcementRows,
+    rsvps,
+    seenAt,
   });
 
   return (
-    <>
-      <AppShell title="Your teams" profile={profile} user={user}>
-        <h1>{personName(profile, 'Your account')}</h1>
-        <p className="muted small">
-          {user.email}
-        </p>
+    <AppShell title="Family portal" profile={profile} user={user}>
+      <h1>{personName(profile, 'Your account')}</h1>
+      <p className="muted small">
+        {user.email}
+        {profile && profile.role ? ` · ${profile.role}` : ''}
+      </p>
 
-        {notice && <p className="notice">{notice}</p>}
-        {error && <p className="error">{error}</p>}
+      {notice && <p className="notice">{notice}</p>}
+      {error && <p className="error">{error}</p>}
 
-        {hasInvitations && (
-          <section className="card">
-            <h2>Invitations waiting for you</h2>
-            <ul>
-              {invitations.map((inv) => (
-                <li key={inv.id}>
-                  <strong>{inv.teamName || inv.schoolName || 'Your school'}</strong>
-                  <span className="muted">
-                    {' · '}{inv.role}
-                    {inv.expiresAt ? ` · expires ${formatWhen(toMillis(inv.expiresAt))}` : ''}
-                  </span>
-                  <button onClick={() => accept(inv)} disabled={busy} style={{ marginLeft: 12 }}>
-                    Accept
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
+      <Notifications items={notifications} onMarkSeen={markSeen} />
 
-        {!hasInvitations && !profile && (
-          <section className="card">
-            <h2>No invitation found yet</h2>
-            <p className="muted">
-              You&apos;re signed in as <strong>{normalizeEmail(user.email)}</strong>, but nothing
-              has been sent to this address. Ask your athletic director to invite this exact
-              address — a different spelling won&apos;t match.
+      {hasInvitations && (
+        <section className="card">
+          <h2>Invitations waiting for you</h2>
+          <ul>
+            {invitations.map((inv) => (
+              <li key={inv.id}>
+                <strong>{inv.teamName || inv.schoolName || 'Your school'}</strong>
+                <span className="muted">
+                  {' · '}{inv.role}
+                  {inv.expiresAt ? ` · expires ${formatWhen(toMillis(inv.expiresAt))}` : ''}
+                </span>
+                <button onClick={() => accept(inv)} disabled={busy} style={{ marginLeft: 12 }}>
+                  Accept
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {teams.map((t) => {
+        const athletes = myAthletes(t.roster, {
+          uid: user.uid, linkedPlayerIds: profile && profile.linkedPlayerIds,
+        });
+        const { upcoming, past } = partitionEvents(t.events, nowMs);
+        const record = formatRecord(recordFromGames(t.games));
+        const label = [t.team.sportName, t.team.level].filter(Boolean).join(' ') || 'Team';
+        const tab = tabByTeam[t.id] || 'overview';
+        const teamAnnouncements = announcements[t.id] || [];
+
+        const setTab = (next) => setTabByTeam((prev) => ({ ...prev, [t.id]: next }));
+
+        return (
+          <section className="card" key={t.id}>
+            <h2>{label}</h2>
+            <p className="muted small">
+              {[t.team.season, t.team.gender].filter(Boolean).join(' · ')}
+              {' · '}Record {record}
             </p>
-          </section>
-        )}
 
-        {attention.length > 0 && (
-          <section className="card attention">
-            <h2>Needs attention</h2>
-            <ul>
-              {attention.map((x) => (
-                <li key={x.key}>
-                  <strong>{x.who}</strong> · {x.label}{' '}
-                  <span className={`badge ${x.status}`}>
-                    {x.expiringSoon ? 'Expires soon' : REQUIREMENT_LABELS[x.status]}
-                  </span>
-                  {x.when ? <span className="muted small"> · {formatWhen(x.when)}</span> : null}
-                </li>
+            <nav className="tabs" aria-label={`${label} sections`}>
+              {[
+                { key: 'overview', text: `My athletes${athletes.length ? ` (${athletes.length})` : ''}` },
+                { key: 'schedule', text: 'Schedule' },
+                { key: 'forms', text: 'Forms' },
+                { key: 'messages', text: 'Messages' },
+              ].map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={tab === item.key ? 'tab on' : 'tab'}
+                  onClick={() => setTab(item.key)}
+                >
+                  {item.text}
+                </button>
               ))}
-            </ul>
-          </section>
-        )}
+            </nav>
 
-        {teams.map((t) => {
-          const athletes = myAthletes(t.roster, {
-            uid: user.uid,
-            linkedPlayerIds: profile?.linkedPlayerIds,
-          });
-          const { upcoming, past } = partitionEvents(t.events, Date.now());
-          const record = formatRecord(recordFromGames(t.games));
-          const label = [t.team.sportName, t.team.level].filter(Boolean).join(' ') || 'Team';
-
-          return (
-            <section className="card" key={t.id}>
-              <h2>{label}</h2>
-              <p className="muted small">
-                {[t.team.season, t.team.gender].filter(Boolean).join(' · ')}
-                {' · '}Record {record}
-              </p>
-
-              {athletes.length > 0 && (
-                <>
-                  <h3>Your athlete{athletes.length > 1 ? 's' : ''}</h3>
+            {tab === 'overview' && (
+              <>
+                {athletes.length === 0 ? (
+                  <p className="muted">
+                    No athlete is linked to this account on this team yet.
+                  </p>
+                ) : (
                   <ul className="athletes">
-                    {athletes.map((a) => {
-                      const reqKey = `${t.id}:${a.id}`;
-                      const reqRecord = requirements[reqKey];
-                      const rows = reqRecord?.rows || [];
-                      const outstanding = outstandingRequirements(rows);
-                      // "All requirements complete" above three Pending approval badges
-                      // read as a flat contradiction in the live screenshot. Waiting on
-                      // staff is its own state, so it gets its own words.
-                      const awaitingCount = rows.filter((r) => isAwaitingReview(r.status)).length;
-                      return (
-                        <li key={a.id}>
-                          <strong>{displayName(a)}</strong>
-                          {a.jerseyNumber ? <span className="muted"> · #{a.jerseyNumber}</span> : null}
-                          {a.position ? <span className="muted"> · {a.position}</span> : null}
+                    {athletes.map((a) => (
+                      <AthleteCard
+                        key={a.id}
+                        teamId={t.id}
+                        athlete={a}
+                        requirements={(requirements[`${t.id}:${a.id}`] || {}).rows || []}
+                        uid={user.uid}
+                        isGuardian={normalizeRole(profile && profile.role) === 'parent'}
+                        onChanged={() => reloadAthlete(t.id, a.id)}
+                      />
+                    ))}
+                  </ul>
+                )}
 
-                          {/* Guardian contact lives on their own account, and player
-                              information changes are a REQUEST. There is deliberately
-                              no edit form here: the school owns the roster entry. */}
-                          <div className="requirements">
-                            {reqRecord?.error && <p className="error small">{reqRecord.error}</p>}
-                            {!reqRecord && <p className="muted small">Checking requirements…</p>}
-                            {reqRecord && rows.length === 0 && !reqRecord.error && (
-                              <p className="muted small">Nothing to complete right now.</p>
-                            )}
-                            {rows.length > 0 && (
-                              <>
-                                <h4>
-                                  {outstanding.length > 0
-                                    ? `${outstanding.length} still to do`
-                                    : awaitingCount > 0
-                                      ? 'Waiting on your coach'
-                                      : 'All requirements complete'}
-                                </h4>
-                                <ul className="req-list">
-                                  {rows.map((r) => {
-                                    const rowKey = `${reqKey}:${r.id}`;
-                                    return (
-                                      <li key={r.id} className={`req ${r.status}`}>
-                                        <div>
-                                          <strong>{r.label}</strong>{' '}
-                                          <span className={`badge ${r.status}`}>
-                                            {REQUIREMENT_LABELS[r.status]}
-                                          </span>
-                                          {r.dueAt ? (
-                                            <span className="muted small">
-                                              {' · due '}{formatWhen(toMillis(r.dueAt))}
-                                            </span>
-                                          ) : null}
-                                        </div>
-                                        {isOutstanding(r.status) && (
-                                          <form
-                                            onSubmit={(e) => {
-                                              e.preventDefault();
-                                              submitRequirement(t.id, a.id, r, rowKey);
-                                            }}
-                                          >
-                                            <label>
-                                              Sign as
-                                              <input
-                                                value={signatures[rowKey] || ''}
-                                                onChange={(e) =>
-                                                  setSignatures((prev) => ({
-                                                    ...prev,
-                                                    [rowKey]: e.target.value,
-                                                  }))
-                                                }
-                                                placeholder="Your full name"
-                                                autoComplete="name"
-                                              />
-                                            </label>
-                                            <button type="submit" disabled={submitting === rowKey}>
-                                              {submitting === rowKey ? 'Submitting…' : 'Complete'}
-                                            </button>
-                                          </form>
-                                        )}
-                                      </li>
-                                    );
-                                  })}
-                                </ul>
-                              </>
-                            )}
-                          </div>
+                <LinkAthlete
+                  teamId={t.id}
+                  alreadyLinked={athletes}
+                  disabled={normalizeRole(profile && profile.role) === 'follower'}
+                />
+
+                {teamAnnouncements.length > 0 && (
+                  <>
+                    <h3>From your coach</h3>
+                    <ul className="announcements">
+                      {teamAnnouncements.map((m) => (
+                        <li key={m.id}>
+                          <span className="muted small">
+                            {m.senderName || 'Coach'} · {formatWhen(toMillis(m.createdAt))}
+                          </span>
+                          <div>{m.text}</div>
                         </li>
-                      );
-                    })}
-                  </ul>
-                </>
-              )}
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </>
+            )}
 
-              {(announcements[t.id] || []).length > 0 && (
-                <>
-                  <h3>From your coach</h3>
-                  <ul className="announcements">
-                    {announcements[t.id].map((m) => (
-                      <li key={m.id}>
-                        <span className="muted small">
-                          {m.senderName || 'Coach'} · {formatWhen(toMillis(m.createdAt))}
-                        </span>
-                        <div>{m.text}</div>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-
-              <h3>Next up</h3>
-              {upcoming.length === 0 ? (
-                <p className="muted">Nothing scheduled yet.</p>
-              ) : (
-                <ul>
-                  {upcoming.slice(0, 5).map((e) => (
-                    <li key={e.id}>
-                      <strong>{e.title || e.type}</strong>
-                      <span className="muted"> · {formatWhen(toMillis(e.date))}</span>
-                      {e.location ? <span className="muted"> · {e.location}</span> : null}
-
-                      {athletes.length > 0 && (
-                        <div className="rsvp">
-                          {athletes.map((a) => {
-                            const key = `${e.id}:${a.id}`;
-                            const current = rsvps[key];
-                            return (
-                              <div className="rsvp-row" key={a.id}>
-                                <span className="muted small">{displayName(a)}</span>
-                                {RSVP_CHOICES.map((c) => (
-                                  <button
-                                    key={c.value}
-                                    type="button"
-                                    className={current === c.value ? 'choice on' : 'choice'}
-                                    disabled={savingRsvp === key}
-                                    onClick={() => setRsvp(e.id, a.id, c.value)}
-                                  >
-                                    {c.label}
-                                  </button>
-                                ))}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-
-              {past.length > 0 && (
-                <>
-                  <h3>Recently</h3>
+            {tab === 'schedule' && (
+              <>
+                <h3>Next up</h3>
+                {upcoming.length === 0 ? (
+                  <p className="muted">Nothing scheduled yet.</p>
+                ) : (
                   <ul>
-                    {past.slice(0, 3).map((e) => (
+                    {upcoming.slice(0, 10).map((e) => (
                       <li key={e.id}>
-                        <span>{e.title || e.type}</span>
+                        <strong>{e.title || e.type}</strong>
                         <span className="muted"> · {formatWhen(toMillis(e.date))}</span>
+                        {e.location ? <span className="muted"> · {e.location}</span> : null}
+                        {e.notes ? <div className="small muted">{e.notes}</div> : null}
+
+                        {athletes.length > 0 && (
+                          <div className="rsvp">
+                            {athletes.map((a) => {
+                              const key = `${e.id}:${a.id}`;
+                              const current = rsvps[key];
+                              return (
+                                <div className="rsvp-row" key={a.id}>
+                                  <span className="muted small">{displayName(a)}</span>
+                                  {RSVP_CHOICES.map((c) => (
+                                    <button
+                                      key={c.value}
+                                      type="button"
+                                      className={current === c.value ? 'choice on' : 'choice'}
+                                      disabled={savingRsvp === key}
+                                      onClick={() => setRsvp(e.id, a.id, c.value)}
+                                    >
+                                      {c.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </li>
                     ))}
                   </ul>
-                </>
-              )}
+                )}
 
-              {upcoming.length > 0 && (
+                {past.length > 0 && (
+                  <>
+                    <h3>Recently</h3>
+                    <ul>
+                      {past.slice(0, 5).map((e) => (
+                        <li key={e.id}>
+                          <span>{e.title || e.type}</span>
+                          <span className="muted"> · {formatWhen(toMillis(e.date))}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+
                 <p className="small muted">
                   Times and locations come straight from your coach&apos;s schedule.
                 </p>
-              )}
-            </section>
-          );
-        })}
+              </>
+            )}
 
-        {!hasInvitations && profile && teams.length === 0 && (
-          <section className="card">
-            <h2>You&apos;re set up</h2>
-            <p className="muted">
-              Your account is active, but no team has been shared with you yet. Your coach
-              or athletic director can add you from their side.
-            </p>
+            {tab === 'forms' && (
+              <TeamForms teamId={t.id} athletes={athletes} uid={user.uid} />
+            )}
+
+            {tab === 'messages' && (
+              <Messages
+                teamId={t.id}
+                uid={user.uid}
+                senderName={personName(profile, 'Guardian')}
+              />
+            )}
           </section>
-        )}
+        );
+      })}
 
-        <p className="muted small">
-          <Link href="/privacy">Privacy</Link> · <Link href="/support">Support</Link>
-        </p>
-      </AppShell>
-    </>
+      {!hasInvitations && profile && teams.length === 0 && (
+        <section className="card">
+          <h2>You&apos;re set up</h2>
+          <p className="muted">
+            Your account is active, but no team has been shared with you yet. Your coach
+            or athletic director can add you from their side.
+          </p>
+        </section>
+      )}
+
+      <Account profile={profile} user={user} athletes={allAthletes} />
+
+      <p className="muted small">
+        <Link href="/privacy">Privacy</Link> · <Link href="/support">Support</Link>
+      </p>
+    </AppShell>
   );
 }
 
-/// The guardian-editable fields, in the order a family thinks of them. Every key
-/// here must appear in the roster update whitelist in firestore.rules; a key that
-/// does not makes the entire save fail with permission-denied.
-
-/// Comm-board categories a school-level follower may read. Mirrors the follower
-/// branch of `messageReadAllowed` in firestore.rules; drift here is not cosmetic,
-/// because these values become an `in` filter and a value the rule rejects fails
-/// the entire query.
-/// Comm-board categories a school-level follower may read. Mirrors the follower
-/// branch of `messageReadAllowed` in firestore.rules; drift here is not cosmetic,
-/// because these values become an `in` filter and a value the rule rejects fails
-/// the entire query.
+/// Comm-board categories a school-level follower may read. Mirrors the follower branch
+/// of `messageReadAllowed` in firestore.rules; drift here is not cosmetic, because
+/// these values become an `in` filter and a value the rule rejects fails the query.
 const PUBLIC_COMM_CATEGORIES = ['liveGame', 'gameday', 'fundraiser'];
 
 /// Every comm-board category, in the order iOS stores them (`CommCategory`).
-/// A member — including a guardian — may read all of them.
 const ALL_COMM_CATEGORIES = ['general', 'liveGame', 'gameday', 'fundraiser'];
 
-/// The exact raw values iOS writes (Models/Event.swift RSVPStatus). Inventing
-/// "going" here would have stored answers the coach's roster could not parse.
+/// The exact raw values iOS writes (Models/Event.swift RSVPStatus).
 const RSVP_CHOICES = [
   { value: 'attending', label: 'Attending' },
   { value: 'notAttending', label: 'Not attending' },
 ];
 
-/// Form types as a family would name them. The stored values are camelCase enum
-/// cases; showing `concussionWaiver` to a parent would be a small insult.
+/// Form types as a family would name them. The stored values are camelCase enum cases.
 const FORM_LABELS = {
   physical: 'Sports physical',
   codeOfConduct: 'Code of conduct',
@@ -860,7 +788,7 @@ const FORM_LABELS = {
 
 /// Firebase auth errors are written for developers. Say what to do instead.
 function humanAuthError(err) {
-  const code = String(err?.code || '');
+  const code = String(err && err.code ? err.code : '');
   if (code.includes('invalid-credential') || code.includes('wrong-password')) {
     return 'That email and password don\u2019t match an account.';
   }
@@ -869,6 +797,5 @@ function humanAuthError(err) {
   if (code.includes('weak-password')) return 'Choose a password with at least 6 characters.';
   if (code.includes('invalid-email')) return 'That email address doesn\u2019t look right.';
   if (code.includes('too-many-requests')) return 'Too many attempts. Wait a moment and try again.';
-  return err?.message || 'Something went wrong. Try again.';
+  return err && err.message ? err.message : 'Something went wrong. Try again.';
 }
-

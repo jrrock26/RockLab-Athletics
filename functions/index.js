@@ -1715,6 +1715,11 @@ exports.approveParentLink = functions.https.onCall(async (data, context) => {
       parentEmail: req.parentEmail || '',
       parentName: req.parentName || '',
       parentPhone: req.parentPhone || '',
+      // The approval IS the guardianship. Every guard in firestore.rules tests
+      // guardianUserIds (or a linked player account), so without this line a family
+      // approved here can reach the team but not their own child's roster entry,
+      // documents or forms. arrayUnion keeps a second guardian's id intact.
+      guardianUserIds: admin.firestore.FieldValue.arrayUnion(req.parentUserId),
     }, { merge: true });
   }
 
