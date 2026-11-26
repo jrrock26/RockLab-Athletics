@@ -94,12 +94,4 @@ export function useAuth() {
   return snapshot;
 }
 
-/// Sign-out, role changes and school moves all arrive through onAuthStateChanged, so the
-/// cache is dropped there. Nothing here is persisted: a reload starts clean.
-export function resetAuthCache() {
-  snapshot = EMPTY;
-  currentUid = null;
-  subscribers.forEach((notify) => notify());
-}
-
 export default useAuth;

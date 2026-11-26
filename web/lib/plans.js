@@ -50,11 +50,5 @@ export const PLANS = [
   },
 ];
 
-export const PLAN_BY_ID = Object.fromEntries(PLANS.map((p) => [p.id, p]));
-
-/// Schools without a paying plan are on the free tier, and that is a real tier —
-/// not a trial that expires.
-export const DEFAULT_PLAN = 'free';
-
 /// Shown wherever a tier has no Stripe price attached yet.
 export const PRICE_ON_REQUEST = 'Pricing on request';

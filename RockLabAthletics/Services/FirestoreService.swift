@@ -163,13 +163,6 @@ struct FirestoreService {
         return code
     }
 
-    func fetchInvitations(schoolId: String) async throws -> [Invitation] {
-        let snapshot = try await db.collection("invitations")
-            .whereField("schoolId", isEqualTo: schoolId)
-            .getDocuments()
-        return snapshot.documents.compactMap { Invitation(id: $0.documentID, data: $0.data()) }
-    }
-
     func fetchInvitationsByEmail(email: String) async throws -> [Invitation] {
         // Bulk imports store invitations lowercased; query the same way or a
         // parent who signed up with capitals silently sees none of them.
@@ -539,64 +532,6 @@ struct FirestoreService {
         ], merge: true)
     }
 
-    // MARK: - Forms
-
-    func submitForm(
-        teamId: String,
-        rosterEntryId: String,
-        type: FormType,
-        status: FormStatus,
-        expiresAt: Date? = nil,
-        dueDate: Date? = nil,
-        signedByName: String? = nil,
-        signedAt: Date? = nil,
-        submittedBy: String? = nil
-    ) async throws {
-        let col = db.collection("teams").document(teamId)
-            .collection("roster").document(rosterEntryId)
-            .collection("forms")
-        let existing = try await col.whereField("type", isEqualTo: type.rawValue).getDocuments()
-
-        var data: [String: Any] = [
-            "teamId": teamId,
-            "rosterEntryId": rosterEntryId,
-            "type": type.rawValue,
-            "status": status.rawValue,
-            "updatedAt": FieldValue.serverTimestamp()
-        ]
-        data["expiresAt"] = expiresAt.map { $0.timeIntervalSince1970 } ?? NSNull()
-        data["dueDate"] = dueDate.map { $0.timeIntervalSince1970 } ?? NSNull()
-        if let signedByName { data["signedByName"] = signedByName }
-        if let signedAt { data["signedAt"] = signedAt.timeIntervalSince1970 }
-        if let submittedBy { data["submittedBy"] = submittedBy }
-
-        if let doc = existing.documents.first {
-            try await doc.reference.setData(data, merge: true)
-        } else {
-            try await col.document().setData(data)
-        }
-    }
-
-    /// Sets (or clears) a due date without touching the form's status/signature.
-    func setFormDueDate(teamId: String, rosterEntryId: String, type: FormType, dueDate: Date?) async throws {
-        let col = db.collection("teams").document(teamId)
-            .collection("roster").document(rosterEntryId)
-            .collection("forms")
-        let existing = try await col.whereField("type", isEqualTo: type.rawValue).getDocuments()
-        let data: [String: Any] = [
-            "teamId": teamId,
-            "rosterEntryId": rosterEntryId,
-            "type": type.rawValue,
-            "dueDate": dueDate.map { $0.timeIntervalSince1970 } ?? NSNull(),
-            "updatedAt": FieldValue.serverTimestamp()
-        ]
-        if let doc = existing.documents.first {
-            try await doc.reference.setData(data, merge: true)
-        } else {
-            try await col.document().setData(data)
-        }
-    }
-
     // MARK: - Team forms (templates)
 
     func createTeamForm(teamId: String, title: String, description: String, body: String = "", dueDate: Date?, fields: [FormField] = [], requiresParentSignature: Bool = false) async throws -> String {
@@ -742,21 +677,6 @@ struct FirestoreService {
             .filter { $0.url != nil }
     }
 
-    // MARK: - Parent / player linking
-
-    func findUserByEmail(email: String) async throws -> AppUser? {
-        let snapshot = try await db.collection("users")
-            .whereField("email", isEqualTo: email)
-            .getDocuments()
-        guard let doc = snapshot.documents.first else { return nil }
-        return AppUser(id: doc.documentID, data: doc.data())
-    }
-
-    func linkChild(parentUserId: String, playerUserId: String) async throws {
-        try await db.collection("users").document(parentUserId).setData([
-            "linkedPlayerIds": FieldValue.arrayUnion([playerUserId])
-        ], merge: true)
-    }
 
     // MARK: - Events
 
@@ -794,66 +714,6 @@ struct FirestoreService {
         return snapshot.documents
             .compactMap { Event(id: $0.documentID, data: $0.data()) }
             .sorted { $0.date < $1.date }
-    }
-
-    /// Live schedule. A coach adding, moving or cancelling an event must land on
-    /// every signed-in family without a refresh — the schedule is the thing parents
-    /// open the app to read.
-    func listenToEvents(teamId: String, onChange: @escaping ([Event]) -> Void) -> ListenerRegistration {
-        db.collection("events")
-            .whereField("teamId", isEqualTo: teamId)
-            .addSnapshotListener { snapshot, _ in
-                guard let snapshot else { return }
-                onChange(snapshot.documents
-                    .compactMap { Event(id: $0.documentID, data: $0.data()) }
-                    .sorted { $0.date < $1.date })
-            }
-    }
-
-    /// The follower counterpart: followers may only read game documents, so their
-    /// listener must carry the type filter or the whole query is rejected.
-    func listenToGameEvents(teamId: String, onChange: @escaping ([Event]) -> Void) -> ListenerRegistration {
-        db.collection("events")
-            .whereField("teamId", isEqualTo: teamId)
-            .whereField("type", isEqualTo: EventType.game.rawValue)
-            .addSnapshotListener { snapshot, _ in
-                guard let snapshot else { return }
-                onChange(snapshot.documents
-                    .compactMap { Event(id: $0.documentID, data: $0.data()) }
-                    .sorted { $0.date < $1.date })
-            }
-    }
-
-    /// Live team forms. Publishing a form is the moment a family becomes obligated,
-    /// so it has to arrive the same way an announcement does.
-    func listenToTeamForms(teamId: String, publishedOnly: Bool = false, onChange: @escaping ([TeamForm]) -> Void) -> ListenerRegistration {
-        var query: Query = db.collection("teams").document(teamId).collection("forms")
-        if publishedOnly {
-            query = query.whereField("published", isEqualTo: true)
-        }
-        return query.addSnapshotListener { snapshot, _ in
-            guard let snapshot else { return }
-            onChange(snapshot.documents.compactMap { TeamForm(id: $0.documentID, data: $0.data()) })
-        }
-    }
-
-    /// Live answers for one event, keyed by athlete entry id. Keeps a coach's tally
-    /// and every guardian's own choice in step with the other client.
-    func listenToRSVPs(eventId: String, onChange: @escaping ([String: RSVPStatus]) -> Void) -> ListenerRegistration {
-        db.collection("events").document(eventId).collection("rsvps")
-            .addSnapshotListener { snapshot, _ in
-                guard let snapshot else { return }
-                var answers: [String: RSVPStatus] = [:]
-                for doc in snapshot.documents {
-                    guard let raw = doc.data()["status"] as? String,
-                          let status = RSVPStatus(rawValue: raw) else { continue }
-                    let key = (doc.data()["athleteEntryId"] as? String)
-                        ?? (doc.data()["userId"] as? String)
-                        ?? doc.documentID
-                    answers[key] = status
-                }
-                onChange(answers)
-            }
     }
 
     func deleteEvent(eventId: String) async throws {
@@ -907,24 +767,6 @@ struct FirestoreService {
             .collection("rsvps").document(userId).getDocument()
         guard let raw = legacy.data()?["status"] as? String else { return nil }
         return RSVPStatus(rawValue: raw)
-    }
-
-    /// Every answer for an event, keyed by athlete entry id (falling back to the
-    /// answering account). This is the reader that never existed: parents answered
-    /// and nothing coach-facing ever read the answers back.
-    func fetchRSVPTally(eventId: String) async throws -> [String: RSVPStatus] {
-        let snapshot = try await db.collection("events").document(eventId)
-            .collection("rsvps").getDocuments()
-        var answers: [String: RSVPStatus] = [:]
-        for doc in snapshot.documents {
-            guard let raw = doc.data()["status"] as? String,
-                  let status = RSVPStatus(rawValue: raw) else { continue }
-            let key = (doc.data()["athleteEntryId"] as? String)
-                ?? (doc.data()["userId"] as? String)
-                ?? doc.documentID
-            answers[key] = status
-        }
-        return answers
     }
 
     // MARK: - Attendance
@@ -1844,18 +1686,5 @@ struct FirestoreService {
         return access
     }
 
-    /// Fetches all users who have followed this school, categorized by role.
-    func fetchSchoolFollowers(schoolId: String) async throws -> [[String: Any]] {
-        let snapshot = try await db.collection("users")
-            .whereField("schoolId", isEqualTo: schoolId)
-            .whereField("role", in: ["coach", "staff", "player", "parent", "follower"])
-            .getDocuments()
-        return snapshot.documents.map { doc in
-            var dict = doc.data()
-            dict["id"] = doc.documentID
-            return dict
-        }
-    }
 }
-
 

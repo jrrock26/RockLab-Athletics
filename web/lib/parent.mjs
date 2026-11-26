@@ -11,15 +11,6 @@ import { toMillis, requirementStatus, REQUIREMENT_STATUS, isActionable, isAwaiti
 
 // --- team forms -----------------------------------------------------------
 
-/// The submission for one athlete, from a map keyed by roster entry id.
-///
-/// The document id IS the roster entry id (`submissions/{rosterEntryId}`), which is
-/// what makes "one submission per player per form" true without a query.
-export function submissionFor(submissionsByEntry, entryId) {
-  if (!submissionsByEntry || !entryId) return null;
-  return submissionsByEntry[entryId] || null;
-}
-
 /// A published team form's state for one athlete.
 ///
 /// Team forms reuse the per-athlete requirement vocabulary deliberately: a family

@@ -1,4 +1,4 @@
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendEmailVerification, sendPasswordResetEmail, reload } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, reload } from 'firebase/auth';
 import { auth } from './firebase';
 
 /**
@@ -9,11 +9,6 @@ import { auth } from './firebase';
 // Internal test/staff accounts on these domains are exempt from the
 // email-verification gate so dev logins keep working.
 export const DEV_EMAIL_DOMAINS = new Set(['rocklabathletics.com']);
-
-export const getCurrentUserId = () => {
-  const user = auth.currentUser;
-  return user ? user.uid : null;
-};
 
 export const getCurrentEmail = () => {
   const user = auth.currentUser;
@@ -48,13 +43,6 @@ export const signIn = async (email, password) => {
   const trimmedEmail = email.trim().toLowerCase();
   const result = await signInWithEmailAndPassword(auth, trimmedEmail, password);
   return result.user.uid;
-};
-
-/**
- * Sign out the current user.
- */
-export const signOutUser = async () => {
-  await signOut(auth);
 };
 
 /**

@@ -1,4 +1,4 @@
-import { doc, setDoc, getDoc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { doc, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
 
 /**
@@ -20,53 +20,4 @@ export const createUser = async (id, email, name, role = 'follower', zipCode = '
     linkedPlayerIds: [],
     createdAt: new Date(),
   }, { merge: true });
-};
-
-export const ensureUser = async (id, email, name) => {
-  await setDoc(doc(db, 'users', id), {
-    email,
-    displayName: name,
-  }, { merge: true });
-};
-
-export const updateUserPhoto = async (userId, photoURL) => {
-  await updateDoc(doc(db, 'users', userId), { photoURL });
-};
-
-export const fetchUser = async (id) => {
-  const snap = await getDoc(doc(db, 'users', id));
-  if (!snap.exists()) return null;
-  return { id: snap.id, ...snap.data() };
-};
-
-export const updateUserRoleAndSchool = async (id, role, schoolId) => {
-  await updateDoc(doc(db, 'users', id), {
-    role,
-    schoolId,
-  }, { merge: true });
-};
-
-export const addTeamId = async (userId, teamId) => {
-  await updateDoc(doc(db, 'users', userId), {
-    teamIds: arrayUnion(teamId),
-  }, { merge: true });
-};
-
-export const removeTeamId = async (userId, teamId) => {
-  await updateDoc(doc(db, 'users', userId), {
-    teamIds: arrayRemove(teamId),
-  }, { merge: true });
-};
-
-export const addLinkedPlayerId = async (userId, playerId) => {
-  await updateDoc(doc(db, 'users', userId), {
-    linkedPlayerIds: arrayUnion(playerId),
-  }, { merge: true });
-};
-
-export const fetchSchoolUsers = async (schoolId) => {
-  // Note: Firestore doesn't support collection group queries across users
-  // easily without an index. This is a placeholder; ADs query by schoolId.
-  const snap = await getDoc(doc(db, 'users', schoolId));
-  return snap.exists() ? [{ id: snap.id, ...snap.data() }] : [];
 };

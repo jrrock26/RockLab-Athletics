@@ -88,8 +88,8 @@ cd web && npm run build && firebase deploy --only hosting
 ```
 
 Rules must go out with the functions: the tightened `invitations` read rule is
-what protects parent email addresses, and `recordAccess` is what writes the
-audit trail the rule then exposes to the AD.
+what protects parent email addresses, and the functions are what write the audit
+trail the rule then exposes to the AD.
 
 ---
 
@@ -110,10 +110,8 @@ Ordered by how often it loses deals.
 
 - Invitations carry a shareable link; email uses Resend (preferred) or SMTP, and
   reports true delivery state instead of failing silently.
-- `resendInvitation` callable for retries.
 - Append-only `auditLogs`, written only by Cloud Functions; AD-readable, with CSV
   export at `/audit`.
-- `recordAccess` callable for staff access to protected records.
 - `exportSchoolData` callable + dashboard button (FERPA portability).
 - Invitation documents no longer readable by every signed-in user.
 - Invite email matching normalized end to end (silent "no invitations" bug).

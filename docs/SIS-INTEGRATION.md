@@ -165,7 +165,7 @@ existing `teams/{id}/roster` documents.
 - **Reproducible:** every verdict records the ruleset version that produced it, so
   any historic decision can be reconstructed during an audit or appeal.
 - **Audited:** connections, sync runs, overrides, and every staff read of an
-  academic verdict flow through the existing `writeAudit` / `recordAccess` path.
+  academic verdict flow through the existing `writeAudit` path.
 
 ## 8. The rule engine
 

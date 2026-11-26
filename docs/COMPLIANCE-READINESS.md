@@ -40,12 +40,13 @@ enforces. A district will ask for them in writing.
 
 ## 3. Gaps to close before a district-wide sale
 
-1. **Audit coverage is partial, not universal.** Firestore cannot audit reads.
-   `recordAccess` only records what the client tells it to record. A malicious
-   staff member could read a record without calling it. Mitigation: the call is
-   the only path in the UI, and the rule set still prevents non-staff reads. Do
-   not claim "complete access logging" — claim "staff access logging for
-   protected records."
+1. **Reads are not audited at all.** Writes are (`writeAudit` → `auditLogs`), but
+   Firestore cannot audit reads and no client call reports them: the
+   `recordAccess` callable that was meant to is gone. A staff member opening a
+   protected record leaves no trail. The rule set still prevents non-staff reads.
+   Do not claim "access logging" or "complete audit coverage" for reads; if a
+   district requires it, the callable has to be rebuilt and wired into every
+   protected-record screen.
 2. **No SIS integration.** "Eligibility" here means paperwork complete. It does
    **not** include academic eligibility from PowerSchool/Synergy/Infinite Campus.
    Rank One and FinalForms win on this. Say so before a demo, not after.

@@ -123,8 +123,7 @@ ledger row so this can be revisited per school later.
 There is no self-service claim path: the old `claimGameStatistician` endpoint was
 removed, so selection cannot be bypassed.
 
-**Record-chase announcements.** `scheduledRecordChases` runs daily (and
-`announceRecordChases` can be triggered manually):
+**Record-chase announcements.** `scheduledRecordChases` runs daily:
 
 - Expresses the gap in **games**, not just points:
   `gamesAway = ceil(remaining / per-game average)`.
