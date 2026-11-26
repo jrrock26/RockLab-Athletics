@@ -54,6 +54,10 @@ final class AuthViewModel {
         }
     }
 
+    /// Main-actor isolated: this mutates observable state and calls the main-actor
+    /// isolated `AppDelegate`. A nonisolated async function awaited from the
+    /// listener's `@MainActor` task would still hop off the main actor.
+    @MainActor
     private func handleAuthChange(user: FirebaseAuth.User?) async {
         if let user {
             do {
@@ -71,8 +75,7 @@ final class AuthViewModel {
                     self.user = try await FirestoreService.shared.fetchUser(id: user.uid)
                 }
                 self.isSignedIn = true
-                // The delegate is main-actor isolated; this listener hop is not.
-                await MainActor.run { AppDelegate.storeCurrentFCMToken() }
+                AppDelegate.storeCurrentFCMToken()
                 AnalyticsService.setUser(userId: user.uid,
                                          role: self.user?.role.rawValue,
                                          schoolId: self.user?.schoolId)
