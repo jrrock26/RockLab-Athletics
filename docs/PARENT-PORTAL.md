@@ -22,7 +22,7 @@ what the strings are**:
 | Writer | Writes | File |
 |---|---|---|
 | `acceptInvitation` | `rosterEntryId` (the submissions doc id) | `functions/index.js` |
-| `linkChild` | `playerUserId` (an auth UID) | `Services/FirestoreService.swift:698` |
+| `linkChild` *(since deleted — nothing called it)* | `playerUserId` (an auth UID) | `Services/FirestoreService.swift` |
 | `myAthletes` reads as roster entry id | `linked.includes(entry.id)` | `web/lib/portal.mjs:92` |
 | `isRosterAssignee` reads as player UID | `linked.hasAny([entry.userId])` | `firestore.rules` |
 
@@ -33,6 +33,10 @@ Consequence, both directions:
   `submissions` is denied. The form appears, the submit fails.
 - Guardian linked by `linkChild`: can submit, but **the portal shows no athlete**
   because the client filter never matches a UID against `entry.id`.
+
+`linkChild` has since been removed. Two writers remain: `acceptInvitation` (a roster
+entry id) and parent-link claim approval (a player UID), so the rules still have to
+accept both identifier spaces.
 
 Highest-risk defect for Feature 2: a UI built on top would fail only in production, on
 the submit, for every invitation-linked family.

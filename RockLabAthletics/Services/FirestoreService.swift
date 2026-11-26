@@ -677,7 +677,6 @@ struct FirestoreService {
             .filter { $0.url != nil }
     }
 
-
     // MARK: - Events
 
     func createEvent(teamId: String, title: String, type: EventType, date: Date, location: String, notes: String) async throws -> String {
@@ -1687,4 +1686,3 @@ struct FirestoreService {
     }
 
 }
-

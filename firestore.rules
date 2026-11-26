@@ -107,9 +107,10 @@ service cloud.firestore {
     ///     authority.
     ///   - `users.linkedPlayerIds` — CLIENT-WRITABLE (see the users rule: self
     ///     update is not field-restricted), so it may only be trusted when it
-    ///     already names the athlete's own uid. That preserves the legacy
-    ///     linkChild path without letting anyone claim an athlete by quoting a
-    ///     roster entry id, which is visible in invite links and page URLs.
+    ///     already names the athlete's own uid. That keeps legacy
+    ///     linkedPlayerIds rows working without letting anyone claim an athlete
+    ///     by quoting a roster entry id, which is visible in invite links and
+    ///     page URLs.
     ///
     /// Deliberately NOT matched: a roster entry id inside linkedPlayerIds. It is
     /// what acceptInvitation stores, but it is also the one value a hostile
@@ -691,8 +692,9 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // Verified career ledger. Written only by verifyGameStats/addCareerStatLine.
-    // Staff of the school may read it; nobody may write or delete from a client.
+    // Verified career ledger. Written by verifyGameStats when a game's stats are
+    // confirmed, and cleared by reopenGameStats; nobody may write from a client.
+    // Staff of the school may read it.
     match /careerStatLines/{lineId} {
       allow read: if signedIn() && role() in ['ad','coach','staff']
         && 'schoolId' in resource.data
@@ -709,7 +711,9 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // School records are part of the public story of a program.
+    // School records are part of the public story of a program. Nothing in the app
+    // writes them: a record is seeded with the Admin SDK, and the daily record-chase
+    // job is the only reader.
     match /schoolRecords/{recordId} {
       allow read: if signedIn();
       allow write: if false;
