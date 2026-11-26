@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -16,8 +16,13 @@ import { db } from '../lib/firebase';
 const dayKey = (d) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-export default function DashboardSummary({ schoolId, teams, profile }) {
+export default function DashboardSummary({ schoolId, teams, profile, onSchool }) {
   const [school, setSchool] = useState(null);
+  // The shell's header needs the school name too, and this is the only place that reads
+  // the school document — so report it up instead of paying for a second read. Held in a
+  // ref so an inline callback from the dashboard cannot re-run the read effect.
+  const reportSchool = useRef(onSchool);
+  reportSchool.current = onSchool;
   const [events, setEvents] = useState([]);
   const [pending, setPending] = useState(null);
   const [error, setError] = useState('');
@@ -29,7 +34,9 @@ export default function DashboardSummary({ schoolId, teams, profile }) {
       try {
         const snap = await getDoc(doc(db, 'schools', schoolId));
         if (!alive) return;
-        setSchool(snap.exists() ? snap.data() : null);
+        const data = snap.exists() ? snap.data() : null;
+        setSchool(data);
+        if (reportSchool.current) reportSchool.current(data);
       } catch (e) {
         // A missing school must not blank the dashboard; the name falls back to the profile.
       }

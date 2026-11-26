@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../lib/firebase';
 import { useAuth } from './index';
@@ -12,7 +12,8 @@ import Link from 'next/link';
 export default function Dashboard() {
   const { loading, user, profile } = useAuth();
   const [teams, setTeams] = useState([]);
-  const [refresh, setRefresh] = useState(0);
+  const [schoolName, setSchoolName] = useState('');
+  const [teamsError, setTeamsError] = useState('');
   const [entitlement, setEntitlement] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState('');
@@ -38,23 +39,32 @@ export default function Dashboard() {
     }
   }
 
+  // Live teams, like the team page. A one-shot read here meant a team a coach had just
+  // started stayed invisible to the AD until they reloaded, and two people looking at
+  // "the teams" saw different lists.
   useEffect(() => {
     if (!profile?.schoolId) return;
-    (async () => {
-      const snap = await getDocs(
-        query(collection(db, 'teams'), where('schoolId', '==', profile.schoolId))
-      );
-      setTeams(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      try {
-        const res = await httpsCallable(functions, 'getEntitlement')();
-        setEntitlement(res.data);
-      } catch (e) {
-        setEntitlement(null);
-      }
-    })();
-    // `refresh` is bumped after a team is created so the new one appears without the
-    // reload the old build needed.
-  }, [profile?.schoolId, refresh]);
+    const unsub = onSnapshot(
+      query(collection(db, 'teams'), where('schoolId', '==', profile.schoolId)),
+      (snap) => {
+        setTeams(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setTeamsError('');
+      },
+      (err) => setTeamsError(err?.message || 'Could not load teams.'),
+    );
+    return () => unsub();
+  }, [profile?.schoolId]);
+
+  // Entitlement is a callable, not a document, so it is fetched once per school rather
+  // than listened to. A failed lookup leaves the plan line off the page, not broken.
+  useEffect(() => {
+    if (!profile?.schoolId) return;
+    let alive = true;
+    httpsCallable(functions, 'getEntitlement')()
+      .then((res) => { if (alive) setEntitlement(res.data); })
+      .catch(() => { if (alive) setEntitlement(null); });
+    return () => { alive = false; };
+  }, [profile?.schoolId]);
 
   if (loading) return <main className="page"><p>Loading…</p></main>;
   if (!user || profile?.role !== 'ad') {
@@ -67,8 +77,13 @@ export default function Dashboard() {
   }
 
   return (
-    <AppShell title={profile.schoolName || 'Your school'} profile={profile} user={user}>
-      <DashboardSummary schoolId={profile.schoolId} teams={teams} profile={profile} />
+    <AppShell title={schoolName || profile.schoolName || 'Your school'} profile={profile} user={user}>
+      <DashboardSummary
+        schoolId={profile.schoolId}
+        teams={teams}
+        profile={profile}
+        onSchool={(data) => setSchoolName((data && data.name) || '')}
+      />
 
       <p className="muted small">
         Plan: <strong>{entitlement?.plan || 'free'}</strong>
@@ -90,6 +105,7 @@ export default function Dashboard() {
 
       <section className="card">
         <h2>Teams</h2>
+        {teamsError && <p className="error">{teamsError}</p>}
         {teams.length === 0 && <p className="muted">No teams yet. Coaches who start a team will show up here.</p>}
         <ul className="team-grid">
           {teams.map((t) => (
@@ -107,7 +123,8 @@ export default function Dashboard() {
         )}
       </section>
 
-      <AddTeam schoolId={profile.schoolId} onCreated={() => setRefresh((n) => n + 1)} />
+      {/* No onCreated: the teams listener picks the new team up on its own. */}
+      <AddTeam schoolId={profile.schoolId} />
     </AppShell>
   );
 }

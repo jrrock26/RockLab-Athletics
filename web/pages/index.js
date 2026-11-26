@@ -1,35 +1,24 @@
 import { useEffect, useState } from 'react';
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
-import { auth, db } from '../lib/firebase';
+import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { auth } from '../lib/firebase';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import Link from 'next/link';
 import { personName } from '../lib/portal.mjs';
+import { useAuth } from '../lib/useAuth';
 
-export function useAuth() {
-  const [state, setState] = useState({ loading: true, user: null, profile: null });
-
-  useEffect(() => {
-    return onAuthStateChanged(auth, async (user) => {
-      if (!user) {
-        setState({ loading: false, user: null, profile: null });
-        return;
-      }
-      const snap = await getDoc(doc(db, 'users', user.uid));
-      setState({ loading: false, user, profile: snap.exists() ? snap.data() : null });
-    });
-  }, []);
-
-  return state;
-}
+// Re-exported under the name every page already imports, so the twenty pages that do
+// `import { useAuth } from './index'` keep working unchanged. The implementation moved to
+// lib/useAuth.js because a copy of the hook per page meant a fresh auth subscription, a
+// fresh `users/{uid}` read and a "Loading…" flash on every single navigation.
+export { useAuth };
 
 /// One door. Student-athletes, parents, coaches, staff and athletic directors all sign
 /// in here, and the role decides where they land -- the console for an AD, the team
 /// portal for everyone else. Splitting the web app into "the console" and "the family
 /// portal" made families feel like guests at their own school.
 export default function Login() {
-  const { loading, user, profile } = useAuth();
+  const { loading, user, profile, error: authError } = useAuth();
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -85,6 +74,13 @@ export default function Login() {
             <p className="small muted">
               Athletic directors, coaches, staff, players and parents.
             </p>
+
+            {authError && (
+              <p className="error">
+                Your profile could not be loaded ({authError}). Reload, or ask your athletic
+                director to check your account.
+              </p>
+            )}
 
             {user ? (
               <>

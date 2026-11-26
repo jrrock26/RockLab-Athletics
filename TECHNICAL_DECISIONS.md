@@ -66,3 +66,24 @@ an address that looks right and does not exist bounces silently — worse than a
 `PLAN_LIMITS` in `functions/index.js` is the authority; `web/lib/plans.js` mirrors it so
 the pricing page cannot promise more than the backend enforces. Both files carry a
 comment to change them together.
+
+## D-11 — No catch-all rewrite on the app site; the client recovers from a stale build
+
+The app is `output: 'export'`, so every route is its own `index.html` and every page its
+own chunk file. Hosting used to rewrite `**` to `/index.html`, which meant any missing
+file answered **200 with HTML**. A tab left open across a deploy asks for the previous
+build's chunk, gets HTML, fails to parse it as JavaScript, and the click does nothing —
+the page only appears after a reload. That is the "I have to refresh to make pages load"
+report, and it was intermittent because `next/link` prefetches the routes in view: only
+the un-prefetched, replaced chunks failed.
+
+Removed the rewrite (unknown paths now 404 to `404.html`) and added `routeChangeError`
+recovery in `web/pages/_app.js`: the router reports the failed chunk, the app navigates to
+the URL the user actually clicked, and a 10-second `sessionStorage` guard stops a loop if
+that chunk is genuinely gone. Do not re-add the catch-all to "fix" a 404 — it hides every
+missing asset behind a 200 and makes navigation fail in a way that looks like the app.
+
+Related: `web/lib/useAuth.js` keeps one auth listener and one cached `users/{uid}` profile
+per tab. Before, each page ran its own listener and re-read the profile, so every click
+flashed "Loading…" for a network round trip and any failed read left the page on that
+flash forever.
