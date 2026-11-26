@@ -65,7 +65,7 @@ final class OnboardingViewModel {
     func sendInvite(email: String) async {
         guard let schoolId else { return }
         do {
-            try await FirestoreService.shared.createInvitation(
+            _ = try await FirestoreService.shared.createInvitation(
                 email: email,
                 role: .coach,
                 schoolId: schoolId,

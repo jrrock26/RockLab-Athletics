@@ -71,7 +71,8 @@ final class AuthViewModel {
                     self.user = try await FirestoreService.shared.fetchUser(id: user.uid)
                 }
                 self.isSignedIn = true
-                AppDelegate.storeCurrentFCMToken()
+                // The delegate is main-actor isolated; this listener hop is not.
+                await MainActor.run { AppDelegate.storeCurrentFCMToken() }
                 AnalyticsService.setUser(userId: user.uid,
                                          role: self.user?.role.rawValue,
                                          schoolId: self.user?.schoolId)

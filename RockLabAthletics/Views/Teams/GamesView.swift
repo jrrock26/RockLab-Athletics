@@ -441,7 +441,7 @@ struct SpectatorGameView: View {
                      leads: theirsLead)
             }
 
-            if let clock {
+            if clock != nil {
                 Text(clockString(remaining))
                     .font(.system(size: 44, weight: .bold, design: .monospaced))
                     .foregroundStyle(remaining == 0 ? Color.red : Color.primary)

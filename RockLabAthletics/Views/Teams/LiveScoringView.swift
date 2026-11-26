@@ -178,7 +178,7 @@ struct LiveScoringView: View {
                         HStack(spacing: 6) {
                             ForEach(0..<max(clock.periods.count, current.period + 1), id: \.self) { index in
                                 Button(clock.label(forPeriod: index)) {
-                                    Task { await changePeriod(index, clock: clock) }
+                                    Task { changePeriod(index, clock: clock) }
                                 }
                                 .buttonStyle(.bordered)
                                 .tint(index == current.period ? Color.accentColor : Color.gray)

@@ -130,7 +130,7 @@ struct ChatDetailView: View {
     }
 
     private func report(_ message: Message, reason: String) async {
-        try? await FunctionsService.shared.reportContent(
+        _ = try? await FunctionsService.shared.reportContent(
             teamId: chat.teamId,
             contentType: "message",
             contentId: message.id,
