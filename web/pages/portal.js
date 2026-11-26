@@ -28,23 +28,27 @@ import {
 import { httpsCallable } from 'firebase/functions';
 import { auth, db, functions } from '../lib/firebase';
 import {
-  VISIBLE_EVENT_TYPES,
   eventTypesFor,
   normalizeRole,
   rsvpId,
-  REQUIREMENT_LABELS,
   myAthletes,
   normalizeEmail,
   partitionEvents,
   recordFromGames,
   formatRecord,
   displayName,
-  activeRoster,
   formatWhen,
+  formLabel,
   personName,
   requirementStatus,
+  RSVP_CHOICES,
   toMillis,
 } from '../lib/portal.mjs';
+// The roster, team, event and requirement queries live in lib/myTeams.js, shared with the
+// rail's Teams/Schedule/Messages/Forms pages. Each of those queries has a shape
+// firestore.rules depends on (the guardian fallback, the event type filter), so a second
+// copy is a second thing to break when a rule moves.
+import { loadMyTeams, loadRequirementsFor } from '../lib/myTeams';
 import { buildNotifications } from '../lib/parent.mjs';
 
 /// The family web app.
@@ -148,99 +152,23 @@ export default function Portal() {
     return rows;
   }, []);
 
-  /// The roster a guardian is allowed to see. Listing the whole roster is staff-only
-  /// (entries carry other families' contact details), so a guardian asks for exactly
-  /// what is permitted: entries whose `guardianUserIds` name them, plus ids the profile
-  /// links. Driving this off `linkedPlayerIds` alone made a second child invisible.
-  const loadRoster = useCallback(async (teamId, linkedIds) => {
-    try {
-      const snap = await getDocs(collection(db, 'teams', teamId, 'roster'));
-      return {
-        entries: activeRoster(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
-        restricted: false,
-      };
-    } catch {
-      const uid = auth.currentUser ? auth.currentUser.uid : '';
-      const ids = Array.isArray(linkedIds) ? linkedIds : [];
-      const [named, ...individual] = await Promise.all([
-        uid
-          ? getDocs(query(
-            collection(db, 'teams', teamId, 'roster'),
-            where('guardianUserIds', 'array-contains', uid),
-          )).catch(() => null)
-          : null,
-        ...ids.map((entryId) => getDoc(doc(db, 'teams', teamId, 'roster', entryId)).catch(() => null)),
-      ]);
-
-      const byId = new Map();
-      (named && named.docs ? named.docs : []).forEach((d) => byId.set(d.id, { id: d.id, ...d.data() }));
-      individual.forEach((snap) => {
-        if (snap && snap.exists()) byId.set(snap.id, { id: snap.id, ...snap.data() });
-      });
-      return { entries: activeRoster([...byId.values()]), restricted: true };
-    }
-  }, []);
-
-  /// Everything the portal displays for one team. The event query carries the type
-  /// filter deliberately: the rule grants a follower the calendar except practices,
-  /// and an unfiltered query is rejected outright.
-  const loadTeam = useCallback(async (teamId, linkedIds, membershipRole) => {
-    const [teamSnap, roster, eventsSnap, gamesSnap] = await Promise.all([
-      getDoc(doc(db, 'teams', teamId)).catch(() => null),
-      loadRoster(teamId, linkedIds),
-      (async () => {
-        const wide = await getDocs(query(
-          collection(db, 'events'),
-          where('teamId', '==', teamId),
-          where('type', 'in', eventTypesFor(membershipRole)),
-        )).catch(() => null);
-        if (wide) return wide;
-        return getDocs(query(
-          collection(db, 'events'),
-          where('teamId', '==', teamId),
-          where('type', 'in', VISIBLE_EVENT_TYPES),
-        )).catch(() => null);
-      })(),
-      getDocs(query(collection(db, 'games'), where('teamId', '==', teamId))).catch(() => null),
-    ]);
-    return {
-      id: teamId,
-      team: teamSnap && teamSnap.exists() ? teamSnap.data() : {},
-      roster: roster.entries,
-      rosterRestricted: roster.restricted,
-      events: eventsSnap ? eventsSnap.docs.map((d) => ({ id: d.id, ...d.data() })) : [],
-      games: gamesSnap ? gamesSnap.docs.map((d) => ({ id: d.id, ...d.data() })) : [],
-    };
-  }, [loadRoster]);
-
-  const loadTeams = useCallback(async (account, profileData) => {
-    const ids = Array.isArray(profileData && profileData.teamIds) ? profileData.teamIds : [];
-    if (!ids.length) {
-      setTeams([]);
-      return;
-    }
-    const linked = profileData ? profileData.linkedPlayerIds : [];
-    const membershipRole = normalizeRole(profileData ? profileData.role : '');
-    setTeams(await Promise.all(ids.map((id) => loadTeam(id, linked, membershipRole))));
-  }, [loadTeam]);
-
   /// One athlete's requirements. The per-player form documents under the roster entry
   /// ARE the record of what this family owes and has signed.
   const loadRequirements = useCallback(async (teamId, entryId, key) => {
     try {
-      const snap = await getDocs(collection(db, 'teams', teamId, 'roster', entryId, 'forms'));
+      const forms = await loadRequirementsFor(teamId, entryId);
       const now = Date.now();
-      const rows = snap.docs.map((d) => {
-        const form = { id: d.id, ...d.data() };
-        return {
-          id: d.id,
-          raw: form,
-          label: FORM_LABELS[form.type] || form.title || form.type || 'Requirement',
-          status: requirementStatus(form, null, now),
-          dueAt: form.dueDate,
-          expiresAt: form.expiresAt,
-        };
-      });
+      // The query is shared; the row shape below is this page's presentation and stays
+      // here, because the portal renders a due date and a status badge that the other
+      // pages do not.
+      const rows = forms.map((form) => ({
+        id: form.id,
+        raw: form,
+        label: formLabel(form),
+        status: requirementStatus(form, null, now),
+        dueAt: form.dueDate,
+        expiresAt: form.expiresAt,
+      }));
       setRequirements((prev) => ({ ...prev, [key]: { rows, error: '' } }));
     } catch (err) {
       setRequirements((prev) => ({
@@ -255,8 +183,8 @@ export default function Portal() {
     const data = snap.exists() ? snap.data() : null;
     setProfile(data);
     await loadInvitations(account);
-    await loadTeams(account, data);
-  }, [loadInvitations, loadTeams]);
+    setTeams(await loadMyTeams(data));
+  }, [loadInvitations]);
 
   useEffect(() => {
     return onAuthStateChanged(auth, async (account) => {
@@ -772,19 +700,6 @@ const PUBLIC_COMM_CATEGORIES = ['liveGame', 'gameday', 'fundraiser'];
 
 /// Every comm-board category, in the order iOS stores them (`CommCategory`).
 const ALL_COMM_CATEGORIES = ['general', 'liveGame', 'gameday', 'fundraiser'];
-
-/// The exact raw values iOS writes (Models/Event.swift RSVPStatus).
-const RSVP_CHOICES = [
-  { value: 'attending', label: 'Attending' },
-  { value: 'notAttending', label: 'Not attending' },
-];
-
-/// Form types as a family would name them. The stored values are camelCase enum cases.
-const FORM_LABELS = {
-  physical: 'Sports physical',
-  codeOfConduct: 'Code of conduct',
-  concussionWaiver: 'Concussion waiver',
-};
 
 /// Firebase auth errors are written for developers. Say what to do instead.
 function humanAuthError(err) {

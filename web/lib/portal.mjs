@@ -317,3 +317,28 @@ export function portalSummary({ profile, roster, events, games, nowMs }) {
     hasAnything: athletes.length > 0 || upcoming.length > 0 || past.length > 0,
   };
 }
+
+// --- vocabulary shared by every screen that shows stored enum values ------------
+
+/// The form types a school keeps, named the way a family says them. The stored values are
+/// the camelCase cases iOS writes (`FormType`), so this map and that enum are one
+/// contract. It lives here because the portal and the rail's Forms page both label the
+/// same document, and two copies of a label map drift silently.
+export const FORM_LABELS = {
+  physical: 'Sports physical',
+  codeOfConduct: 'Code of conduct',
+  concussionWaiver: 'Concussion waiver',
+};
+
+export function formLabel(form) {
+  const f = form || {};
+  return FORM_LABELS[f.type] || f.title || f.type || 'Requirement';
+}
+
+/// The two answers a family gives, per athlete. The raw values are exactly what iOS
+/// writes (`RSVPStatus`); a copy of this list per page is a way to file an answer under a
+/// value no other client reads.
+export const RSVP_CHOICES = [
+  { value: 'attending', label: 'Attending' },
+  { value: 'notAttending', label: 'Not attending' },
+];

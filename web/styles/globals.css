@@ -260,7 +260,9 @@ a { color: var(--accent); }
 .nav-links a { color: var(--muted); text-decoration: none; font-size: 14px; }
 .nav-links a:hover { color: var(--text); }
 
-.nav-user { display: flex; align-items: center; gap: 12px; }
+/* The rail carries the section links for every role now, so the header no longer needs
+   .nav-links to hold the row open; this keeps the account block on the right. */
+.nav-user { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 .who {
   max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 14px;

@@ -4,33 +4,24 @@ import { useRouter } from 'next/router';
 import { signOut } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import { personName } from '../lib/portal.mjs';
+import { homeFor, railFor, roleLabel } from '../lib/nav';
 
 /// The frame every signed-in screen sits in.
 ///
 /// An athletic director works a desk for eight hours and touches the app at events, so
 /// the web gets a persistent rail: every part of the organization one click away instead
-/// of two. Everyone else gets the top tabs, which suit a phone. The rail collapses to
-/// tabs below 900px so a coach checking a roster on a laptop is not squeezed.
-const RAIL = [
-  { href: '/dashboard', label: 'Teams' },
-  { href: '/coaches', label: 'Coaches' },
-  { href: '/calendar', label: 'Calendar' },
-  { href: '/seasons', label: 'Seasons' },
-  { href: '/directory', label: 'Directory' },
-  { href: '/import', label: 'Import' },
-  { href: '/requests', label: 'Requests' },
-  { href: '/reports', label: 'Reports' },
-  { href: '/records', label: 'Records' },
-  { href: '/audit', label: 'Audit log' },
-  { href: '/portal', label: 'Team portal' },
-  { href: '/profile', label: 'Profile' },
-];
-
+/// of two. Coaches, staff, players and parents get the same frame carrying the links
+/// their role is entitled to — the console is not the only role with more than one
+/// screen worth visiting, and until this existed only the AD had a rail at all.
+///
+/// The rail collapses to a horizontal row below 900px so a coach checking a roster on a
+/// phone is not squeezed.
 export default function AppShell({ title, profile, user, children, art = 'arena.png' }) {
   const router = useRouter();
   const role = profile?.role || '';
   const name = personName(profile) || user?.email || '';
   const isAd = role === 'ad';
+  const items = railFor(role);
 
   // trailingSlash is on, so /dashboard/ and /dashboard must both count as current.
   const here = (path) => {
@@ -56,35 +47,27 @@ export default function AppShell({ title, profile, user, children, art = 'arena.
             ←
           </button>
         )}
-        <Link href={isAd ? '/dashboard' : '/portal'} className="brand">
+        <Link href={homeFor(role)} className="brand">
           <span className="brand-mark">RL</span>
           <span className="brand-text">RockLab</span>
         </Link>
 
-        <nav className="nav-links">
-          {!isAd && (
-            <>
-              {(role === 'coach') && (
-                <Link href="/requests" className={cls('/requests')}>Requests</Link>
-              )}
-              <Link href="/portal" className={cls('/portal')}>Portal</Link>
-              <Link href="/profile" className={cls('/profile')}>Profile</Link>
-            </>
-          )}
-        </nav>
-
         <div className="nav-user">
           <Link href="/profile" className="who" title={name}>{name}</Link>
-          {role && <span className="pill">{role}</span>}
+          {role && <span className="pill">{roleLabel(role)}</span>}
           <button type="button" className="link" onClick={() => signOut(auth)}>Sign out</button>
         </div>
       </header>
 
-      {isAd ? (
+      {items.length > 0 ? (
         <div className="with-rail">
-          <nav className="rail">
-            {RAIL.map((item) => (
-              <Link key={item.href} href={item.href} className={cls(item.href)}>
+          <nav className="rail" aria-label="Sections">
+            {items.map((item) => (
+              <Link
+                key={`${item.href}-${item.label}`}
+                href={item.href}
+                className={cls(item.href)}
+              >
                 {item.label}
               </Link>
             ))}

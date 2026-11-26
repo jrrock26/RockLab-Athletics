@@ -87,3 +87,38 @@ Related: `web/lib/useAuth.js` keeps one auth listener and one cached `users/{uid
 per tab. Before, each page ran its own listener and re-read the profile, so every click
 flashed "Loading…" for a network round trip and any failed read left the page on that
 flash forever.
+
+## D-12 — One rail for every role, defined in one place
+
+The rail used to be an array inside `AppShell` rendered only when `role === 'ad'`.
+Coaches, players and parents got a two-link header and no navigation at all, so the pages
+that exist for them (portal, team, calendar, records, profile) were reachable only from
+whatever link a page happened to render.
+
+`web/lib/nav.js` is now the single map: each item declares the roles entitled to it and
+`railFor(role)` filters. iOS is five tabs (Home, Teams, Schedule, Chat, Settings) and the
+rail follows that shape so a person using both apps is not learning two products.
+
+Deliberately explicit roles, not "everyone except": a new role gets an empty rail that
+someone has to think about, rather than automatic access to a page whose rules were never
+considered. `family` is normalised to `parent` because iOS shipped that spelling.
+
+Gaps this exposed, left as gaps rather than faked: `/forms` is player/parent only, because
+signing belongs to a roster entry and the coach's iOS screen is the review side (who has
+not signed), which the web does not have. Staff and coaches therefore have no Forms link
+instead of a link to a page that would be empty for them.
+
+## D-13 — One loader for team data, because the rules depend on the query shape
+
+`web/lib/myTeams.js` owns every read that the portal and the rail's Teams/Schedule/
+Messages/Forms pages share: the team document, the roster (including the guardian
+fallback to `guardianUserIds` + direct gets when the staff-only list is refused), the
+`type`-filtered event query, games, and the per-athlete requirement documents.
+
+The first cut of the rail pages copied those queries into the new module while `portal.js`
+kept its own, which is exactly the wrong duplication: each shape is chosen to satisfy a
+specific branch of firestore.rules (a list query is rejected outright unless one branch
+does not read the document), so two copies means a rule change fixes one screen and
+silently breaks the other. Presentation stays per page — the portal still decides how a
+requirement row is rendered — and the shared vocabulary that has to match an iOS enum
+(`FORM_LABELS`, `RSVP_CHOICES`) moved into `lib/portal.mjs` for the same reason.
