@@ -211,7 +211,10 @@ async function main() {
   record('Storage', 'coach uploads team media', await upload(coach.idToken, bucket, `teams/${IDS.team}/media/c-${stamp}.png`, 'a'), 200);
 
   const docName = `teams/${IDS.team}/roster/${IDS.entry}/documents/probe-${stamp}.pdf`;
-  record('Storage', 'guardian CREATE paperwork', await upload(parent.idToken, bucket, docName, 'first'), 200);
+  // Guardians no longer write directly: creates go through the `uploadPaperwork` callable,
+  // which owns authentication, the server-derived path and the create-only precondition.
+  // 403 here is the intended answer, not a regression.
+  record('Storage', 'guardian CREATE paperwork', await upload(parent.idToken, bucket, docName, 'first'), 403);
   record('Storage', 'guardian UPDATE same paperwork denied', await upload(parent.idToken, bucket, docName, 'second'), 403);
   record('Storage', 'coach UPDATE paperwork allowed', await upload(coach.idToken, bucket, docName, 'third'), 200);
   }

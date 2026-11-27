@@ -102,9 +102,22 @@ async function main() {
   const traversal = await call(parent.idToken, { ...base, fileName: '../escape.pdf' });
   note('path traversal is rejected', traversal.error?.status === 'INVALID_ARGUMENT', `${traversal.error?.status}`);
 
+  // 6b. Overwrite attempt with DIFFERENT bytes: must be refused and the original must survive.
+  const other = Buffer.concat([Buffer.from('%PDF-1.7 '), Buffer.alloc(32, 0x41)]).toString('base64');
+  const overwrite = await call(parent.idToken, { ...base, fileName: `server-${stamp}.pdf`, contentBase64: other });
+  const survived = await fetch(
+    `https://firebasestorage.googleapis.com/v0/b/${m.bucket}/o/${encodeURIComponent(objectPath)}?alt=media`,
+    { headers: { Authorization: `Bearer ${parent.idToken}` } },
+  ).then((r) => r.text());
+  note('overwrite is refused and original bytes survive',
+    overwrite.error?.status === 'ALREADY_EXISTS' && survived === PDF.toString(),
+    `${overwrite.error?.status}, original intact: ${survived === PDF.toString()}`);
+
   // 7. Reads still behave.
-  note('guardian reads what was uploaded', (await read(m, parent.idToken, objectPath)) === 200, 'HTTP 200');
-  note('manager reads what was uploaded', (await read(m, coach.idToken, objectPath)) === 200, 'HTTP 200');
+  const gRead = await read(m, parent.idToken, objectPath);
+  const mRead = await read(m, coach.idToken, objectPath);
+  note('guardian reads what was uploaded', gRead === 200, `HTTP ${gRead}`);
+  note('manager reads what was uploaded', mRead === 200, `HTTP ${mRead}`);
   note('cross-school read is refused', (await read(m, ad2.idToken, objectPath)) === 403, 'HTTP 403');
   note('anonymous read is refused', (await read(m, null, objectPath)) === 403, 'HTTP 403');
 

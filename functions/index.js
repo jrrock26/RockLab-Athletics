@@ -740,8 +740,19 @@ const PAPERWORK_TYPES = {
 const PAPERWORK_CATEGORIES = ['physical', 'clearance', 'consent', 'other'];
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
+/// Resolved from FIREBASE_CONFIG, which both generations populate. `GCLOUD_PROJECT` is not
+/// reliably present on gen2 (Cloud Run), and `admin.storage().bucket()` falls back to the
+/// legacy appspot name, which does not exist on projects created after 2024.
 function bucketName() {
-  return process.env.STORAGE_BUCKET || `${process.env.GCLOUD_PROJECT}.firebasestorage.app`;
+  if (process.env.PAPERWORK_BUCKET) return process.env.PAPERWORK_BUCKET;
+  try {
+    const cfg = JSON.parse(process.env.FIREBASE_CONFIG || '{}');
+    if (cfg.storageBucket) return cfg.storageBucket;
+    if (cfg.projectId) return `${cfg.projectId}.firebasestorage.app`;
+  } catch (e) { /* fall through to the project name */ }
+  const project = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || '';
+  if (project) return `${project}.firebasestorage.app`;
+  return admin.storage().bucket().name;
 }
 
 exports.uploadPaperwork = onCall(
@@ -808,7 +819,9 @@ exports.uploadPaperwork = onCall(
 
     let generation;
     try {
-      const [saved] = await file.save(bytes, {
+      // NOTE: in this SDK `save()` resolves to a File, not a [File] tuple. Destructuring it
+      // throws "is not iterable" — which is exactly how this failed the first time.
+      await file.save(bytes, {
         resumable: false,
         contentType,
         preconditionOpts: { ifGenerationMatch: 0 },
@@ -816,7 +829,10 @@ exports.uploadPaperwork = onCall(
           metadata: { uploadedBy: uid, teamId, rosterEntryId: entryId, category },
         },
       });
-      generation = String(saved.generation || '1');
+      const [meta] = await file.getMetadata();
+      // GCS `generation` is a large numeric string, not the small integer `metageneration`.
+      // Comparing it to '1' made every legitimate create look like a conflict.
+      generation = String((meta && meta.generation) || '');
     } catch (err) {
       const code = err && (err.code === 412 || err.status === 412 || /412/.test(String(err.message)));
       if (code) {
@@ -828,6 +844,16 @@ exports.uploadPaperwork = onCall(
         });
         throw new HttpsError('already-exists', 'This document already exists. Upload a new version.');
       }
+      console.error('[paperwork] write failed:', err && err.code, err && err.message, bucketName(), objectPath);
+      try {
+        await db.collection('auditLogs').add({
+          schoolId: '', teamId, entryId, objectPath, category, action: 'paperwork.upload',
+          actorUserId: uid, contentType, sizeBytes: bytes.length, result: 'error',
+          error: String((err && err.message) || err).slice(0, 300),
+          bucket: bucketName(),
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } catch (e) { /* the audit write must never mask the real failure */ }
       throw new HttpsError('internal', 'Upload failed.');
     }
 
@@ -5501,3 +5527,103 @@ exports.importSchoolRecords = functions.https.onCall(async (data, context) => {
   };
 });
 
+/// Removes a coach or staff member from a team — the trusted path.
+///
+/// Team membership removal used to be a client write under Firestore rules, which meant the
+/// Storage index could only catch up when a trigger happened to fire. This callable writes
+/// the membership deletion and the rebuilt `managerUserIds` in ONE transaction: the target
+/// loses media/film/paperwork standing at commit, not seconds later.
+///
+/// Authority is resolved from live documents inside the transaction (never from the request,
+/// never from a trigger payload): the sitting AD of the school that owns the team, or a coach
+/// OF THIS TEAM. A coach cannot remove the AD, cannot remove another coach, and nobody can
+/// remove the sitting AD or the head coach, because those are ownership relationships that
+/// need a handoff, not a deletion.
+exports.revokeTeamMember = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const callerId = context.auth.uid;
+  const { teamId, targetUid } = data || {};
+  if (!SAFE_ID.test(String(teamId || '')) || !SAFE_ID.test(String(targetUid || ''))) {
+    throw new functions.https.HttpsError('invalid-argument', 'teamId and targetUid are required.');
+  }
+
+  const db = admin.firestore();
+  const teamRef = db.collection('teams').doc(teamId);
+
+  const outcome = await db.runTransaction(async (tx) => {
+    // All reads first — Firestore transactions require it.
+    const teamSnap = await tx.get(teamRef);
+    if (!teamSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Unknown team.');
+    }
+    const team = teamSnap.data() || {};
+    const membersSnap = await tx.get(teamRef.collection('members'));
+    const schoolId = typeof team.schoolId === 'string' ? team.schoolId : '';
+    const schoolSnap = schoolId ? await tx.get(db.collection('schools').doc(schoolId)) : null;
+    const school = schoolSnap && schoolSnap.exists ? schoolSnap.data() : null;
+
+    const members = membersSnap.docs.map((d) => ({ id: d.id, role: d.get('role') }));
+    const callerMember = members.find((m) => m.id === callerId);
+    const targetMember = members.find((m) => m.id === targetUid);
+
+    const callerIsAd = !!(school && school.adUserId === callerId && schoolId !== '');
+    const callerIsCoachOfTeam = !!(callerMember && callerMember.role === 'coach');
+    if (!callerIsAd && !callerIsCoachOfTeam) {
+      throw new functions.https.HttpsError(
+        'permission-denied',
+        'Only the athletic director for this school or this team\'s coach can revoke a member.',
+      );
+    }
+
+    if (callerId === targetUid) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'You cannot revoke yourself. Leaving a team is a separate action.',
+      );
+    }
+
+    // Idempotent by construction: nothing to delete means nothing changes, and the index is
+    // NOT rewritten, so a duplicate or a late retry cannot restore anyone's standing.
+    if (!targetMember) {
+      return { removed: false, alreadyAbsent: true, targetUid, role: '', managerUserIds: null };
+    }
+
+    if (school && school.adUserId === targetUid) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'That user is the athletic director of this school. Transfer the AD role first.',
+      );
+    }
+    if (team.headCoachId === targetUid) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'That user is the head coach of this team. Reassign head coach before removing them.',
+      );
+    }
+    if (targetMember.role === 'coach' && !callerIsAd) {
+      throw new functions.https.HttpsError('permission-denied', 'Only the athletic director can remove a coach.');
+    }
+
+    const remaining = members.filter((m) => m.id !== targetUid);
+    const { managerUserIds } = computeManagers({ team, school, members: remaining });
+
+    tx.delete(teamRef.collection('members').doc(targetUid));
+    tx.set(teamRef, { managerUserIds }, { merge: true });
+    return { removed: true, alreadyAbsent: false, targetUid, role: targetMember.role || '', managerUserIds };
+  });
+
+  await db.collection('auditLogs').add({
+    action: 'member.revoke',
+    actorUserId: callerId,
+    targetUserId: targetUid,
+    teamId,
+    role: outcome.role,
+    removed: outcome.removed,
+    result: outcome.removed ? 'removed' : 'already-absent',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return outcome;
+});
