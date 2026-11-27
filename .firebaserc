@@ -1,6 +1,7 @@
 {
   "projects": {
-    "default": "rocklab-athletics"
+    "default": "rocklab-athletics",
+    "staging": "rocklab-athletics-staging"
   },
   "targets": {
     "rocklab-athletics": {

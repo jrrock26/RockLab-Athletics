@@ -41,7 +41,28 @@ service firebase.storage {
              == request.auth.uid;
     }
 
-    function isAd() { return signedIn() && role() == 'ad' && ownsSchool(); }
+    // There is deliberately no `isAd()` here any more.
+    //
+    // It answered "am I the AD of SOME school", and pairing it with `isSchoolAd(schoolId)`
+    // meant the FIRST disjunct decided: any AD could write any other school's logo, any
+    // team's photos and film, and any athlete's paperwork. Ownership is now resolved
+    // through the document the path names -- `adOfTeam(teamId)` or `isSchoolAd(schoolId)`.
+
+    /// The school that owns a team, taken from the team document itself.
+    /// A team with no schoolId yields '', which never matches an adUserId.
+    function schoolOfTeam(teamId) {
+      let s = firestore.get(/databases/(default)/documents/teams/$(teamId)).data.schoolId;
+      return s is string ? s : '';
+    }
+
+    /// AD standing over THIS team: the caller owns the school that owns the team.
+    function adOfTeam(teamId) {
+      return signedIn()
+        && role() == 'ad'
+        && schoolOfTeam(teamId) != ''
+        && firestore.get(/databases/(default)/documents/schools/$(schoolOfTeam(teamId))).data.adUserId
+             == request.auth.uid;
+    }
 
     function membership(teamId) {
       return firestore.exists(/databases/(default)/documents/teams/$(teamId)/members/$(request.auth.uid))
@@ -82,29 +103,29 @@ service firebase.storage {
     // written so it cannot deny an operation that never had a body.
     match /schools/{schoolId}/{fileName} {
       allow read: if signedIn();
-      allow write: if signedIn() && (isAd() || isSchoolAd(schoolId))
+      allow write: if signedIn() && isSchoolAd(schoolId)
         && request.resource.size < 10 * 1024 * 1024;
-      allow delete: if signedIn() && (isAd() || isSchoolAd(schoolId));
+      allow delete: if signedIn() && isSchoolAd(schoolId);
     }
 
     // Team photos: members can view, staff/coaches can manage.
     match /teams/{teamId}/media/{fileName} {
-      allow read: if signedIn() && (isAd() || isTeamMember(teamId) || isFollower(teamId));
+      allow read: if signedIn() && (adOfTeam(teamId) || isTeamMember(teamId) || isFollower(teamId));
       allow write: if signedIn()
-        && (isAd() || isCoachOf(teamId) || memberRole(teamId) == 'staff')
+        && (adOfTeam(teamId) || isCoachOf(teamId) || memberRole(teamId) == 'staff')
         && request.resource.size < 25 * 1024 * 1024;
-      allow delete: if signedIn() && (isAd() || isCoachOf(teamId) || memberRole(teamId) == 'staff');
+      allow delete: if signedIn() && (adOfTeam(teamId) || isCoachOf(teamId) || memberRole(teamId) == 'staff');
     }
 
     // Game film: same audience, larger cap. 4 GB matches maxUploadBytes in
     // HighlightService - a full 1080p game is roughly 2 GB, so a smaller cap
     // would reject the very footage this feature exists for.
     match /teams/{teamId}/videos/{fileName} {
-      allow read: if signedIn() && (isAd() || isTeamMember(teamId) || isFollower(teamId));
+      allow read: if signedIn() && (adOfTeam(teamId) || isTeamMember(teamId) || isFollower(teamId));
       allow write: if signedIn()
-        && (isAd() || isCoachOf(teamId) || memberRole(teamId) == 'staff')
+        && (adOfTeam(teamId) || isCoachOf(teamId) || memberRole(teamId) == 'staff')
         && request.resource.size < 4096 * 1024 * 1024;
-      allow delete: if signedIn() && (isAd() || isCoachOf(teamId) || memberRole(teamId) == 'staff');
+      allow delete: if signedIn() && (adOfTeam(teamId) || isCoachOf(teamId) || memberRole(teamId) == 'staff');
     }
 
     // Athlete paperwork: physicals, code-of-conduct returns, clearance letters.
@@ -130,7 +151,7 @@ service firebase.storage {
       }
 
       function staffOfTeam() {
-        return signedIn() && (isAd() || isCoachOf(teamId) || memberRole(teamId) == 'staff');
+        return signedIn() && (adOfTeam(teamId) || isCoachOf(teamId) || memberRole(teamId) == 'staff');
       }
 
       allow read: if staffOfTeam() || guardianOfEntry();

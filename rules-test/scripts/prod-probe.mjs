@@ -18,8 +18,19 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MANIFEST = path.join(ROOT, '.local-test-accounts.json');
-const PROJECT = 'rocklab-athletics';
-const BASE = `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents`;
+/// The probe names its target explicitly. Production requires a second flag, so a
+/// copy-pasted staging command can never write to real families by omission.
+const PROJECT = (() => {
+  const i = process.argv.indexOf('--project');
+  return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : 'rocklab-athletics-staging';
+})();
+const ALLOW_PRODUCTION = process.argv.includes('--allow-production');
+if (PROJECT === 'rocklab-athletics' && !ALLOW_PRODUCTION) {
+  console.log('REFUSING: --project rocklab-athletics needs --allow-production as well.');
+  console.log('          Nothing was tested.');
+  process.exit(2);
+}
+const BASE = () => `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents`;
 
 function apiKey() {
   if (process.env.FIREBASE_API_KEY) return process.env.FIREBASE_API_KEY;
@@ -45,13 +56,13 @@ async function signIn(key, email, password) {
 
 /// Firestore REST calls return the HTTP status; the rules decision is 200 vs 403.
 async function get(token, docPath) {
-  const res = await fetch(`${BASE}/${docPath}`, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await fetch(`${BASE()}/${docPath}`, { headers: { Authorization: `Bearer ${token}` } });
   return res.status;
 }
 
 async function patch(token, docPath, fields) {
   const mask = Object.keys(fields).map((f) => `updateMask.fieldPaths=${f}`).join('&');
-  const res = await fetch(`${BASE}/${docPath}?${mask}`, {
+  const res = await fetch(`${BASE()}/${docPath}?${mask}`, {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ fields }),
@@ -60,7 +71,7 @@ async function patch(token, docPath, fields) {
 }
 
 async function create(token, collectionPath, docId, fields) {
-  const res = await fetch(`${BASE}/${collectionPath}?documentId=${docId}`, {
+  const res = await fetch(`${BASE()}/${collectionPath}?documentId=${docId}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ fields }),
@@ -95,6 +106,7 @@ async function main() {
     }
     tokens[role] = await signIn(key, account.email, account.password);
   }
+  console.log(`project: ${PROJECT}`);
   console.log('signed in as: ' + Object.keys(tokens).join(', ') + '\n');
 
   const parentUid = accounts.parent.uid;
