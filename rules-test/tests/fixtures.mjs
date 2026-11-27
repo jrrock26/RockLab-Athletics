@@ -31,7 +31,18 @@ export async function seedFixtures(db) {
   await write('users/kidA', { role: 'player', schoolId: SCHOOL_A, displayName: 'Kai Kid' });
   await write('users/followerX', { role: 'follower', displayName: 'Fran Follower' });
 
-  await write(`teams/${TEAM_A}`, { name: 'Alpha Varsity', schoolId: SCHOOL_A });
+  // `managerUserIds` is what Storage rules read for management standing. In production
+  // it is maintained by the teamManagers Cloud Functions; here it is seeded to the value
+  // those functions derive from schools.adUserId and the coach/staff membership rows.
+  await write(`teams/${TEAM_A}`, {
+    name: 'Alpha Varsity', schoolId: SCHOOL_A,
+    managerUserIds: ['adA', 'coachA', 'staffA'],
+  });
+
+  // Fail-closed cases: a team with no ownership record, and one naming a school that
+  // does not exist. Neither may ever gain an AD, and neither has a manager index.
+  await write('teams/teamNoSchool', { name: 'Orphan Team' });
+  await write('teams/teamGhostSchool', { name: 'Ghost Team', schoolId: 'schoolGhost' });
 
   // Memberships decide team standing; roster entries decide family standing.
   await write(`teams/${TEAM_A}/members/coachA`, { role: 'coach' });

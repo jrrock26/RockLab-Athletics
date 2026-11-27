@@ -31,8 +31,7 @@ service firebase.storage {
     ///
     /// One lookup, not two: `exists()` then `get()` on the same document cost double the
     /// budget for no extra information, because `get()` on a missing document already
-    /// yields null and fails the comparison. Storage rules allow ten document reads per
-    /// evaluation and this function is called by every write on four paths.
+    /// yields null and fails the comparison. The budget is TWO documents per evaluation.
     function ownsSchool() {
       let schoolId = mySchoolId();
       return signedIn()
@@ -45,33 +44,48 @@ service firebase.storage {
     //
     // It answered "am I the AD of SOME school", and pairing it with `isSchoolAd(schoolId)`
     // meant the FIRST disjunct decided: any AD could write any other school's logo, any
-    // team's photos and film, and any athlete's paperwork. Ownership is now resolved
-    // through the document the path names -- `adOfTeam(teamId)` or `isSchoolAd(schoolId)`.
+    // team's photos and film, and any athlete's paperwork. Team paths now resolve through
+    // `isManagerOf(teamId)`, whose index is derived per team and cannot contain an AD of
+    // another school; school logos keep `isSchoolAd(schoolId)`.
 
-    /// The school that owns a team, taken from the team document itself.
-    /// A team with no schoolId yields '', which never matches an adUserId.
-    function schoolOfTeam(teamId) {
-      let s = firestore.get(/databases/(default)/documents/teams/$(teamId)).data.schoolId;
-      return s is string ? s : '';
+    /// The team document, read at most ONCE per evaluation.
+    ///
+    /// Cloud Storage Security Rules may access **two** Firestore documents per
+    /// evaluation (firebase.google.com/docs/storage/security/rules-conditions). That is
+    /// the constraint this whole file is shaped around: resolving "is the caller an AD of
+    /// the school that owns this team" the direct way costs three documents
+    /// (users + teams + schools), so every legitimate AD was denied on media, film and
+    /// paperwork — measured on a real bucket, not theorised.
+    ///
+    /// `teams/{teamId}.managerUserIds` is therefore the authorization record for
+    /// management, maintained only by Cloud Functions (functions/teamManagers.js) from
+    /// `teams.schoolId`, `schools.adUserId` and coach/staff membership rows. Firestore
+    /// rules forbid a client from writing it.
+    function teamData(teamId) {
+      return firestore.get(/databases/(default)/documents/teams/$(teamId)).data;
     }
 
-    /// AD standing over THIS team: the caller owns the school that owns the team.
-    function adOfTeam(teamId) {
+    /// Manager standing over THIS team. One document, and a team with no schoolId has an
+    /// empty list because the server never derived an AD for it — fail-closed by
+    /// construction rather than by an extra lookup.
+    function isManagerOf(teamId) {
+      let t = teamData(teamId);
       return signedIn()
-        && role() == 'ad'
-        && schoolOfTeam(teamId) != ''
-        && firestore.get(/databases/(default)/documents/schools/$(schoolOfTeam(teamId))).data.adUserId
-             == request.auth.uid;
+        && t != null
+        && 'managerUserIds' in t
+        && t.managerUserIds is list
+        && t.managerUserIds.hasAny([request.auth.uid]);
     }
 
+    /// One document, one call: `get()` on a missing membership already yields null, so
+    /// pairing it with `exists()` would spend the second half of the budget for nothing.
     function membership(teamId) {
-      return firestore.exists(/databases/(default)/documents/teams/$(teamId)/members/$(request.auth.uid))
-        ? firestore.get(/databases/(default)/documents/teams/$(teamId)/members/$(request.auth.uid)).data
-        : null;
+      return firestore.get(/databases/(default)/documents/teams/$(teamId)/members/$(request.auth.uid)).data;
     }
 
     function memberRole(teamId) {
-      return membership(teamId) == null ? null : membership(teamId).role;
+      let m = membership(teamId);
+      return m == null ? null : m.role;
     }
 
     function isTeamMember(teamId) {
@@ -79,7 +93,7 @@ service firebase.storage {
     }
 
     function isFollower(teamId) { return memberRole(teamId) == 'follower'; }
-    function isCoachOf(teamId) { return memberRole(teamId) == 'coach'; }
+    function isCoachOf(teamId) { return memberRole(teamId) in ['coach', 'staff']; }
 
     function isSchoolAd(schoolId) {
       return signedIn()
@@ -110,22 +124,26 @@ service firebase.storage {
 
     // Team photos: members can view, staff/coaches can manage.
     match /teams/{teamId}/media/{fileName} {
-      allow read: if signedIn() && (adOfTeam(teamId) || isTeamMember(teamId) || isFollower(teamId));
-      allow write: if signedIn()
-        && (adOfTeam(teamId) || isCoachOf(teamId) || memberRole(teamId) == 'staff')
+      // Manager: one document (the team). Member: two (team, then membership).
+      allow read: if signedIn()
+        && (isManagerOf(teamId) || isTeamMember(teamId) || isFollower(teamId));
+      // Write and delete are index-only on purpose. The index is rebuilt by Cloud
+      // Functions whenever a membership row or the team changes, so revoking a coach is
+      // one document write away and cannot leave a stale membership row granting access.
+      allow write: if isManagerOf(teamId)
         && request.resource.size < 25 * 1024 * 1024;
-      allow delete: if signedIn() && (adOfTeam(teamId) || isCoachOf(teamId) || memberRole(teamId) == 'staff');
+      allow delete: if isManagerOf(teamId);
     }
 
     // Game film: same audience, larger cap. 4 GB matches maxUploadBytes in
     // HighlightService - a full 1080p game is roughly 2 GB, so a smaller cap
     // would reject the very footage this feature exists for.
     match /teams/{teamId}/videos/{fileName} {
-      allow read: if signedIn() && (adOfTeam(teamId) || isTeamMember(teamId) || isFollower(teamId));
-      allow write: if signedIn()
-        && (adOfTeam(teamId) || isCoachOf(teamId) || memberRole(teamId) == 'staff')
+      allow read: if signedIn()
+        && (isManagerOf(teamId) || isTeamMember(teamId) || isFollower(teamId));
+      allow write: if isManagerOf(teamId)
         && request.resource.size < 4096 * 1024 * 1024;
-      allow delete: if signedIn() && (adOfTeam(teamId) || isCoachOf(teamId) || memberRole(teamId) == 'staff');
+      allow delete: if isManagerOf(teamId);
     }
 
     // Athlete paperwork: physicals, code-of-conduct returns, clearance letters.
@@ -150,11 +168,10 @@ service firebase.storage {
         ).data.guardianUserIds.hasAny([request.auth.uid]);
       }
 
-      function staffOfTeam() {
-        return signedIn() && (adOfTeam(teamId) || isCoachOf(teamId) || memberRole(teamId) == 'staff');
-      }
-
-      allow read: if staffOfTeam() || guardianOfEntry();
+      // Manager: one document. Guardian: one document. Neither branch can spend the
+      // other's budget, which is why the manager/guardian split is expressed as two
+      // single-lookup clauses rather than a chain of three.
+      allow read: if signedIn() && (isManagerOf(teamId) || guardianOfEntry());
 
       // The rules language has no ternary: one conjunction, so a write by anyone
       // outside these two groups is refused by the first clause alone.
@@ -170,19 +187,19 @@ service firebase.storage {
       // `create`, so this distinction cannot be probed locally. It has to be checked
       // against the deployed rules in Phase 4.3, with the versioned-document fix, which
       // is the part that actually makes a reviewed file immutable.
-      allow create: if (staffOfTeam() || guardianOfEntry())
+      allow create: if (isManagerOf(teamId) || guardianOfEntry())
         && request.resource.size < 10 * 1024 * 1024
         && (request.resource.contentType == 'application/pdf'
           || request.resource.contentType == 'image/jpeg'
           || request.resource.contentType == 'image/png');
 
-      allow update: if staffOfTeam()
+      allow update: if isManagerOf(teamId)
         && request.resource.size < 10 * 1024 * 1024
         && (request.resource.contentType == 'application/pdf'
           || request.resource.contentType == 'image/jpeg'
           || request.resource.contentType == 'image/png');
 
-      allow delete: if staffOfTeam() || guardianOfEntry();
+      allow delete: if signedIn() && (isManagerOf(teamId) || guardianOfEntry());
     }
 
     // Everything else is closed.

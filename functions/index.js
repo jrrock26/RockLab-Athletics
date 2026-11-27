@@ -11,6 +11,7 @@ const {
   acceptanceBlocker,
   DEFAULT_TTL_DAYS,
 } = require('./invitations');
+const { computeManagers } = require('./teamManagers');
 const {
   makeClaimCode,
   normalizeClaimCode,
@@ -714,6 +715,75 @@ exports.onTeamCreated = functions.firestore.document('teams/{teamId}').onCreate(
   console.log(`[chats] seeded default channels for team ${teamId}`);
   return null;
 });
+
+/// Rebuilds `teams/{teamId}.managerUserIds` from authoritative relationships.
+///
+/// Derived, never authored: `teams.schoolId` names the owning school,
+/// `schools/{schoolId}.adUserId` names its AD, and `teams/{teamId}/members/{uid}.role`
+/// names coaches and staff. A team with no schoolId, or one naming a school that does
+/// not exist, gets an empty index — ownership is never inferred.
+///
+/// Returns without writing when the derived list already matches, which is what stops
+/// the write in this function from re-triggering it forever.
+async function rebuildTeamManagers(teamId) {
+  const db = admin.firestore();
+  const teamRef = db.collection('teams').doc(teamId);
+  const teamSnap = await teamRef.get();
+  if (!teamSnap.exists) return null;
+
+  const team = teamSnap.data() || {};
+  const schoolId = typeof team.schoolId === 'string' ? team.schoolId : '';
+  const schoolSnap = schoolId ? await db.collection('schools').doc(schoolId).get() : null;
+  const membersSnap = await teamRef.collection('members').get();
+  const members = membersSnap.docs.map((d) => ({ id: d.id, role: d.get('role') }));
+
+  const { managerUserIds, warnings } = computeManagers({
+    team,
+    school: schoolSnap && schoolSnap.exists ? schoolSnap.data() : null,
+    members,
+  });
+
+  const current = Array.isArray(team.managerUserIds) ? team.managerUserIds : [];
+  const same = current.length === managerUserIds.length
+    && current.every((v, i) => v === managerUserIds[i]);
+
+  if (!same) {
+    await teamRef.set({ managerUserIds }, { merge: true });
+    console.log(`[teamManagers] ${teamId}: ${managerUserIds.length} manager(s)`);
+  }
+  if (warnings.length) console.warn(`[teamManagers] ${teamId}: ${warnings.join('; ')}`);
+  return { teamId, managerUserIds, warnings };
+}
+
+/// Any change to the team document itself: creation, head coach, school reassignment,
+/// deletion of the school reference. Covers new teams and transfers in one place.
+exports.syncTeamManagers = functions.firestore.document('teams/{teamId}').onWrite(async (change, context) => {
+  await rebuildTeamManagers(context.params.teamId);
+  return null;
+});
+
+/// Any change to a membership row: coach invited and accepted, staff added, coach
+/// removed. A removal rebuilds the list without that uid, so stale access cannot survive.
+exports.syncTeamManagersOnMembership = functions.firestore
+  .document('teams/{teamId}/members/{memberId}')
+  .onWrite(async (change, context) => {
+    await rebuildTeamManagers(context.params.teamId);
+    return null;
+  });
+
+/// A school's AD changing re-derives every team that school owns, so the outgoing AD
+/// loses Storage standing on all of them and the incoming AD gains it.
+exports.syncTeamManagersOnSchool = functions.firestore
+  .document('schools/{schoolId}')
+  .onWrite(async (change, context) => {
+    const schoolId = context.params.schoolId;
+    const db = admin.firestore();
+    const teams = await db.collection('teams').where('schoolId', '==', schoolId).get();
+    for (const doc of teams.docs) {
+      await rebuildTeamManagers(doc.id);
+    }
+    return null;
+  });
 
 // One-off reset: delete ALL Auth accounts + their Firestore user docs.
 

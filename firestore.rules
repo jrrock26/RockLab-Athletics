@@ -417,8 +417,16 @@ service cloud.firestore {
 
     match /teams/{teamId} {
       allow read: if signedIn();
-      allow create: if signedIn() && isAdOf(request.resource.data.get('schoolId', ''));
-      allow update: if canManageTeam(teamId);
+      // `managerUserIds` is the Storage authorization index. It is written only by the
+      // teamManagers Cloud Functions, which derive it from schools.adUserId and the
+      // team's coach/staff membership rows. A client that could write it could grant
+      // itself every file in the team's media, film and paperwork folders, so the field
+      // is refused on create and immutable on update.
+      allow create: if signedIn()
+        && isAdOf(request.resource.data.get('schoolId', ''))
+        && !('managerUserIds' in request.resource.data);
+      allow update: if canManageTeam(teamId)
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['managerUserIds']);
       // Deleting a team removes its whole season of data, so it stays with the AD
       // who owns that school — not any AD in the district.
       allow delete: if isAdOf(resource.data.get('schoolId', ''));
