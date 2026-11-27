@@ -86,17 +86,23 @@ describe('computeManagers — derivation', () => {
     assert.deepEqual(managerUserIds, ['adB', 'coachA']);
   });
 
-  test('a team with no schoolId gets no AD and says why', () => {
+  test('a team with no schoolId gets NO managers at all — membership cannot confer standing', () => {
+    // Manager standing is a school relationship. A coach holding a membership row on a team
+    // nobody owns must not become a manager: that would hand them the team's media without
+    // any school having decided who owns it. This is the fail-closed rule the production
+    // backfill relies on to leave ownerless teams untouched.
     const { managerUserIds, warnings } = computeManagers({
-      team: {}, school: null, members: [{ id: 'coachA', role: 'coach' }],
+      team: {}, school: null,
+      members: [{ id: 'coachA', role: 'coach' }, { id: 'staffB', role: 'staff' }],
     });
-    assert.deepEqual(managerUserIds, ['coachA']);
+    assert.deepEqual(managerUserIds, []);
     assert.match(warnings.join(' '), /no schoolId/);
   });
 
-  test('a team naming a school that does not exist gets no AD', () => {
+  test('a team naming a school that does not exist gets no managers, even with a coach row', () => {
     const { managerUserIds, warnings } = computeManagers({
-      team: team('schoolGhost'), school: null, members: [],
+      team: team('schoolGhost'), school: null,
+      members: [{ id: 'coachA', role: 'coach' }],
     });
     assert.deepEqual(managerUserIds, []);
     assert.match(warnings.join(' '), /does not exist/);

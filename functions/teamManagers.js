@@ -39,11 +39,19 @@ function computeManagers({ team, school, members }) {
   const managers = new Set();
 
   const schoolId = team && typeof team.schoolId === 'string' ? team.schoolId : '';
+  // FAIL CLOSED on ownership. Manager standing is a SCHOOL relationship: a team that no
+  // school owns has no managers, full stop. Membership alone must never manufacture it,
+  // because then a coach could hold a team's media without any school ever owning the team
+  // — and the index would say "managed" for a team whose ownership nobody has decided.
   if (!schoolId) {
-    warnings.push('team has no schoolId: no AD can be resolved, index stays empty');
-  } else if (!school) {
-    warnings.push(`team names school ${schoolId} which does not exist: no AD can be resolved`);
-  } else {
+    warnings.push('team has no schoolId: no manager standing is derived, index stays empty');
+    return { managerUserIds: [], warnings, failClosed: true };
+  }
+  if (!school) {
+    warnings.push(`team names school ${schoolId} which does not exist: index stays empty`);
+    return { managerUserIds: [], warnings, failClosed: true };
+  }
+  {
     const ad = school.adUserId;
     if (typeof ad === 'string' && ad !== '') {
       managers.add(ad);
