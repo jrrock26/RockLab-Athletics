@@ -35,13 +35,24 @@ const PROJECT = 'rocklab-athletics';
 const MANIFEST = path.join(__dirname, '..', '..', '.local-test-accounts.json');
 const EMAIL_DOMAIN = 'rocklab.test'; // reserved TLD: cannot receive mail by accident
 
-const IDS = { school: 'qa-school', team: 'qa-team', player: 'qa-player', entry: 'qa-entry' };
+const IDS = {
+  school: 'qa-school',
+  team: 'qa-team',
+  player: 'qa-player',
+  entry: 'qa-entry',
+  event: 'qa-event',
+  // A second school exists purely so the cross-school probe has a real counterparty:
+  // an AD who is genuinely an AD, genuinely of somewhere else.
+  school2: 'qa-school-2',
+  team2: 'qa-team-2',
+};
 
 const ACCOUNTS = [
   { key: 'ad', email: `qa-ad@${EMAIL_DOMAIN}`, role: 'ad', name: 'QA Athletic Director' },
   { key: 'coach', email: `qa-coach@${EMAIL_DOMAIN}`, role: 'coach', name: 'QA Head Coach' },
   { key: 'parent', email: `qa-parent@${EMAIL_DOMAIN}`, role: 'parent', name: 'QA Parent' },
   { key: 'athlete', email: `qa-athlete@${EMAIL_DOMAIN}`, role: 'player', name: 'QA Athlete' },
+  { key: 'ad2', email: `qa-ad2@${EMAIL_DOMAIN}`, role: 'ad', name: 'QA Athletic Director (Second School)' },
 ];
 
 const newPassword = () => crypto.randomBytes(24).toString('base64url');
@@ -71,6 +82,9 @@ async function assertNothingExists(db, auth) {
     ['teams', IDS.team],
     ['players', IDS.player],
     ['teams/' + IDS.team + '/roster', IDS.entry],
+    ['schools', IDS.school2],
+    ['teams', IDS.team2],
+    ['events', IDS.event],
   ];
   for (const [collection, id] of checks) {
     const snap = await db.doc(`${collection}/${id}`).get();
@@ -111,7 +125,7 @@ async function create() {
     passwords[account.key] = secret;
     uids[account.key] = user.uid;
   }
-  console.log('[qa] 4 auth accounts created');
+  console.log(`[qa] ${ACCOUNTS.length} auth accounts created`);
 
   // `${collection}/${id}` in creation order; cleanup walks it backwards.
   const docs = [];
@@ -144,6 +158,35 @@ async function create() {
     await write(`teams/${IDS.team}/members/${uids[key]}`, { role, userId: uids[key] });
   }
 
+  await write(`schools/${IDS.school2}`, {
+    name: 'QA Second School',
+    mascot: 'QA2',
+    adUserId: uids.ad2,
+    sports: ['basketball'],
+    isQaFixture: true,
+  });
+
+  await write(`teams/${IDS.team2}`, {
+    name: 'QA Second School Basketball',
+    sportId: 'basketball',
+    sportName: 'Basketball',
+    level: 'Varsity',
+    season: '2026-27',
+    gender: 'Boys',
+    schoolId: IDS.school2,
+    isQaFixture: true,
+  });
+
+  // One event, so a parent RSVP has something real to answer.
+  await write(`events/${IDS.event}`, {
+    teamId: IDS.team,
+    type: 'game',
+    title: 'QA Scrimmage',
+    opponent: 'QA Second School',
+    isHome: true,
+    isQaFixture: true,
+  });
+
   await write(`teams/${IDS.team}/roster/${IDS.entry}`, {
     firstName: 'Quinn',
     lastName: 'Athlete',
@@ -174,6 +217,7 @@ async function create() {
     coach: { role: 'coach', schoolId: IDS.school, teamIds: [IDS.team] },
     parent: { role: 'parent', schoolId: IDS.school, linkedPlayerIds: [IDS.player], teamIds: [IDS.team] },
     athlete: { role: 'player', schoolId: IDS.school, teamIds: [IDS.team] },
+    ad2: { role: 'ad', schoolId: IDS.school2 },
   };
   for (const account of ACCOUNTS) {
     await write(`users/${uids[account.key]}`, {
@@ -198,6 +242,7 @@ async function create() {
   console.log(`     Coach   ${uids.coach}  head coach of teams/${IDS.team}`);
   console.log(`     Parent  ${uids.parent}  guardian of roster/${IDS.entry} + players/${IDS.player}`);
   console.log(`     Athlete ${uids.athlete}  userId on roster/${IDS.entry}`);
+  console.log(`     AD #2   ${uids.ad2}  owns schools/${IDS.school2} (the intruder for the probe)`);
   console.log(`[qa] credentials written to ${path.basename(MANIFEST)} (mode 0600, gitignored). Not printed here.`);
 }
 
