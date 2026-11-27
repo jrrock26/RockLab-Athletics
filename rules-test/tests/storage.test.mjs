@@ -45,8 +45,10 @@ describe('athlete paperwork in Storage', () => {
     await assertFails(getBytes(ref(storage(undefined), documentsPath(ENTRY_KID_A))));
   });
 
-  test('a guardian uploads paperwork for their own child', async () => {
-    await assertSucceeds(uploadBytes(
+  test('a guardian cannot upload directly any more', async () => {
+    // Guardians now upload through createPaperworkUpload, which signs a create-only URL.
+    // A direct SDK write is refused so the precondition cannot be bypassed.
+    await assertFails(uploadBytes(
       ref(storage('guardianA'), documentsPath(ENTRY_KID_A, 'clearance.png')),
       new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
       { contentType: 'image/png' },

@@ -716,6 +716,103 @@ exports.onTeamCreated = functions.firestore.document('teams/{teamId}').onCreate(
   return null;
 });
 
+/// Issues a short-lived, single-use upload authorization for athlete paperwork.
+///
+/// WHY THIS EXISTS: Cloud Storage rules cannot distinguish "create" from "overwrite" on
+/// the client upload path -- an `uploadType=media` POST is evaluated against `create`
+/// even when the object already exists, which was measured on the staging bucket. So the
+/// rules can allow a family to add a document but cannot stop them replacing one.
+///
+/// This callable closes that hole by moving the decision to the server and enforcing it
+/// with a GCS generation precondition:
+///
+///   * the caller must be authenticated (context.auth)
+///   * the roster entry must name the caller in `guardianUserIds` (the same server-written
+///     field the Storage rules trust) or the caller must manage the team
+///   * the object path is CONSTRUCTED here, never accepted from the caller
+///   * content type and size are bounded, and echoed into the signed request
+///   * the signature expires in five minutes and carries
+///     `x-goog-if-generation-match: 0`, so the upload can only create a NEW object
+///
+/// A replay, or a second authorization for the same path, fails with 412 Precondition
+/// Failed. Immutability is therefore enforced by GCS, not by a bearer URL.
+const PAPERWORK_MAX_BYTES = 10 * 1024 * 1024;
+const PAPERWORK_TYPES = ['application/pdf', 'image/jpeg', 'image/png'];
+const PAPERWORK_TTL_MS = 5 * 60 * 1000;
+
+exports.createPaperworkUpload = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Sign in to upload paperwork.');
+  }
+  const uid = context.auth.uid;
+  const db = admin.firestore();
+
+  const teamId = typeof data.teamId === 'string' ? data.teamId.trim() : '';
+  const entryId = typeof data.entryId === 'string' ? data.entryId.trim() : '';
+  const fileName = typeof data.fileName === 'string' ? data.fileName.trim() : '';
+  const contentType = typeof data.contentType === 'string' ? data.contentType.trim() : '';
+  const sizeBytes = Number(data.sizeBytes);
+
+  // Identifiers become path segments, so they are validated as identifiers.
+  const safeId = /^[A-Za-z0-9_-]{1,128}$/;
+  if (!safeId.test(teamId) || !safeId.test(entryId)) {
+    throw new functions.https.HttpsError('invalid-argument', 'Unknown team or roster entry.');
+  }
+  if (!/^[A-Za-z0-9 ._-]{1,80}\.(pdf|jpg|jpeg|png)$/i.test(fileName) || fileName.includes('..')) {
+    throw new functions.https.HttpsError('invalid-argument', 'Invalid file name.');
+  }
+  if (!PAPERWORK_TYPES.includes(contentType)) {
+    throw new functions.https.HttpsError('invalid-argument', 'Only PDF, JPEG or PNG paperwork is accepted.');
+  }
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0 || sizeBytes > PAPERWORK_MAX_BYTES) {
+    throw new functions.https.HttpsError('invalid-argument', 'Paperwork must be 10 MB or smaller.');
+  }
+
+  const teamSnap = await db.collection('teams').doc(teamId).get();
+  const entrySnap = await teamSnap.ref.collection('roster').doc(entryId).get();
+  if (!teamSnap.exists || !entrySnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Unknown team or roster entry.');
+  }
+
+  const guardians = entrySnap.get('guardianUserIds');
+  const isGuardian = Array.isArray(guardians) && guardians.includes(uid);
+  const isManager = Array.isArray(teamSnap.get('managerUserIds'))
+    && teamSnap.get('managerUserIds').includes(uid);
+  if (!isGuardian && !isManager) {
+    throw new functions.https.HttpsError('permission-denied', 'This athlete is not yours to upload for.');
+  }
+
+  const objectPath = `teams/${teamId}/roster/${entryId}/documents/${fileName}`;
+  const bucketName = process.env.STORAGE_BUCKET
+    || `${process.env.GCLOUD_PROJECT}.firebasestorage.app`;
+
+  const [uploadUrl] = await admin.storage().bucket(bucketName).file(objectPath).getSignedUrl({
+    version: 'v4',
+    action: 'write',
+    expires: Date.now() + PAPERWORK_TTL_MS,
+    contentType,
+    extensionHeaders: { 'x-goog-if-generation-match': '0' },
+  });
+
+  // Audit trail: who was authorized, for what, and until when. The upload itself is
+  // performed by GCS, so this record is the only server-side trace of the grant.
+  await db.collection('auditLogs').add({
+    schoolId: typeof teamSnap.get('schoolId') === 'string' ? teamSnap.get('schoolId') : '',
+    teamId, entryId, objectPath, action: 'paperwork.uploadAuthorized',
+    actorUserId: uid, contentType, sizeBytes,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return {
+    uploadUrl,
+    objectPath,
+    expiresAt: Date.now() + PAPERWORK_TTL_MS,
+    maxBytes: PAPERWORK_MAX_BYTES,
+    contentType,
+    generationPrecondition: 'ifGenerationMatch=0',
+  };
+});
+
 /// Rebuilds `teams/{teamId}.managerUserIds` from authoritative relationships.
 ///
 /// Derived, never authored: `teams.schoolId` names the owning school,

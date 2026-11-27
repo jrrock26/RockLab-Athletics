@@ -52,7 +52,9 @@ describe('cross-school isolation in Storage', () => {
 
   test('team members keep their own access', async () => {
     await assertSucceeds(upload('coachA', `teams/${TEAM_A}/media/practice.png`));
-    await assertSucceeds(upload('guardianA', `teams/${TEAM_A}/roster/${ENTRY_KID_A}/documents/clearance.png`));
+    // Direct guardian uploads were removed with the create-only workflow; the guardian
+    // keeps read standing, which the paperwork suite asserts.
+    await assertFails(upload('guardianA', `teams/${TEAM_A}/roster/${ENTRY_KID_A}/documents/clearance.png`));
     await assertFails(upload('followerX', `teams/${TEAM_A}/media/follower.png`));
   });
 });

@@ -187,7 +187,11 @@ service firebase.storage {
       // `create`, so this distinction cannot be probed locally. It has to be checked
       // against the deployed rules in Phase 4.3, with the versioned-document fix, which
       // is the part that actually makes a reviewed file immutable.
-      allow create: if (isManagerOf(teamId) || guardianOfEntry())
+      // Guardians do NOT upload directly any more. Their path is the
+      // createPaperworkUpload callable, which signs a single-use URL carrying
+      // `x-goog-if-generation-match: 0`; only GCS can enforce create-only, and these
+      // rules cannot tell an overwrite from a create (measured on this bucket).
+      allow create: if isManagerOf(teamId)
         && request.resource.size < 10 * 1024 * 1024
         && (request.resource.contentType == 'application/pdf'
           || request.resource.contentType == 'image/jpeg'

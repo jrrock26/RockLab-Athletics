@@ -115,10 +115,16 @@ async function main() {
 
   // --- Athlete paperwork: the create/update split
   const paper = `teams/qa-team/roster/qa-entry/documents/p-${s}.pdf`;
-  log('paperwork', 'guardian CREATE own child paperwork', await upload(t.parent, bucket, paper, 'first', pdf), 200);
-  log('paperwork', 'guardian UPDATE same paperwork denied', await upload(t.parent, bucket, paper, 'second', pdf), 403);
+  // Guardians no longer upload directly: the route is createPaperworkUpload, which signs
+  // a create-only URL. A direct upload is therefore expected to be refused, and the
+  // positive case lives in staging-uploads.mjs (16 assertions).
+  log('paperwork', 'guardian direct create is refused (workflow moved)', await upload(t.parent, bucket, paper, 'first', pdf), 403);
+  log('paperwork', 'guardian overwrite is refused', await upload(t.parent, bucket, paper, 'second', pdf), 403);
   log('paperwork', 'guardian create for another family denied', await upload(t.parent, bucket, `teams/qa-team/roster/qa-entry-other/documents/x-${s}.pdf`, 'a', pdf), 403);
   log('paperwork', 'guardian read another family denied', await read(t.parent, bucket, `teams/qa-team/roster/qa-entry-other/documents/x-${s}.pdf`), 403);
+  // A manager creates the document (managers still upload directly); the coach then
+  // reads an object that exists, so a 404 cannot be mistaken for a denial.
+  log('paperwork', 'manager creates paperwork', await upload(t.ad, bucket, paper, 'by-ad', pdf), 200);
   log('paperwork', 'coach reads paperwork', await read(t.coach, bucket, paper), 200);
   log('paperwork', 'coach UPDATE paperwork allowed', await upload(t.coach, bucket, paper, 'third', pdf), 200);
   log('paperwork', 'athlete reads own paperwork denied', await read(t.athlete, bucket, paper), 403);

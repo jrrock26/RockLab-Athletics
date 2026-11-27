@@ -61,30 +61,26 @@ describe('Storage: guardian branch (one roster document)', () => {
   const putPdf = (uid, path, body = PDF) =>
     uploadBytes(ref(storage(uid), path), body, { contentType: 'application/pdf' });
 
-  test('guardian creates paperwork for their own child', async () => {
-    await assertSucceeds(putPdf('guardianA', paper(ENTRY_KID_A)));
+  test('a manager creates paperwork for both families', async () => {
+    await assertSucceeds(putPdf('coachA', paper(ENTRY_KID_A)));
+    await assertSucceeds(putPdf('coachA', paper(ENTRY_KID_B)));
   });
 
-  test('guardian reads it back', async () => {
+  test('a guardian cannot create directly, by design', async () => {
+    await assertFails(putPdf('guardianA', paper(ENTRY_KID_A, 'own.pdf')));
+  });
+
+  test('guardian reads their own child and not another family', async () => {
     await assertSucceeds(getBytes(ref(storage('guardianA'), paper(ENTRY_KID_A))));
-    // The overwrite case CANNOT be asserted here: the Storage emulator evaluates every
-    // upload as `create`, including one that replaces an existing object. That is the
-    // whole reason rules-test/scripts/storage-create-vs-update.mjs exists and why the
-    // real-bucket matrix is the authority on `allow update`.
-  });
-
-  test('guardian cannot reach another family, on read or write', async () => {
-    await assertSucceeds(putPdf('guardianB', paper(ENTRY_KID_B)));
     await assertFails(getBytes(ref(storage('guardianA'), paper(ENTRY_KID_B))));
-    await assertFails(putPdf('guardianA', paper(ENTRY_KID_B)));
   });
 
-  test('athlete cannot read or write their own paperwork', async () => {
+  test('athlete cannot read or write paperwork', async () => {
     await assertFails(getBytes(ref(storage('kidA'), paper(ENTRY_KID_A))));
     await assertFails(putPdf('kidA', paper(ENTRY_KID_A, 'a.pdf')));
   });
 
-  test('manager can update paperwork the guardian created', async () => {
+  test('manager can update paperwork', async () => {
     await assertSucceeds(putPdf('coachA', paper(ENTRY_KID_A)));
   });
 
