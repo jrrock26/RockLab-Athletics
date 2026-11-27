@@ -27,7 +27,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const MANIFEST = path.join(ROOT, '.local-test-accounts.json');
+const MANIFEST = path.resolve(ROOT, (() => {
+  const i = process.argv.indexOf('--manifest');
+  return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : '.local-test-accounts.json';
+})());
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(name);
@@ -38,6 +41,12 @@ const PROJECT = 'rocklab-athletics';
 
 function apiKey() {
   if (process.env.FIREBASE_API_KEY) return process.env.FIREBASE_API_KEY;
+  // A staging manifest records the project's own web API key; use it before any .env,
+  // so a staging run can never pick up the production key by accident.
+  if (fs.existsSync(MANIFEST)) {
+    const m = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
+    if (m.project && m.project !== 'rocklab-athletics' && m.apiKey) return m.apiKey;
+  }
   for (const file of ['.env.local', '.env.production', '.env']) {
     const p = path.join(ROOT, 'web', file);
     if (!fs.existsSync(p)) continue;
@@ -64,7 +73,7 @@ async function upload(token, objectName, contents) {
     `https://firebasestorage.googleapis.com/v0/b/${BUCKET}/o?name=${encodeURIComponent(objectName)}&uploadType=media`,
     {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/pdf' },
       body: contents,
     },
   );
@@ -88,7 +97,7 @@ async function main() {
   console.log(`bucket: ${BUCKET}`);
   console.log('acting as: the QA guardian\n');
 
-  const objectName = `teams/qa-team/roster/qa-entry/documents/probe-${Date.now()}.txt`;
+  const objectName = `teams/qa-team/roster/qa-entry/documents/probe-${Date.now()}.pdf`;
 
   const created = await upload(token, objectName, 'first version');
   const createdOk = created === 200;
