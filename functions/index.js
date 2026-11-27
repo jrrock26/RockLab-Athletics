@@ -1,4 +1,5 @@
 const functions = require('firebase-functions');
+const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
@@ -716,102 +717,131 @@ exports.onTeamCreated = functions.firestore.document('teams/{teamId}').onCreate(
   return null;
 });
 
-/// Issues a short-lived, single-use upload authorization for athlete paperwork.
+/// Server-mediated athlete paperwork upload.
 ///
-/// WHY THIS EXISTS: Cloud Storage rules cannot distinguish "create" from "overwrite" on
-/// the client upload path -- an `uploadType=media` POST is evaluated against `create`
-/// even when the object already exists, which was measured on the staging bucket. So the
-/// rules can allow a family to add a document but cannot stop them replacing one.
+/// WHY THIS REPLACED THE SIGNED URL: a V4 signed URL is bearer — whoever holds it can use
+/// it within its lifetime, whatever account they are. This callable does the write itself,
+/// with the caller's identity established at upload time, so possession of anything
+/// (a URL, a stale grant, another user's token) is never sufficient.
 ///
-/// This callable closes that hole by moving the decision to the server and enforcing it
-/// with a GCS generation precondition:
+/// The transport is gen2 (Cloud Run), which accepts request bodies up to 32 MB, so the
+/// declared 10 MB ceiling survives base64 encoding (~13.4 MB on the wire). A gen1 callable
+/// caps requests at 10 MB and could not carry a 10 MB document.
 ///
-///   * the caller must be authenticated (context.auth)
-///   * the roster entry must name the caller in `guardianUserIds` (the same server-written
-///     field the Storage rules trust) or the caller must manage the team
-///   * the object path is CONSTRUCTED here, never accepted from the caller
-///   * content type and size are bounded, and echoed into the signed request
-///   * the signature expires in five minutes and carries
-///     `x-goog-if-generation-match: 0`, so the upload can only create a NEW object
-///
-/// A replay, or a second authorization for the same path, fails with 412 Precondition
-/// Failed. Immutability is therefore enforced by GCS, not by a bearer URL.
+/// Immutability comes from `ifGenerationMatch: 0` on the actual GCS write: the object can
+/// only be created, never replaced. A retry, a duplicate, or a concurrent request for the
+/// same path loses the race and is answered with 409 rather than overwriting.
 const PAPERWORK_MAX_BYTES = 10 * 1024 * 1024;
-const PAPERWORK_TYPES = ['application/pdf', 'image/jpeg', 'image/png'];
-const PAPERWORK_TTL_MS = 5 * 60 * 1000;
+const PAPERWORK_TYPES = {
+  'application/pdf': [0x25, 0x50, 0x44, 0x46],
+  'image/jpeg': [0xff, 0xd8, 0xff],
+  'image/png': [0x89, 0x50, 0x4e, 0x47],
+};
+const PAPERWORK_CATEGORIES = ['physical', 'clearance', 'consent', 'other'];
+const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
-exports.createPaperworkUpload = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'Sign in to upload paperwork.');
-  }
-  const uid = context.auth.uid;
-  const db = admin.firestore();
+function bucketName() {
+  return process.env.STORAGE_BUCKET || `${process.env.GCLOUD_PROJECT}.firebasestorage.app`;
+}
 
-  const teamId = typeof data.teamId === 'string' ? data.teamId.trim() : '';
-  const entryId = typeof data.entryId === 'string' ? data.entryId.trim() : '';
-  const fileName = typeof data.fileName === 'string' ? data.fileName.trim() : '';
-  const contentType = typeof data.contentType === 'string' ? data.contentType.trim() : '';
-  const sizeBytes = Number(data.sizeBytes);
+exports.uploadPaperwork = onCall(
+  { region: 'us-central1', memory: '512MiB', timeoutSeconds: 120, cors: true },
+  async (request) => {
+    const uid = request.auth && request.auth.uid;
+    if (!uid) throw new HttpsError('unauthenticated', 'Sign in to upload paperwork.');
 
-  // Identifiers become path segments, so they are validated as identifiers.
-  const safeId = /^[A-Za-z0-9_-]{1,128}$/;
-  if (!safeId.test(teamId) || !safeId.test(entryId)) {
-    throw new functions.https.HttpsError('invalid-argument', 'Unknown team or roster entry.');
-  }
-  if (!/^[A-Za-z0-9 ._-]{1,80}\.(pdf|jpg|jpeg|png)$/i.test(fileName) || fileName.includes('..')) {
-    throw new functions.https.HttpsError('invalid-argument', 'Invalid file name.');
-  }
-  if (!PAPERWORK_TYPES.includes(contentType)) {
-    throw new functions.https.HttpsError('invalid-argument', 'Only PDF, JPEG or PNG paperwork is accepted.');
-  }
-  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0 || sizeBytes > PAPERWORK_MAX_BYTES) {
-    throw new functions.https.HttpsError('invalid-argument', 'Paperwork must be 10 MB or smaller.');
-  }
+    const data = request.data || {};
+    const teamId = typeof data.teamId === 'string' ? data.teamId.trim() : '';
+    const entryId = typeof data.entryId === 'string' ? data.entryId.trim() : '';
+    const baseName = typeof data.fileName === 'string' ? data.fileName.trim() : '';
+    const contentType = typeof data.contentType === 'string' ? data.contentType.trim() : '';
+    const category = typeof data.category === 'string' ? data.category.trim() : 'other';
 
-  const teamSnap = await db.collection('teams').doc(teamId).get();
-  const entrySnap = await teamSnap.ref.collection('roster').doc(entryId).get();
-  if (!teamSnap.exists || !entrySnap.exists) {
-    throw new functions.https.HttpsError('not-found', 'Unknown team or roster entry.');
-  }
+    // The caller never supplies a path. Identifiers are validated, then the path is built.
+    if (!SAFE_ID.test(teamId) || !SAFE_ID.test(entryId)) {
+      throw new HttpsError('invalid-argument', 'Unknown team or roster entry.');
+    }
+    if (!/^[A-Za-z0-9 ._-]{1,80}\.(pdf|jpg|jpeg|png)$/i.test(baseName) || baseName.includes('..')) {
+      throw new HttpsError('invalid-argument', 'Invalid file name.');
+    }
+    if (!PAPERWORK_TYPES[contentType]) {
+      throw new HttpsError('invalid-argument', 'Only PDF, JPEG or PNG paperwork is accepted.');
+    }
+    if (!PAPERWORK_CATEGORIES.includes(category)) {
+      throw new HttpsError('invalid-argument', 'Unknown document category.');
+    }
+    if (typeof data.contentBase64 !== 'string' || data.contentBase64.length === 0) {
+      throw new HttpsError('invalid-argument', 'No document content supplied.');
+    }
 
-  const guardians = entrySnap.get('guardianUserIds');
-  const isGuardian = Array.isArray(guardians) && guardians.includes(uid);
-  const isManager = Array.isArray(teamSnap.get('managerUserIds'))
-    && teamSnap.get('managerUserIds').includes(uid);
-  if (!isGuardian && !isManager) {
-    throw new functions.https.HttpsError('permission-denied', 'This athlete is not yours to upload for.');
-  }
+    let bytes;
+    try {
+      bytes = Buffer.from(data.contentBase64, 'base64');
+    } catch (e) {
+      throw new HttpsError('invalid-argument', 'Content is not valid base64.');
+    }
+    if (bytes.length === 0 || bytes.length > PAPERWORK_MAX_BYTES) {
+      throw new HttpsError('invalid-argument', 'Paperwork must be between 1 byte and 10 MB.');
+    }
+    // The declared type must match the bytes: a renamed executable is not a PDF.
+    const magic = PAPERWORK_TYPES[contentType];
+    if (!magic.every((b, i) => bytes[i] === b)) {
+      throw new HttpsError('invalid-argument', 'File contents do not match the declared type.');
+    }
 
-  const objectPath = `teams/${teamId}/roster/${entryId}/documents/${fileName}`;
-  const bucketName = process.env.STORAGE_BUCKET
-    || `${process.env.GCLOUD_PROJECT}.firebasestorage.app`;
+    const db = admin.firestore();
+    const teamSnap = await db.collection('teams').doc(teamId).get();
+    if (!teamSnap.exists) throw new HttpsError('not-found', 'Unknown team.');
+    const entrySnap = await teamSnap.ref.collection('roster').doc(entryId).get();
+    if (!entrySnap.exists) throw new HttpsError('not-found', 'Unknown roster entry.');
 
-  const [uploadUrl] = await admin.storage().bucket(bucketName).file(objectPath).getSignedUrl({
-    version: 'v4',
-    action: 'write',
-    expires: Date.now() + PAPERWORK_TTL_MS,
-    contentType,
-    extensionHeaders: { 'x-goog-if-generation-match': '0' },
-  });
+    const guardians = entrySnap.get('guardianUserIds');
+    const managers = teamSnap.get('managerUserIds');
+    const isGuardian = Array.isArray(guardians) && guardians.includes(uid);
+    const isManager = Array.isArray(managers) && managers.includes(uid);
+    if (!isGuardian && !isManager) {
+      throw new HttpsError('permission-denied', 'This athlete is not yours to upload for.');
+    }
 
-  // Audit trail: who was authorized, for what, and until when. The upload itself is
-  // performed by GCS, so this record is the only server-side trace of the grant.
-  await db.collection('auditLogs').add({
-    schoolId: typeof teamSnap.get('schoolId') === 'string' ? teamSnap.get('schoolId') : '',
-    teamId, entryId, objectPath, action: 'paperwork.uploadAuthorized',
-    actorUserId: uid, contentType, sizeBytes,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
+    const objectPath = `teams/${teamId}/roster/${entryId}/documents/${baseName}`;
+    const file = admin.storage().bucket(bucketName()).file(objectPath);
 
-  return {
-    uploadUrl,
-    objectPath,
-    expiresAt: Date.now() + PAPERWORK_TTL_MS,
-    maxBytes: PAPERWORK_MAX_BYTES,
-    contentType,
-    generationPrecondition: 'ifGenerationMatch=0',
-  };
-});
+    let generation;
+    try {
+      const [saved] = await file.save(bytes, {
+        resumable: false,
+        contentType,
+        preconditionOpts: { ifGenerationMatch: 0 },
+        metadata: {
+          metadata: { uploadedBy: uid, teamId, rosterEntryId: entryId, category },
+        },
+      });
+      generation = String(saved.generation || '1');
+    } catch (err) {
+      const code = err && (err.code === 412 || err.status === 412 || /412/.test(String(err.message)));
+      if (code) {
+        await db.collection('auditLogs').add({
+          schoolId: typeof teamSnap.get('schoolId') === 'string' ? teamSnap.get('schoolId') : '',
+          teamId, entryId, objectPath, category, action: 'paperwork.upload',
+          actorUserId: uid, contentType, sizeBytes: bytes.length, result: 'rejected-exists',
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        throw new HttpsError('already-exists', 'This document already exists. Upload a new version.');
+      }
+      throw new HttpsError('internal', 'Upload failed.');
+    }
+
+    await db.collection('auditLogs').add({
+      schoolId: typeof teamSnap.get('schoolId') === 'string' ? teamSnap.get('schoolId') : '',
+      teamId, entryId, objectPath, category, action: 'paperwork.upload',
+      actorUserId: uid, contentType, sizeBytes: bytes.length,
+      generation, result: 'created',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return { objectPath, generation, sizeBytes: bytes.length, contentType, category };
+  },
+);
 
 /// Rebuilds `teams/{teamId}.managerUserIds` from authoritative relationships.
 ///
@@ -1231,6 +1261,20 @@ exports.acceptAdTransfer = functions.https.onCall(async (data, context) => {
     if (!schoolSnap.exists) {
       throw new functions.https.HttpsError('not-found', 'School not found.');
     }
+
+    // Every team this school owns, read HERE because Firestore transactions require all
+    // reads before any write. The manager index is rewritten in this same transaction,
+    // so the outgoing AD's Storage standing ends at commit — not when a trigger happens
+    // to fire later. The trigger remains as reconciliation if this ever fails.
+    const teamsOfSchool = await tx.get(
+      db.collection('teams').where('schoolId', '==', inv.schoolId),
+    );
+    const pendingManagers = teamsOfSchool.docs.map((t) => {
+      const current = Array.isArray(t.get('managerUserIds')) ? t.get('managerUserIds') : [];
+      const next = current.filter((u) => u !== inv.invitedBy);
+      if (!next.includes(callerId)) next.push(callerId);
+      return { ref: t.ref, managers: next.sort() };
+    });
     // If the role already moved, this invite is stale. Accepting it would let an
     // old invitation take a school from whoever holds it now.
     const sittingAd = schoolSnap.get('adUserId');
@@ -1253,6 +1297,11 @@ exports.acceptAdTransfer = functions.https.onCall(async (data, context) => {
     // so someone who stepped down from AD but still coaches keeps coaching. Only
     // the organisation-wide powers go.
     tx.set(db.collection('users').doc(sittingAd), { role: 'follower' }, { merge: true });
+
+    // Same commit, same transaction: the index changes with the source records or not at all.
+    for (const pending of pendingManagers) {
+      tx.set(pending.ref, { managerUserIds: pending.managers }, { merge: true });
+    }
 
     tx.set(invRef, {
       status: 'accepted',

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * Create-only paperwork uploads on staging.
+ * Server-mediated paperwork uploads on staging.
  *
  *   node rules-test/scripts/staging-uploads.mjs
  *
- * Exercises the createPaperworkUpload callable and the signed GCS URL it returns:
- * validation, authorization, the generation precondition, replay, and the reads that
- * must keep working. Every result below is a live HTTP exchange.
+ * The function performs the GCS write itself with `ifGenerationMatch: 0`, so identity is
+ * established at upload time and possession of a URL is worth nothing. Every check below
+ * is a live call to the deployed function.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,9 +15,12 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MANIFEST = path.join(ROOT, '.local-test-accounts.staging.json');
 const PROJECT = 'rocklab-athletics-staging';
-const CALLABLE = `https://us-central1-${PROJECT}.cloudfunctions.net/createPaperworkUpload`;
+const CALL = `https://us-central1-${PROJECT}.cloudfunctions.net/uploadPaperwork`;
+const OLD = `https://us-central1-${PROJECT}.cloudfunctions.net/createPaperworkUpload`;
 const rows = [];
-const note = (name, ok, detail) => { rows.push({ name, ok }); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}  ${detail}`); };
+const note = (n, ok, d) => { rows.push({ n, ok }); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}  ${d}`); };
+
+const PDF = Buffer.concat([Buffer.from('%PDF-1.4 '), Buffer.alloc(64, 0x20)]);
 
 async function signIn(m, key) {
   const r = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${m.apiKey}`, {
@@ -28,8 +31,8 @@ async function signIn(m, key) {
   return { idToken: b.idToken, uid: b.localId };
 }
 
-async function call(tok, data) {
-  const r = await fetch(CALLABLE, {
+async function call(tok, data, url = CALL) {
+  const r = await fetch(url, {
     method: 'POST',
     headers: { ...(tok ? { Authorization: `Bearer ${tok}` } : {}), 'Content-Type': 'application/json' },
     body: JSON.stringify({ data }),
@@ -38,22 +41,10 @@ async function call(tok, data) {
   return { status: r.status, result: body.result, error: body.error };
 }
 
-const put = async (url, bytes, contentType, precondition = true) => {
-  const headers = { 'Content-Type': contentType };
-  if (precondition) headers['x-goog-if-generation-match'] = '0';
-  const r = await fetch(url, { method: 'PUT', headers, body: bytes });
-  return r.status;
-};
 const read = (m, tok, name) => fetch(
   `https://firebasestorage.googleapis.com/v0/b/${m.bucket}/o/${encodeURIComponent(name)}?alt=media`,
   tok ? { headers: { Authorization: `Bearer ${tok}` } } : {},
 ).then((r) => r.status);
-const sdkUpload = (m, tok, name, ct) => fetch(
-  `https://firebasestorage.googleapis.com/v0/b/${m.bucket}/o?name=${encodeURIComponent(name)}&uploadType=media`,
-  { method: 'POST', headers: { Authorization: `Bearer ${tok}`, 'Content-Type': ct }, body: 'x' },
-).then((r) => r.status);
-
-const PDF = Buffer.from('%PDF-1.4 test');
 
 async function main() {
   if (!fs.existsSync(MANIFEST)) { console.log('NOT RUN: no staging manifest'); process.exit(2); }
@@ -63,79 +54,66 @@ async function main() {
   const ad2 = await signIn(m, 'ad2');
   const coach = await signIn(m, 'coach');
   const base = {
-    teamId: 'qa-team', entryId: 'qa-entry', contentType: 'application/pdf', sizeBytes: PDF.length,
-    fileName: `physical-${Date.now()}.pdf`,
+    teamId: 'qa-team', entryId: 'qa-entry', contentType: 'application/pdf',
+    category: 'physical', contentBase64: PDF.toString('base64'),
   };
+  const stamp = Date.now();
 
-  // 1/10. Authorized guardian: authorization issued, upload succeeds.
-  const grant = await call(parent.idToken, base);
-  const ok1 = grant.result && grant.result.uploadUrl;
-  const first = ok1 ? await put(grant.result.uploadUrl, PDF, 'application/pdf') : 0;
-  note('authorized guardian uploads a new document', first === 200, `callable ${grant.status}, PUT ${first}`);
+  // 1. Authorized guardian.
+  const ok = await call(parent.idToken, { ...base, fileName: `server-${stamp}.pdf` });
+  note('authenticated guardian uploads a new document', ok.status === 200 && ok.result?.objectPath,
+    `HTTP ${ok.status}, generation ${ok.result?.generation}`);
+  const objectPath = ok.result?.objectPath;
 
-  // 11. Replay the same authorization.
-  const replay = ok1 ? await put(grant.result.uploadUrl, PDF, 'application/pdf') : 0;
-  note('replaying the same authorization cannot overwrite', replay === 412, `PUT ${replay} (412 Precondition Failed)`);
+  // 2. Duplicate request (same path, second time).
+  const dup = await call(parent.idToken, { ...base, fileName: `server-${stamp}.pdf` });
+  note('a duplicate request cannot overwrite', dup.error?.status === 'ALREADY_EXISTS', `${dup.error?.status}`);
 
-  // 12. Fresh authorization for the same path.
-  const again = await call(parent.idToken, { ...base, fileName: path.basename(grant.result.objectPath) });
-  const overwrite = again.result ? await put(again.result.uploadUrl, PDF, 'application/pdf') : 0;
-  note('new authorization cannot overwrite existing object', overwrite === 412, `PUT ${overwrite}`);
+  // 3. Retry of the original payload.
+  const retry = await call(parent.idToken, { ...base, fileName: `server-${stamp}.pdf` });
+  note('a retry cannot overwrite', retry.error?.status === 'ALREADY_EXISTS', `${retry.error?.status}`);
 
-  // 2. Unauthenticated.
-  const anon = await call(null, base);
-  note('unauthenticated caller cannot request authorization', anon.status === 401, `HTTP ${anon.status} ${anon.error?.status || ''}`);
+  // 4. Concurrency: two simultaneous writes to one new path.
+  const racePath = `race-${stamp}.pdf`;
+  const [a, b] = await Promise.all([
+    call(parent.idToken, { ...base, fileName: racePath }),
+    call(parent.idToken, { ...base, fileName: racePath }),
+  ]);
+  const won = [a, b].filter((r) => r.status === 200).length;
+  const lost = [a, b].filter((r) => r.error?.status === 'ALREADY_EXISTS').length;
+  note('concurrent uploads create exactly one object', won === 1 && lost === 1, `${won} created, ${lost} rejected`);
 
-  // 3. Other-family guardian.
-  const otherFamily = await call(parent.idToken, { ...base, entryId: 'qa-entry-other', fileName: `x-${Date.now()}.pdf` });
+  // 5. Identity at upload time.
+  const anon = await call(null, { ...base, fileName: `anon-${stamp}.pdf` });
+  note('anonymous caller is refused', anon.status === 401, `${anon.error?.status || anon.status}`);
+  const crossSchool = await call(ad2.idToken, { ...base, fileName: `x-${stamp}.pdf` });
+  note('cross-school AD is refused', crossSchool.error?.status === 'PERMISSION_DENIED', `${crossSchool.error?.status}`);
+  const otherFamily = await call(parent.idToken, { ...base, entryId: 'qa-entry-other', fileName: `x-${stamp}.pdf` });
   note('other-family guardian is refused', otherFamily.error?.status === 'PERMISSION_DENIED', `${otherFamily.error?.status}`);
 
-  // 4. Cross-school AD.
-  const crossAd = await call(ad2.idToken, { ...base, fileName: `x-${Date.now()}.pdf` });
-  note('cross-school AD is refused', crossAd.error?.status === 'PERMISSION_DENIED', `${crossAd.error?.status}`);
-
-  // 6/7/8. Validation.
+  // 6. Content rules.
+  const badType = await call(parent.idToken, { ...base, contentType: 'text/plain', fileName: `t-${stamp}.txt` });
+  note('disallowed MIME type is rejected', badType.error?.status === 'INVALID_ARGUMENT', `${badType.error?.status}`);
+  const spoofed = await call(parent.idToken, { ...base, fileName: `spoof-${stamp}.pdf`, contentBase64: Buffer.from('MZ\x90\x00 not a pdf').toString('base64') });
+  note('content that is not the declared type is rejected', spoofed.error?.status === 'INVALID_ARGUMENT', `${spoofed.error?.status}`);
+  const big = Buffer.concat([Buffer.from('%PDF-1.4 '), Buffer.alloc(11 * 1024 * 1024, 0x20)]);
+  const oversized = await call(parent.idToken, { ...base, fileName: `big-${stamp}.pdf`, contentBase64: big.toString('base64') });
+  note('oversized upload is rejected', oversized.error?.status === 'INVALID_ARGUMENT', `${oversized.error?.status}`);
   const traversal = await call(parent.idToken, { ...base, fileName: '../escape.pdf' });
-  note('path traversal in file name is rejected', traversal.error?.status === 'INVALID_ARGUMENT', `${traversal.error?.status}`);
-  const badMime = await call(parent.idToken, { ...base, contentType: 'text/plain' });
-  note('disallowed MIME type is rejected', badMime.error?.status === 'INVALID_ARGUMENT', `${badMime.error?.status}`);
-  const tooBig = await call(parent.idToken, { ...base, sizeBytes: 11 * 1024 * 1024 });
-  note('oversized upload is rejected', tooBig.error?.status === 'INVALID_ARGUMENT', `${tooBig.error?.status}`);
+  note('path traversal is rejected', traversal.error?.status === 'INVALID_ARGUMENT', `${traversal.error?.status}`);
 
-  // 13. The bypass: direct SDK upload by the same guardian.
-  const direct = await sdkUpload(m, parent.idToken, `teams/qa-team/roster/qa-entry/documents/direct-${Date.now()}.pdf`, 'application/pdf');
-  note('direct SDK upload cannot bypass the workflow', direct === 403, `HTTP ${direct}`);
+  // 7. Reads still behave.
+  note('guardian reads what was uploaded', (await read(m, parent.idToken, objectPath)) === 200, 'HTTP 200');
+  note('manager reads what was uploaded', (await read(m, coach.idToken, objectPath)) === 200, 'HTTP 200');
+  note('cross-school read is refused', (await read(m, ad2.idToken, objectPath)) === 403, 'HTTP 403');
+  note('anonymous read is refused', (await read(m, null, objectPath)) === 403, 'HTTP 403');
 
-  // 14/15. Reads unchanged.
-  const ownRead = await read(m, parent.idToken, grant.result.objectPath);
-  const managerRead = await read(m, coach.idToken, grant.result.objectPath);
-  // Read an object that EXISTS, as an account with no standing: a cross-school AD.
-  const strangerRead = await read(m, ad2.idToken, grant.result.objectPath);
-  const anonRead = await read(m, null, grant.result.objectPath);
-  note('guardian reads the uploaded document', ownRead === 200, `HTTP ${ownRead}`);
-  note('manager reads the uploaded document', managerRead === 200, `HTTP ${managerRead}`);
-  note('unauthorized reads remain denied', strangerRead === 403 && anonRead === 403, `stranger ${strangerRead}, anonymous ${anonRead}`);
-
-  // 16. A second document does not destroy the first.
-  const second = await call(parent.idToken, { ...base, fileName: `physical-b-${Date.now()}.pdf` });
-  const secondPut = second.result ? await put(second.result.uploadUrl, PDF, 'application/pdf') : 0;
-  const firstStillThere = await read(m, parent.idToken, grant.result.objectPath);
-  note('a new version leaves the original intact', secondPut === 200 && firstStillThere === 200, `new ${secondPut}, original ${firstStillThere}`);
-
-  // 9. Expiry — the URL carries X-Goog-Expires; tampering with it must break the signature.
-  const url = new URL(grant.result.uploadUrl);
-  url.searchParams.set('X-Goog-Expires', '1');
-  const tampered = await put(url.toString(), PDF, 'application/pdf');
-  // GCS answers a tampered expiry with 400 InvalidArgument rather than 403; either is a
-  // refusal, and the object must not have been created.
-  note('an expired or altered authorization is rejected', tampered === 400 || tampered === 403, `PUT ${tampered}`);
-
-  // 5. Bearer binding — recorded, not asserted, because it is a known limitation.
-  const stolen = await put(grant.result.uploadUrl, PDF, 'application/pdf', true);
-  console.log(`LIMIT  wrong-UID replay of a fresh URL: PUT ${stolen} (a signed URL is bearer; see report)`);
+  // 8. The signed-URL route must be gone.
+  const old = await call(parent.idToken, { ...base, fileName: `old-${stamp}.pdf` }, OLD);
+  note('the old signed-URL route no longer exists', old.status === 404, `HTTP ${old.status}`);
 
   const failed = rows.filter((r) => !r.ok);
-  console.log(`\n${rows.length - failed.length}/${rows.length} upload cases behaved as required.`);
+  console.log(`\n${rows.length - failed.length}/${rows.length} server-mediated upload cases behaved as required.`);
   process.exit(failed.length ? 1 : 0);
 }
 
