@@ -30,7 +30,10 @@ const BASE = `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/
 
 // Single-request wrapper: GET with Bearer auth
 async function fetchDoc(path) {
-  const res = await fetch(`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents${path}?pageSize=500`, {
+  // Callers pass a bare collection name; BASE already ends in /documents. Joining
+  // without the slash produced `documentsteams`, which Firestore answers with a 404.
+  const clean = String(path).replace(/^\/+/, '');
+  const res = await fetch(`${BASE}/${clean}?pageSize=500`, {
     headers: { Authorization: `Bearer ${accessToken()}` },
   });
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
@@ -150,17 +153,9 @@ async function main() {
   }
 }
 
-// Fetch from Firestore REST API
-async function fetch(path, options = {}) {
-  const token = accessToken();
-  const init = {
-    headers: { Authorization: `Bearer ${token}`, ...(options.headers || {}) },
-    method: options.method || 'GET',
-  };
-  const res = await fetch(`https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents${path}`, init);
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-  return res.json();
-}
+// NOTE: a local helper named `fetch` used to live here and shadowed the global one,
+// so `fetchDoc` recursed into itself until the stack blew. Upload and patch both use
+// the global `fetch` directly now; keep it that way and do not re-introduce the name.
 
 // ---------- Run ----------
 main().catch((err) => { console.error('[team-schema] failed:', err && err.message ? err.message : err); process.exit(1); });
