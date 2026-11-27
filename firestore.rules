@@ -58,10 +58,12 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/schools/$(schoolId)).data.adUserId == uid();
     }
 
-    /// The caller's own school. Only for the narrow case where the question really is
-    /// "do I own the school I am attached to" -- onboarding creating that school.
-    /// Everywhere else use `isAdOf(the school the document names)`.
-    function isAd() { return isAdOf(mySchoolId()); }
+    // There is deliberately no `isAd()` here any more.
+    //
+    // It answered "am I AD of SOME school", and every rule that asked it about
+    // another document granted that AD access across district lines. Ownership is
+    // now always named: `isAdOf(teamSchool(teamId))`, `isAdOf(schoolId)` from the
+    // path, or `isAdOf(resource.data.schoolId)`. Do not reintroduce a bare predicate.
 
     /// The school that owns a team, or '' when no such team exists.
     ///
@@ -74,10 +76,19 @@ service cloud.firestore {
         ? get(/databases/$(database)/documents/teams/$(t)).data.get('schoolId', '')
         : '';
     }
+    /// The school that owns a player identity, or '' when there is no such player.
+    ///
+    /// Guardianship rows live under the player, not under a team, so their ownership
+    /// has to be resolved through that document rather than assumed from the caller.
+    function playerSchool(p) {
+      return p != '' && exists(/databases/$(database)/documents/players/$(p))
+        ? get(/databases/$(database)/documents/players/$(p)).data.get('schoolId', '')
+        : '';
+    }
     function isCoachOf(t) { return memberRole(t) == 'coach'; }
     function isStaffOf(t) { return memberRole(t) == 'staff'; }
     function isTeamMember(t) { return memberRole(t) in ['coach','staff','player','parent']; }
-    function canManageTeam(t) { return isAd() || isCoachOf(t); }
+    function canManageTeam(t) { return isAdOf(teamSchool(t)) || isCoachOf(t); }
     function staffHasPerm(t, p) {
       let m = membership(t);
       return m != null && m.role == 'staff' && 'permissions' in m && m.permissions.hasAny([p]);
@@ -163,17 +174,17 @@ service cloud.firestore {
     }
 
     function chatReadAllowed(type, t) {
-      return isAd()
+      return isAdOf(teamSchool(t))
         || (type == 'commBoard' && (isMemberRole(t) || memberRole(t) == 'follower'))
         || (type == 'team' && memberRole(t) in ['coach','staff','player'])
         || (type == 'parent' && memberRole(t) in ['coach','player','parent'])
-        || (type == 'staff' && (isAd() || isCoachOf(t) || staffHasPerm(t, 'staffChat')));
+        || (type == 'staff' && (isAdOf(teamSchool(t)) || isCoachOf(t) || staffHasPerm(t, 'staffChat')));
     }
 
     // Followers only see public comm-board categories (live game / gameday / fundraiser).
     function messageReadAllowed(type, t) {
       return type == 'commBoard'
-        ? (isAd()
+        ? (isAdOf(teamSchool(t))
             || isMemberRole(t)
             || (memberRole(t) == 'follower'
                 && 'category' in resource.data
@@ -181,11 +192,11 @@ service cloud.firestore {
         : chatReadAllowed(type, t);
     }
     function chatWriteAllowed(type, t) {
-      return isAd()
+      return isAdOf(teamSchool(t))
         || (type == 'commBoard' && (canManageTeam(t) || staffHasPerm(t, 'commBoardPost')))
         || (type == 'team' && memberRole(t) in ['coach','staff','player'])
         || (type == 'parent' && memberRole(t) in ['coach','player','parent'])
-        || (type == 'staff' && (isAd() || isCoachOf(t) || staffHasPerm(t, 'staffChat')));
+        || (type == 'staff' && (isAdOf(teamSchool(t)) || isCoachOf(t) || staffHasPerm(t, 'staffChat')));
     }
 
     match /users/{userId} {
@@ -269,7 +280,7 @@ service cloud.firestore {
       }
 
       allow read: if signedIn() && (
-        isAd()
+        isAdOf(resource.data.get('schoolId', ''))
         || isGuardian()
         || ('claimedByUserId' in resource.data && resource.data.claimedByUserId == request.auth.uid)
         || (role() in ['coach', 'staff'] && isMySchool())
@@ -290,7 +301,7 @@ service cloud.firestore {
       // profile in one write, which is the exact thing the claim flow exists to prevent.
       // `get(field, null)` rather than `data.field`: players created before claim codes
       // existed have no claimCode, and a missing field would otherwise deny every edit.
-      allow update: if signedIn() && (isAd() || (role() in ['coach', 'staff'] && isMySchool()))
+      allow update: if signedIn() && (isAdOf(resource.data.get('schoolId', '')) || (role() in ['coach', 'staff'] && isMySchool()))
         && request.resource.data.get('claimedByUserId', null) == resource.data.get('claimedByUserId', null)
         && request.resource.data.get('claimCode', null) == resource.data.get('claimCode', null);
       allow delete: if false;
@@ -299,9 +310,9 @@ service cloud.firestore {
       // the approval, so a parent cannot add themselves to a child.
       match /guardians/{guardianId} {
         allow read: if signedIn() && (
-          guardianId == request.auth.uid || isAd() || (role() in ['coach', 'staff'] && isMySchool())
+          guardianId == request.auth.uid || isAdOf(playerSchool(playerId)) || (role() in ['coach', 'staff'] && isMySchool())
         );
-        allow create, delete: if signedIn() && (isAd() || role() in ['coach', 'staff'])
+        allow create, delete: if signedIn() && (isAdOf(playerSchool(playerId)) || role() in ['coach', 'staff'])
           && mySchoolId() != ''
           && get(/databases/$(database)/documents/players/$(playerId)).data.schoolId == mySchoolId();
         allow update: if false;
@@ -326,7 +337,7 @@ service cloud.firestore {
       // their own row; the school's AD can see who follows them.
       match /followers/{followerId} {
         allow read: if signedIn() && (uid() == followerId
-          || (isAd() && userData().schoolId == schoolId));
+          || (isAdOf(schoolId) && userData().schoolId == schoolId));
         allow create, delete: if signedIn() && uid() == followerId;
         allow update: if false;
       }
@@ -368,29 +379,29 @@ service cloud.firestore {
       match /recordStats/{statKey} {
         allow read: if signedIn();
         allow create, update: if signedIn() && (
-          isAd() || (role() in ['coach','staff'] && userData().schoolId == schoolId)
+          isAdOf(schoolId) || (role() in ['coach','staff'] && userData().schoolId == schoolId)
         );
         allow delete: if signedIn() && (
-          isAd() || (role() in ['coach','staff'] && userData().schoolId == schoolId)
+          isAdOf(schoolId) || (role() in ['coach','staff'] && userData().schoolId == schoolId)
         );
       }
 
       match /records/{recordId} {
         allow read: if signedIn();
         allow create, update: if signedIn() && (
-          isAd() || (role() in ['coach','staff'] && userData().schoolId == schoolId)
+          isAdOf(schoolId) || (role() in ['coach','staff'] && userData().schoolId == schoolId)
         ) && request.resource.data.schoolId == schoolId;
         // A delete has no request.resource, so the stored document is what gets checked --
         // otherwise delete would be denied to everyone, and a wrong record would be
         // permanent.
         allow delete: if signedIn() && (
-          isAd() || (role() in ['coach','staff'] && userData().schoolId == schoolId)
+          isAdOf(schoolId) || (role() in ['coach','staff'] && userData().schoolId == schoolId)
         ) && resource.data.schoolId == schoolId;
       }
 
       match /playerClaimRequests/{requestId} {
         allow read: if signedIn() && (
-          isAd()
+          isAdOf(schoolId)
           || (role() in ['coach', 'staff'] && userData().schoolId == schoolId)
           || resource.data.requesterUserId == request.auth.uid
         );
@@ -400,14 +411,14 @@ service cloud.firestore {
 
     match /teams/{teamId} {
       allow read: if signedIn();
-      allow create: if signedIn() && isAd() && request.resource.data.schoolId == mySchoolId();
+      allow create: if signedIn() && isAdOf(request.resource.data.get('schoolId', ''));
       allow update: if canManageTeam(teamId);
       // Deleting a team removes its whole season of data, so it stays with the AD
       // who owns that school — not any AD in the district.
-      allow delete: if isAd() && resource.data.schoolId == mySchoolId();
+      allow delete: if isAdOf(resource.data.get('schoolId', ''));
 
       match /members/{memberId} {
-        allow read: if signedIn() && (uid() == memberId || isAd() || isCoachOf(teamId));
+        allow read: if signedIn() && (uid() == memberId || isAdOf(teamSchool(teamId)) || isCoachOf(teamId));
         // Anyone may add themselves as a follower (follow a team).
         allow create: if canManageTeam(teamId)
           || (uid() == memberId && request.resource.data.role == 'follower');
@@ -418,12 +429,12 @@ service cloud.firestore {
       // Viewers (including followers) can read; authors can write. Anyone
       // signed in may bump only the view counter by exactly one.
       match /videos/{videoId} {
-        allow read: if signedIn() && (isAd() || isTeamMember(teamId) || memberRole(teamId) == 'follower');
+        allow read: if signedIn() && (isAdOf(teamSchool(teamId)) || isTeamMember(teamId) || memberRole(teamId) == 'follower');
         allow write: if canManageTeam(teamId) || isStaffOf(teamId);
       }
 
       match /reels/{reelId} {
-        allow read: if signedIn() && (isAd() || isTeamMember(teamId) || memberRole(teamId) == 'follower');
+        allow read: if signedIn() && (isAdOf(teamSchool(teamId)) || isTeamMember(teamId) || memberRole(teamId) == 'follower');
         // 20 clips is the reel limit the app shows; enforced here too so a
         // modified client cannot store a 200-clip reel that no renderer will
         // accept and no viewer will watch.
@@ -450,7 +461,7 @@ service cloud.firestore {
         // guardianUserIds include them. Players and parents previously came in through
         // isTeamMember, which handed them every other child's medical notes.
         allow read: if signedIn() && (
-          isAd() || isCoachOf(teamId) || isStaffOf(teamId)
+          isAdOf(teamSchool(teamId)) || isCoachOf(teamId) || isStaffOf(teamId)
           || request.auth.uid == resource.data.userId
           || request.auth.uid in resource.data.guardianUserIds
         );
@@ -464,7 +475,7 @@ service cloud.firestore {
         // staff-approved field, not on a record a family can silently rewrite.
         // Injury history is staff-only; writes go through Cloud Functions.
         match /injuryReports/{reportId} {
-          allow read: if signedIn() && (isAd() || isCoachOf(teamId) || isStaffOf(teamId));
+          allow read: if signedIn() && (isAdOf(teamSchool(teamId)) || isCoachOf(teamId) || isStaffOf(teamId));
           allow write: if false;
         }
 
@@ -473,7 +484,7 @@ service cloud.firestore {
           // team membership is `follower`: without this the portal can see the
           // child but never the paperwork, which is the portal's whole purpose.
           allow read: if signedIn() && (
-            isAd() || isTeamMember(teamId) || isGuardianOf(teamId, entryId)
+            isAdOf(teamSchool(teamId)) || isTeamMember(teamId) || isGuardianOf(teamId, entryId)
           );
           allow write: if signedIn() && (
             canManageTeam(teamId)
@@ -503,13 +514,13 @@ service cloud.firestore {
       }
 
       match /forms/{formId} {
-        allow read: if signedIn() && (isAd() || isTeamMember(teamId));
+        allow read: if signedIn() && (isAdOf(teamSchool(teamId)) || isTeamMember(teamId));
         allow create: if canManageTeam(teamId) || staffHasPerm(teamId, 'forms');
         allow update, delete: if canManageTeam(teamId) || staffHasPerm(teamId, 'forms');
 
         match /submissions/{entryId} {
           allow read: if signedIn() && (
-            isAd() || isTeamMember(teamId) || isGuardianOf(teamId, entryId)
+            isAdOf(teamSchool(teamId)) || isTeamMember(teamId) || isGuardianOf(teamId, entryId)
           );
           allow write: if signedIn() && (
             canManageTeam(teamId)
@@ -524,19 +535,19 @@ service cloud.firestore {
       // AD can read and resolve the queue. Approval itself is a coach action.
       match /joinRequests/{requestId} {
         allow read: if signedIn() && (
-          isAd() || isCoachOf(teamId) || resource.data.requesterUserId == request.auth.uid
+          isAdOf(teamSchool(teamId)) || isCoachOf(teamId) || resource.data.requesterUserId == request.auth.uid
         );
         allow create, delete: if false;
-        allow update: if signedIn() && (isAd() || isCoachOf(teamId));
+        allow update: if signedIn() && (isAdOf(teamSchool(teamId)) || isCoachOf(teamId));
       }
 
       match /volunteerShifts/{shiftId} {
-        allow read: if signedIn() && (isAd() || isTeamMember(teamId) || memberRole(teamId) == 'follower');
+        allow read: if signedIn() && (isAdOf(teamSchool(teamId)) || isTeamMember(teamId) || memberRole(teamId) == 'follower');
         allow create: if canManageTeam(teamId) || staffHasPerm(teamId, 'concessions');
         allow update, delete: if canManageTeam(teamId) || staffHasPerm(teamId, 'concessions');
 
         match /signups/{userId} {
-          allow read: if signedIn() && (isAd() || isTeamMember(teamId) || memberRole(teamId) == 'follower');
+          allow read: if signedIn() && (isAdOf(teamSchool(teamId)) || isTeamMember(teamId) || memberRole(teamId) == 'follower');
           // Sign-ups are created only through the atomic `volunteerSignUp` Cloud Function.
           allow create: if false;
           allow delete: if signedIn() && (request.auth.uid == userId || canManageTeam(teamId) || staffHasPerm(teamId, 'concessions'));
@@ -554,13 +565,13 @@ service cloud.firestore {
 
     match /events/{eventId} {
       // Followers see the team calendar except practice details (item F).
-      allow read: if signedIn() && (isAd() || isTeamMember(resource.data.teamId)
+      allow read: if signedIn() && (isAdOf(teamSchool(eventTeam(eventId))) || isTeamMember(resource.data.teamId)
         || (memberRole(resource.data.teamId) == 'follower'
             && resource.data.type in ['game', 'meeting', 'meal', 'travel']));
       // `request.resource` is null on a delete, so a rule that reads it can never
       // allow one: every event was permanent, and a mistyped practice could not be
       // removed. Delete authorises on the STORED team, and through that team's school
-      // rather than a bare `isAd()` -- enabling deletes must not hand every AD the
+      // rather than a bare `isAdOf(teamSchool(eventTeam(eventId)))` -- enabling deletes must not hand every AD the
       // district's calendar.
       //
       // Create and update keep `canManageTeam`, whose AD branch is still school-blind
@@ -578,16 +589,26 @@ service cloud.firestore {
         // respondentUserId field. One answer per account (the original shape) made
         // a parent with two athletes on one team answer for only one of them.
         // Legacy documents (id == uid, field userId) stay valid so iOS is unchanged.
+        // Self-service answers belong to people ON that team. Without the membership
+        // gate, any signed-in account -- another school's AD included -- could write
+        // an RSVP into any event in the district by naming itself the respondent,
+        // because the only test was "does this document name me".
         allow read: if signedIn() && (
-          uid() == rsvpUserId
-          || ('respondentUserId' in resource.data && resource.data.respondentUserId == uid())
-          || isAd() || isCoachOf(eventTeam(eventId))
+          isAdOf(teamSchool(eventTeam(eventId)))
+          || isCoachOf(eventTeam(eventId))
+          || (isTeamMember(eventTeam(eventId)) && (
+               uid() == rsvpUserId
+               || ('respondentUserId' in resource.data && resource.data.respondentUserId == uid())
+             ))
         );
         allow write: if signedIn() && (
-          (uid() == rsvpUserId && request.resource.data.userId == uid())
-          || ('respondentUserId' in request.resource.data
-              && request.resource.data.respondentUserId == uid())
-          || isAd() || isCoachOf(eventTeam(eventId))
+          isAdOf(teamSchool(eventTeam(eventId)))
+          || isCoachOf(eventTeam(eventId))
+          || (isTeamMember(eventTeam(eventId)) && (
+               (uid() == rsvpUserId && request.resource.data.userId == uid())
+               || ('respondentUserId' in request.resource.data
+                   && request.resource.data.respondentUserId == uid())
+             ))
         );
       }
 
@@ -605,7 +626,7 @@ service cloud.firestore {
       // served through a callable instead, where the link can be trusted.
       match /attendance/{rosterEntryId} {
         allow read: if signedIn() && (
-          isAd()
+          isAdOf(teamSchool(eventTeam(eventId)))
           || isCoachOf(eventTeam(eventId))
           || isStaffOf(eventTeam(eventId))
         );
@@ -615,8 +636,8 @@ service cloud.firestore {
       }
 
       match /attendance/{entryId} {
-        allow read: if signedIn() && (isAd() || isCoachOf(eventTeam(eventId)) || staffHasPerm(eventTeam(eventId), 'attendance'));
-        allow write: if signedIn() && (isAd() || isCoachOf(eventTeam(eventId)) || staffHasPerm(eventTeam(eventId), 'attendance'));
+        allow read: if signedIn() && (isAdOf(teamSchool(eventTeam(eventId))) || isCoachOf(eventTeam(eventId)) || staffHasPerm(eventTeam(eventId), 'attendance'));
+        allow write: if signedIn() && (isAdOf(teamSchool(eventTeam(eventId))) || isCoachOf(eventTeam(eventId)) || staffHasPerm(eventTeam(eventId), 'attendance'));
       }
 
       // Travel & pickup. A guardian declares how their own athlete is getting
@@ -624,7 +645,7 @@ service cloud.firestore {
       // separate authorised-adult registry exists. Staff can read the manifest.
       match /releasePlans/{entryId} {
         allow read: if signedIn() && (
-          isAd()
+          isAdOf(teamSchool(eventTeam(eventId)))
           || isCoachOf(eventTeam(eventId))
           || staffHasPerm(eventTeam(eventId), 'attendance')
           || isGuardianOf(eventTeam(eventId), entryId)
@@ -640,7 +661,7 @@ service cloud.firestore {
       // release cannot be forged or erased from a client.
       match /releases/{entryId} {
         allow read: if signedIn() && (
-          isAd()
+          isAdOf(teamSchool(eventTeam(eventId)))
           || isCoachOf(eventTeam(eventId))
           || staffHasPerm(eventTeam(eventId), 'attendance')
           || isGuardianOf(eventTeam(eventId), entryId)
@@ -658,7 +679,7 @@ service cloud.firestore {
 
       match /stats/{entryId} {
         allow read: if signedIn();
-        allow write: if isAd() || isCoachOf(gameTeam(gameId))
+        allow write: if isAdOf(teamSchool(gameTeam(gameId))) || isCoachOf(gameTeam(gameId))
           || staffHasPerm(gameTeam(gameId), 'statistician')
           || isGameScorer(gameId);
       }
@@ -673,7 +694,7 @@ service cloud.firestore {
       // game unfold; written only by the people allowed to score it.
       match /plays/{playId} {
         allow read: if signedIn();
-        allow create, delete: if isAd() || isCoachOf(gameTeam(gameId))
+        allow create, delete: if isAdOf(teamSchool(gameTeam(gameId))) || isCoachOf(gameTeam(gameId))
           || staffHasPerm(gameTeam(gameId), 'statistician')
           || isGameScorer(gameId);
       }
@@ -723,7 +744,7 @@ service cloud.firestore {
     // see the request; only the Cloud Functions may create, fill or cancel it.
     match /gameStatisticianRequests/{requestId} {
       allow read: if signedIn() && (
-        isAd()
+        isAdOf(teamSchool(resource.data.get('teamId', '')))
         || isCoachOf(resource.data.teamId)
         || isTeamMember(resource.data.teamId)
       );
@@ -741,7 +762,7 @@ service cloud.firestore {
         // Moderation: an AD or the team's coach may hide a message, and only
         // those fields. Content is never destroyed — the audit trail stays.
         allow update: if signedIn()
-          && (isAd() || isCoachOf(chatDoc(chatId).teamId))
+          && (isAdOf(teamSchool(chatDoc(chatId).teamId)) || isCoachOf(chatDoc(chatId).teamId))
           && request.resource.data.diff(resource.data).affectedKeys()
                .hasOnly(['hidden', 'moderatedBy', 'moderatedAt']);
         allow delete: if false;
@@ -884,9 +905,7 @@ service cloud.firestore {
     // Admin SDK, so no client can forge or erase an entry. An AD may read their
     // own school's entries and nothing else.
     match /auditLogs/{logId} {
-      allow read: if signedIn() && isAd()
-        && 'schoolId' in resource.data
-        && resource.data.schoolId == userData().schoolId;
+      allow read: if signedIn() && isAdOf(resource.data.get('schoolId', ''));
       allow write: if false;
     }
   }
