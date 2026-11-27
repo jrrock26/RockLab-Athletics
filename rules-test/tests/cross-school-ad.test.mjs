@@ -333,4 +333,26 @@ describe('everyone else keeps their intended permissions', () => {
     }));
     await assertFails(getDoc(doc(as('guardianA'), `events/${EVENT_B}/rsvps/guardianB2__${ENTRY_B}`)));
   });
+
+  // Public-read review, 27 Nov: a recruiting card is keyed by rosterEntryId, and
+  // games/{id}/plays hands every signed-in account every rosterEntryId in the district.
+  // The pair turned "any signed-in user can read a showcase" into "any parent anywhere
+  // can read a named child's GPA".
+  test('recruiting cards do not leak a minor GPA across schools', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, `showcases/${ENTRY_KID_A}`), {
+        rosterEntryId: ENTRY_KID_A, teamId: TEAM_A, playerName: 'Kai Kid', gpa: '3.9', bio: 'guard',
+      });
+      await setDoc(doc(db, `showcases/${ENTRY_KID_A}/highlights/h1`), { url: 'https://example.test/clip' });
+    });
+
+    // The athlete's own AD still reads it, and so does the athlete's team.
+    await assertSucceeds(getDoc(doc(as('adA'), `showcases/${ENTRY_KID_A}`)));
+    await assertSucceeds(getDoc(doc(as('guardianA'), `showcases/${ENTRY_KID_A}`)));
+
+    // Another school's AD, even with the rosterEntryId in hand, does not.
+    await assertFails(getDoc(doc(as('adB'), `showcases/${ENTRY_KID_A}`)));
+    await assertFails(getDoc(doc(as('adB'), `showcases/${ENTRY_KID_A}/highlights/h1`)));
+  });
 });

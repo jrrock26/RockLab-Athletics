@@ -88,6 +88,12 @@ service cloud.firestore {
     function isCoachOf(t) { return memberRole(t) == 'coach'; }
     function isStaffOf(t) { return memberRole(t) == 'staff'; }
     function isTeamMember(t) { return memberRole(t) in ['coach','staff','player','parent']; }
+    /// The team a showcase card belongs to, or '' when the card is gone.
+    function showcaseTeam(s) {
+      return s != '' && exists(/databases/$(database)/documents/showcases/$(s))
+        ? get(/databases/$(database)/documents/showcases/$(s)).data.get('teamId', '')
+        : '';
+    }
     function canManageTeam(t) { return isAdOf(teamSchool(t)) || isCoachOf(t); }
     function staffHasPerm(t, p) {
       let m = membership(t);
@@ -846,15 +852,28 @@ service cloud.firestore {
       }
     }
 
+    // A recruiting card carries a minor's GPA and bio. This read used to be open to any
+    // signed-in account, and `games/{id}/plays` publishes the rosterEntryId that keys
+    // these documents -- so any parent in any district could walk from a scoreboard to a
+    // child's transcript. Read is now the athlete, their guardian, their own team's
+    // people, and the AD who owns that team's school.
     match /showcases/{showcaseId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && (
+        isRosterAssignee(resource.data.teamId, resource.data.rosterEntryId)
+        || isTeamMember(resource.data.get('teamId', ''))
+        || isAdOf(teamSchool(resource.data.get('teamId', '')))
+      );
       // Owned by the athlete and their linked parent/guardian — never staff.
       allow create: if signedIn() && isRosterAssignee(request.resource.data.teamId, request.resource.data.rosterEntryId);
       allow update: if signedIn() && isRosterAssignee(resource.data.teamId, resource.data.rosterEntryId);
       allow delete: if false;
 
+      // Highlights are the clips behind an unpublished card: same audience as the card.
       match /highlights/{highlightId} {
-        allow read: if signedIn();
+        allow read: if signedIn() && (
+          isTeamMember(showcaseTeam(showcaseId))
+          || isAdOf(teamSchool(showcaseTeam(showcaseId)))
+        );
         allow write: if false;
       }
     }
