@@ -180,6 +180,7 @@ private struct ResourceBookingView: View {
     @State private var busy = false
     @State private var newName = ""
     @State private var newType = "facility"
+    @State private var newNotes = ""
     @State private var newOpen = 6
     @State private var newClose = 22
     @State private var repeats = false
@@ -225,6 +226,7 @@ private struct ResourceBookingView: View {
                             Text("Bus").tag("bus")
                             Text("Other").tag("other")
                         }
+                        TextField("Notes (optional)", text: $newNotes, axis: .vertical)
                         Button("Add resource") { Task { await addResource() } }
                             .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty || busy)
                         Stepper("Opens \(newOpen):00", value: $newOpen, in: 0...23)
@@ -233,6 +235,8 @@ private struct ResourceBookingView: View {
                         Text("Add a resource")
                     } footer: {
                         Text("Assets are permanent until you retire them. Add as many as the organization owns.")
+                        Text("Notes are visible to every coach who books this asset, and to every athletic director signed in. Do not put gate codes, lockbox combinations, alarm codes, key locations or other credentials here.")
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -354,9 +358,11 @@ private struct ResourceBookingView: View {
             _ = try await FunctionsService.shared.createResource(
                 name: newName.trimmingCharacters(in: .whitespaces),
                 type: newType,
+                notes: newNotes.trimmingCharacters(in: .whitespacesAndNewlines),
                 openMin: newOpen * 60,
                 closeMin: newClose * 60)
             newName = ""
+            newNotes = ""
             await load()
         } catch {
             errorMessage = error.localizedDescription

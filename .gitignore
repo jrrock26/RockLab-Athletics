@@ -62,3 +62,4 @@ service-account*.json
 
 # QA fixture credentials (functions/scripts/create-test-accounts.js) — never commit
 .local-test-accounts.json
+.local-test-accounts.staging.json
