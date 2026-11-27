@@ -425,8 +425,21 @@ service cloud.firestore {
       allow create: if signedIn()
         && isAdOf(request.resource.data.get('schoolId', ''))
         && !('managerUserIds' in request.resource.data);
+      // `schoolId` is ownership, not a label: it decides which school's AD holds power over
+      // this team and which AD the manager index derives from. A client that could move a
+      // team to another school could hand its files to a different AD — and, worse, leave
+      // `managerUserIds` pointing at the old school until a trigger caught up. So the field
+      // is immutable to clients too. Reassignment goes through the `reassignTeamSchool`
+      // callable, which writes ownership and the index in one transaction. Unrelated fields
+      // (name, season, colour, roster metadata) are untouched by this restriction.
+      //
+      // The immutability test is the DIFF, not the presence of the field. `request.resource`
+      // is the whole post-write document, and every real team carries `managerUserIds` once
+      // the index is built — so testing for its presence denied ordinary edits (a season
+      // rename, a colour change) to every team that had ever been indexed.
       allow update: if canManageTeam(teamId)
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['managerUserIds']);
+        && !request.resource.data.diff(resource.data)
+          .affectedKeys().hasAny(['managerUserIds', 'schoolId']);
       // Deleting a team removes its whole season of data, so it stays with the AD
       // who owns that school — not any AD in the district.
       allow delete: if isAdOf(resource.data.get('schoolId', ''));

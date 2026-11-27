@@ -437,9 +437,12 @@ exports.assignTeamRole = functions.https.onCall(async (data, context) => {
   if (!teamSnap.exists) {
     throw new functions.https.HttpsError('not-found', 'Team not found.');
   }
-  const schoolId = teamSnap.get('schoolId');
-  const targetEmail = targetSnap.exists ? targetSnap.get('email') : '';
-  const targetName = targetSnap.exists ? targetSnap.get('displayName') : '';
+  const schoolId = teamSnap.get('schoolId') || '';
+  // A user document can exist without these fields (a seeded QA account, an imported record).
+  // Firestore refuses to write `undefined`, which is exactly what made this callable return
+  // INTERNAL for every assignment.
+  const targetEmail = targetSnap.exists ? (targetSnap.get('email') || '') : '';
+  const targetName = targetSnap.exists ? (targetSnap.get('displayName') || '') : '';
 
   const batch = db.batch();
   batch.set(db.collection('teams').doc(teamId).collection('members').doc(targetUid), {
@@ -5622,6 +5625,116 @@ exports.revokeTeamMember = functions.https.onCall(async (data, context) => {
     role: outcome.role,
     removed: outcome.removed,
     result: outcome.removed ? 'removed' : 'already-absent',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return outcome;
+});
+
+/// Moves a team from one school to another — the only trusted way to change ownership.
+///
+/// `teams.schoolId` is what makes an AD powerful over a team: the manager index derives the
+/// AD from `schools/{schoolId}.adUserId`. Reassigning it is therefore an authorization
+/// transfer, and both halves have to land together. Doing it as a client field write (which
+/// was possible before) could move a team while `managerUserIds` still named the previous
+/// school's AD, leaving the old AD with access until a trigger happened to run.
+///
+/// Authority: the caller must be the AD named by the school that owns the team RIGHT NOW,
+/// read inside the transaction. Not a coach, not another school's AD, and not anyone the
+/// index happens to mention — `managerUserIds` is a cache of authority, never its source.
+exports.reassignTeamSchool = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in.');
+  }
+  const callerId = context.auth.uid;
+  const { teamId, schoolId } = data || {};
+  if (!SAFE_ID.test(String(teamId || '')) || !SAFE_ID.test(String(schoolId || ''))) {
+    throw new functions.https.HttpsError('invalid-argument', 'teamId and schoolId are required.');
+  }
+
+  const db = admin.firestore();
+  const teamRef = db.collection('teams').doc(teamId);
+
+  const outcome = await db.runTransaction(async (tx) => {
+    // Reads first: team, both schools, and the memberships the index is derived from.
+    const teamSnap = await tx.get(teamRef);
+    if (!teamSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Unknown team.');
+    }
+    const team = teamSnap.data() || {};
+    const currentSchoolId = typeof team.schoolId === 'string' ? team.schoolId : '';
+    if (!currentSchoolId) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'This team has no owning school. Adopt it before transferring it.',
+      );
+    }
+    if (currentSchoolId === schoolId) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'That is already the team\'s school.',
+      );
+    }
+
+    const currentSnap = await tx.get(db.collection('schools').doc(currentSchoolId));
+    const destSnap = await tx.get(db.collection('schools').doc(schoolId));
+    if (!currentSnap.exists) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'The school that currently owns this team has no record.',
+      );
+    }
+    if (!destSnap.exists) {
+      throw new functions.https.HttpsError('failed-precondition', 'Destination school does not exist.');
+    }
+    const currentSchool = currentSnap.data() || {};
+    const destSchool = destSnap.data() || {};
+
+    if (currentSchool.adUserId !== callerId) {
+      throw new functions.https.HttpsError(
+        'permission-denied',
+        'Only the athletic director of the school that owns this team can transfer it.',
+      );
+    }
+    // A school with no AD cannot be handed a team: ownership would be unclaimed and nobody
+    // could ever reassign it again. This is the same rule that keeps `qa-team-unowned` empty.
+    if (typeof destSchool.adUserId !== 'string' || destSchool.adUserId === '') {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'The destination school has no athletic director to take ownership.',
+      );
+    }
+
+    const membersSnap = await tx.get(teamRef.collection('members'));
+    const members = membersSnap.docs.map((d) => ({ id: d.id, role: d.get('role') }));
+    const { managerUserIds } = computeManagers({ team: { ...team, schoolId }, school: destSchool, members });
+
+    tx.set(teamRef, {
+      schoolId,
+      managerUserIds,
+      schoolReassignedAt: admin.firestore.FieldValue.serverTimestamp(),
+      schoolReassignedFrom: currentSchoolId,
+    }, { merge: true });
+
+    return {
+      teamId,
+      fromSchoolId: currentSchoolId,
+      toSchoolId: schoolId,
+      previousAdId: currentSchool.adUserId,
+      newAdId: destSchool.adUserId,
+      managerUserIds,
+    };
+  });
+
+  await db.collection('auditLogs').add({
+    action: 'team.reassignSchool',
+    actorUserId: callerId,
+    teamId,
+    fromSchoolId: outcome.fromSchoolId,
+    toSchoolId: outcome.toSchoolId,
+    previousAdId: outcome.previousAdId,
+    newAdId: outcome.newAdId,
+    managerUserIds: outcome.managerUserIds,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
